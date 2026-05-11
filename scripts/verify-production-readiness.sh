@@ -107,6 +107,22 @@ for evidence in "${MANUAL_QA_EVIDENCE[@]}"; do
     evidence_reasons+=("artifact SHA does not match current dist/BarnOwl.app.zip ($expected_app_sha)")
   fi
 
+  if ! grep -Fxq -- '- Installed bundle ID: `com.barnowl.mac`' "$evidence"; then
+    evidence_reasons+=("installed app bundle ID is missing or incorrect")
+  fi
+  if ! grep -Fxq -- '- Installed codesign: `valid`' "$evidence"; then
+    evidence_reasons+=("installed app code signature is not recorded as valid")
+  fi
+  if ! grep -Fxq -- '- Installed hardened runtime: `true`' "$evidence"; then
+    evidence_reasons+=("installed app hardened runtime is not recorded as enabled")
+  fi
+  if ! grep -Fxq -- '- Installed CLI executable: `true`' "$evidence"; then
+    evidence_reasons+=("installed bundled CLI is not recorded as executable")
+  fi
+  if ! grep -Fxq -- '- Installed Codex skill: `present`' "$evidence"; then
+    evidence_reasons+=("installed bundled Codex skill is not recorded as present")
+  fi
+
   for label in "${required_checked_labels[@]}"; do
     if ! is_checked "$evidence" "$label"; then
       evidence_reasons+=("unchecked: $label")

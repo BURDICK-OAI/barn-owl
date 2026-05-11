@@ -283,7 +283,8 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
         lastError: "No recorded audio files.",
         nextCommand: "barnowl jobs retry --session \(meetingID.uuidString)",
         feedbackSuggested: true,
-        feedbackCommand: "barnowl feedback slack --yes",
+        feedbackCommand: "barnowl feedback slack",
+        feedbackPostCommand: "barnowl feedback slack --yes",
         feedbackReason: "Review redacted details before posting."
     )
 
@@ -295,5 +296,6 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
     #expect(decoded.diagnosticsPath == "/tmp/BarnOwl-diagnostics.md")
     #expect(decoded.nextCommand?.contains("jobs retry") == true)
     #expect(decoded.feedbackSuggested == true)
-    #expect(decoded.feedbackCommand == "barnowl feedback slack --yes")
+    #expect(decoded.feedbackCommand == "barnowl feedback slack")
+    #expect(decoded.feedbackPostCommand == "barnowl feedback slack --yes")
 }

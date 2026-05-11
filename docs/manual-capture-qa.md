@@ -24,12 +24,13 @@ scripts/collect-manual-qa-evidence.sh
 
 The script writes a timestamped Markdown file under `.build/manual-qa/` with
 system details, app artifact metadata, the app artifact SHA-256,
-usage-description strings, manual flow checkboxes, CLI/Codex feedback
-checkboxes, diagnostic category/level summaries, and temp audio counts. It intentionally omits
+usage-description strings, installed app metadata, manual flow checkboxes,
+CLI/Codex feedback checkboxes, diagnostic category/level summaries, and temp audio counts. It intentionally omits
 diagnostic messages and details so evidence files do not preserve meeting text.
 It does not collect raw audio, transcripts, API keys, or full private paths. If
 you are testing a different app artifact or chunk root, set
-`BARNOWL_QA_APP_ARTIFACT` or `BARNOWL_QA_CHUNK_ROOT`.
+`BARNOWL_QA_APP_ARTIFACT`, `BARNOWL_QA_INSTALLED_APP`, or
+`BARNOWL_QA_CHUNK_ROOT`.
 
 After completing the pass, fill in the evidence file's `Manual Flow Results`
 and `CLI Codex Feedback Results` checkboxes. Lightweight internal production

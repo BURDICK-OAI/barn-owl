@@ -2415,15 +2415,17 @@ final class BarnOwlAppModel: ObservableObject {
             lastError: sanitizedLastError,
             nextCommand: nextCommand,
             feedbackSuggested: shouldSuggestFeedback ? true : nil,
-            feedbackCommand: shouldSuggestFeedback ? Self.slackFeedbackCommand : nil,
-            feedbackReason: shouldSuggestFeedback ? "This Barn Owl command hit a reportable error. Review the redacted draft before posting." : nil,
+            feedbackCommand: shouldSuggestFeedback ? Self.slackFeedbackDraftCommand : nil,
+            feedbackPostCommand: shouldSuggestFeedback ? Self.slackFeedbackPostCommand : nil,
+            feedbackReason: shouldSuggestFeedback ? "This Barn Owl command hit a reportable error. Draft a redacted Slack report, review it, then post only after explicit confirmation." : nil,
             errorCode: resolvedErrorCode,
             error: sanitizedError
         )
     }
 
     nonisolated static let defaultFeedbackOwnerUsername = "burdick"
-    nonisolated static let slackFeedbackCommand = "barnowl feedback slack --yes"
+    nonisolated static let slackFeedbackDraftCommand = "barnowl feedback slack"
+    nonisolated static let slackFeedbackPostCommand = "barnowl feedback slack --yes"
     nonisolated static let nonReportableFeedbackErrorCodes: Set<String> = [
         "confirmation_required",
         "context_item_not_found",

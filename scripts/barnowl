@@ -283,11 +283,13 @@ def response_has_reportable_error(response: dict) -> bool:
 def append_feedback_suggestion(lines: list[str], response: dict) -> None:
     if response.get("feedbackSuggested") is not True:
         return
-    command = response.get("feedbackCommand") or "barnowl feedback slack --yes"
+    draft_command = response.get("feedbackCommand") or "barnowl feedback slack"
+    post_command = response.get("feedbackPostCommand") or "barnowl feedback slack --yes"
     reason = response.get("feedbackReason") or "This looks like a reportable Barn Owl error."
     lines.append("")
     lines.append(f"Feedback: {reason}")
-    lines.append(f"Review and post redacted details with `{command}`.")
+    lines.append(f"Review a redacted draft with `{draft_command}`.")
+    lines.append(f"Post only after confirmation with `{post_command}`.")
 
 
 def default_feedback_diagnostics_path() -> str:

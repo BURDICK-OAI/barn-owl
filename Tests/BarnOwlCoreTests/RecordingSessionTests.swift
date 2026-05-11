@@ -510,6 +510,9 @@ func controlResponseSuggestsSlackFeedbackOnlyForNonOwnerErrors() {
         ownerUsername: "burdick"
     ))
 
+    #expect(BarnOwlAppModel.slackFeedbackDraftCommand == "barnowl feedback slack")
+    #expect(BarnOwlAppModel.slackFeedbackPostCommand == "barnowl feedback slack --yes")
+
     #expect(!BarnOwlAppModel.shouldSuggestSlackFeedback(
         ok: false,
         errorCode: "transcription_failed",

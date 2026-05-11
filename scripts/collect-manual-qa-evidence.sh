@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_PATH="${1:-"$ROOT_DIR/.build/manual-qa/manual-capture-qa-evidence-$(date +%Y%m%d-%H%M%S).md"}"
 APP_ARTIFACT="${BARNOWL_QA_APP_ARTIFACT:-"$ROOT_DIR/dist/BarnOwl.app.zip"}"
+INSTALLED_APP="${BARNOWL_QA_INSTALLED_APP:-"/Applications/Barn Owl.app"}"
 CHUNK_ROOT="${BARNOWL_QA_CHUNK_ROOT:-"${TMPDIR:-/tmp}/BarnOwl/AudioChunks"}"
 APP_SUPPORT_ROOT="${BARNOWL_QA_APP_SUPPORT_ROOT:-"$HOME/Library/Application Support/Barn Owl"}"
 LOG_FILE="$APP_SUPPORT_ROOT/Logs/barnowl.log.jsonl"
@@ -96,6 +97,48 @@ inspect_app_artifact() {
   [[ -n "$work_dir" ]] && rm -rf "$work_dir"
 }
 
+inspect_installed_app() {
+  local app_path="$1"
+  if [[ ! -d "$app_path" ]]; then
+    printf -- '- Installed app: `missing at %s`\n' "$(redact_path "$app_path")"
+    return
+  fi
+
+  local plist="$app_path/Contents/Info.plist"
+  local cli_path="$app_path/Contents/MacOS/barnowl"
+  local skill_path="$app_path/Contents/Resources/CodexSkill/barnowl/SKILL.md"
+  local skill_wrapper="$app_path/Contents/Resources/CodexSkill/barnowl/scripts/barnowl"
+  printf -- '- Installed app: `%s`\n' "$(redact_path "$app_path")"
+  printf -- '- Installed bundle ID: `%s`\n' "$(plist_value "$plist" CFBundleIdentifier)"
+  printf -- '- Installed version: `%s (%s)`\n' "$(plist_value "$plist" CFBundleShortVersionString)" "$(plist_value "$plist" CFBundleVersion)"
+
+  if /usr/bin/codesign --verify --deep --strict "$app_path" >/dev/null 2>&1; then
+    printf -- '- Installed codesign: `valid`\n'
+  else
+    printf -- '- Installed codesign: `invalid`\n'
+  fi
+
+  local signature_info
+  signature_info="$(/usr/bin/codesign -dv --verbose=4 "$app_path" 2>&1)"
+  if echo "$signature_info" | grep -q 'flags=.*runtime'; then
+    printf -- '- Installed hardened runtime: `true`\n'
+  else
+    printf -- '- Installed hardened runtime: `false`\n'
+  fi
+
+  if [[ -x "$cli_path" ]]; then
+    printf -- '- Installed CLI executable: `true`\n'
+  else
+    printf -- '- Installed CLI executable: `false`\n'
+  fi
+
+  if [[ -f "$skill_path" && -x "$skill_wrapper" ]]; then
+    printf -- '- Installed Codex skill: `present`\n'
+  else
+    printf -- '- Installed Codex skill: `missing`\n'
+  fi
+}
+
 file_count() {
   local dir="$1"
   shift
@@ -159,6 +202,9 @@ summarize_diagnostics_log() {
 
   append_section "App Artifact"
   inspect_app_artifact "$APP_ARTIFACT"
+
+  append_section "Installed App"
+  inspect_installed_app "$INSTALLED_APP"
 
   append_section "Permission Reset Commands Used"
   cat <<'EOF'
