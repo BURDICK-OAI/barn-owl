@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var isValidatingAPIKey = false
     @State private var readinessSnapshot = BarnOwlFirstRunReadiness.placeholderSnapshot
     @State private var readinessChecks: [String] = []
+    @State private var readinessActionStatus = ""
     @State private var updateManifestURL = ""
     @State private var updateSettingsStatus = ""
     @State private var codexBridgeStatus = "checking"
@@ -53,10 +54,16 @@ struct SettingsView: View {
     }
 
     private var onboardingReadinessSection: some View {
-        BarnOwlReadinessOnboardingView(
-            snapshot: readinessSnapshot,
-            actionHandler: handleReadinessAction
-        )
+        VStack(alignment: .leading, spacing: 8) {
+            BarnOwlReadinessOnboardingView(
+                snapshot: readinessSnapshot,
+                actionHandler: handleReadinessAction
+            )
+
+            if !readinessActionStatus.isEmpty {
+                settingsStatusMessage(readinessActionStatus)
+            }
+        }
     }
 
     private var header: some View {
@@ -694,8 +701,10 @@ struct SettingsView: View {
                 apiKeyStatus = "Paste your OpenAI API key below, then choose Save & Test Key."
             }
         case .openMicrophoneSettings:
+            readinessActionStatus = "Opening macOS Microphone privacy settings."
             openSystemPrivacySettings(anchor: "Privacy_Microphone")
         case .openSystemAudioSettings:
+            readinessActionStatus = "Opening macOS Screen & System Audio Recording settings."
             openSystemPrivacySettings(anchor: "Privacy_ScreenCapture")
         case .runCaptureTest:
             Task {
@@ -780,19 +789,27 @@ struct SettingsView: View {
     private func runLocalCaptureTest() async {
         guard !isRunningCaptureTest else { return }
         isRunningCaptureTest = true
-        updateSettingsStatus = "Running a short local capture test..."
+        readinessActionStatus = "Requesting microphone permission..."
         defer {
             isRunningCaptureTest = false
             refreshReadinessChecks()
         }
 
+        let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
+        guard microphoneDecision == .granted else {
+            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+            readinessActionStatus = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
+            return
+        }
+
+        readinessActionStatus = "Running a short local mic/system-audio capture test..."
         do {
             let summary = try await BarnOwlLocalCaptureReadinessTest.run()
             BarnOwlFirstRunReadiness.markLocalCaptureTestSucceeded()
-            updateSettingsStatus = summary
+            readinessActionStatus = summary
         } catch {
             BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
-            updateSettingsStatus = "Local capture test failed: \(BarnOwlErrorFormatter.message(for: error))"
+            readinessActionStatus = "Local capture test failed: \(BarnOwlErrorFormatter.message(for: error))"
         }
     }
 }

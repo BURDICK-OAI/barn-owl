@@ -428,6 +428,15 @@ func errorFormatterUsesLocalizedErrorDescriptions() {
 }
 
 @Test
+func errorFormatterMapsAudioCapturePermissionErrorsToActionableCopy() {
+    let message = BarnOwlErrorFormatter.message(for: AudioCaptureError.permissionDenied)
+
+    #expect(message.contains("Microphone"))
+    #expect(message.contains("Screen/System Audio Recording"))
+    #expect(!message.contains("permissionDenied"))
+}
+
+@Test
 func developerDiagnosticsExportRedactsSecretsPathsAndOmitsDetails() {
     let entry = DiagnosticsLogEntry(
         timestamp: Date(timeIntervalSince1970: 1_800_000_000),

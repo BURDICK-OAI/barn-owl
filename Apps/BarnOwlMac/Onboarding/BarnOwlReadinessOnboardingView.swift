@@ -474,6 +474,52 @@ enum BarnOwlFirstRunReadiness {
         }
     }
 
+    static func requestMicrophoneDecision() async -> CapturePermissionDecision {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return .granted
+        case .notDetermined:
+            let granted = await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+            return granted ? .granted : currentMicrophoneDecision()
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        @unknown default:
+            return .unknown
+        }
+    }
+
+    nonisolated static func microphonePermissionBlockedMessage(
+        for decision: CapturePermissionDecision
+    ) -> String {
+        switch decision {
+        case .denied:
+            return "Microphone access is denied in macOS. Open System Settings > Privacy & Security > Microphone, allow Barn Owl, then retry. macOS will not show another prompt until access is granted or reset."
+        case .restricted:
+            return "Microphone access is restricted by macOS policy. Allow Barn Owl in Privacy & Security before recording."
+        case .notDetermined:
+            return "Barn Owl requested microphone access, but macOS has not returned a permission decision yet. Retry the local capture test."
+        default:
+            return "Barn Owl needs Microphone and Screen/System Audio Recording permissions before recording."
+        }
+    }
+
+    nonisolated static func microphonePermissionRecoveryCommand(
+        for decision: CapturePermissionDecision
+    ) -> String {
+        switch decision {
+        case .denied, .restricted:
+            return "Open System Settings > Privacy & Security > Microphone, allow Barn Owl, then rerun `barnowl permissions test`."
+        default:
+            return "Rerun `barnowl permissions test`."
+        }
+    }
+
     nonisolated static func diagnosticLines(
         userDefaults: UserDefaults = .standard
     ) -> [String] {

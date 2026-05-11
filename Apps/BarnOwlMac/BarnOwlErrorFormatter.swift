@@ -1,9 +1,16 @@
+import BarnOwlAudio
 import BarnOwlOpenAI
 import Foundation
 
 enum BarnOwlErrorFormatter {
     static func message(for error: Error) -> String {
         switch error {
+        case AudioCaptureError.permissionDenied:
+            return "Barn Owl needs Microphone and Screen/System Audio Recording permission in macOS Privacy & Security settings."
+        case AudioCaptureError.sourceUnavailable:
+            return "Barn Owl could not access the selected audio source. Check your microphone, output device, and macOS audio permissions."
+        case AudioCaptureError.alreadyRunning:
+            return "Audio capture is already running."
         case OpenAITranscriptionClientError.unsuccessfulStatusCode(let statusCode, _):
             return openAIStatusMessage(service: "transcription", statusCode: statusCode)
         case OpenAITranscriptionClientError.responseDecodingFailed:

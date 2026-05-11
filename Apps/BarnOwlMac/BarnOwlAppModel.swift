@@ -765,6 +765,21 @@ final class BarnOwlAppModel: ObservableObject {
             return
         }
         let startedAt = Date()
+        captureStatus = "Requesting microphone permission."
+        let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
+        guard microphoneDecision == .granted else {
+            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+            publishRecordingReadinessSummary()
+            let message = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
+            fail(
+                reason: .permissionDenied,
+                message: message,
+                sessionID: nil,
+                preview: "Recording could not start."
+            )
+            return
+        }
+
         let matchedCalendarContext = await resolveCalendarContext(around: startedAt)
         let sessionTitle = matchedCalendarContext?.isHighConfidence == true
             ? matchedCalendarContext?.title ?? "Untitled Meeting"
@@ -3210,6 +3225,23 @@ final class BarnOwlAppModel: ObservableObject {
             )
         }
 
+        captureStatus = "Requesting microphone permission."
+        let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
+        guard microphoneDecision == .granted else {
+            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+            publishRecordingReadinessSummary()
+            let message = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
+            captureStatus = message
+            lastError = message
+            return controlStatusResponse(
+                ok: false,
+                message: message,
+                summary: BarnOwlSettingsReadinessChecks.lines().joined(separator: "\n"),
+                nextCommand: BarnOwlFirstRunReadiness.microphonePermissionRecoveryCommand(for: microphoneDecision),
+                error: "microphone_permission_blocked"
+            )
+        }
+
         captureStatus = "Running local mic/system-audio capture test."
         do {
             let summary = try await BarnOwlLocalCaptureReadinessTest.run()
@@ -3491,7 +3523,7 @@ final class BarnOwlAppModel: ObservableObject {
     private func captureFailureMessage(for error: Error) -> String {
         switch error {
         case AudioCaptureError.permissionDenied:
-            "Barn Owl needs Microphone and System Audio Recording permissions before recording."
+            Self.microphoneAndSystemAudioPermissionMessage
         case AudioCaptureError.sourceUnavailable:
             "Barn Owl could not find an available microphone or system audio source."
         case AudioCaptureError.alreadyRunning:
@@ -3500,6 +3532,9 @@ final class BarnOwlAppModel: ObservableObject {
             "Barn Owl could not start recording."
         }
     }
+
+    nonisolated private static let microphoneAndSystemAudioPermissionMessage =
+        "Barn Owl needs Microphone and Screen/System Audio Recording permissions before recording."
 
     private func processingFailureMessage(for error: Error) -> String {
         switch error {
