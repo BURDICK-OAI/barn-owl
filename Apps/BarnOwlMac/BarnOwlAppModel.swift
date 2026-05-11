@@ -2358,6 +2358,7 @@ final class BarnOwlAppModel: ObservableObject {
         errorCode: String? = nil,
         error: String? = nil
     ) -> BarnOwlControlResponse {
+        publishRecordingReadinessSummary()
         let resolvedActiveMeetingID = activeMeetingID ?? activeSession?.id ?? displayedNote?.id
         let apiKeyConfigured = BarnOwlAPIKeyStore.hasConfiguredAPIKey()
         let apiKeyVerified = BarnOwlAPIKeyStore.hasVerifiedAPIKey()
@@ -3181,6 +3182,57 @@ final class BarnOwlAppModel: ObservableObject {
                 ok: false,
                 message: "Could not export developer diagnostics.",
                 error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlPermissionsCheckResponse() -> BarnOwlControlResponse {
+        publishRecordingReadinessSummary()
+        let snapshot = BarnOwlFirstRunReadiness.currentSnapshot()
+        let lines = BarnOwlSettingsReadinessChecks.lines()
+        let nextCommand = snapshot.criticalReady
+            ? "barnowl start"
+            : "barnowl permissions test"
+        return controlStatusResponse(
+            message: snapshot.summary,
+            summary: lines.joined(separator: "\n"),
+            nextCommand: nextCommand
+        )
+    }
+
+    func controlPermissionsTestResponse() async -> BarnOwlControlResponse {
+        guard !stateMachine.state.canStopRecording else {
+            return controlStatusResponse(
+                ok: false,
+                message: "Stop the active recording before running the local capture test.",
+                nextCommand: "barnowl stop",
+                error: "active_recording"
+            )
+        }
+
+        captureStatus = "Running local mic/system-audio capture test."
+        do {
+            let summary = try await BarnOwlLocalCaptureReadinessTest.run()
+            BarnOwlFirstRunReadiness.markLocalCaptureTestSucceeded()
+            publishRecordingReadinessSummary()
+            captureStatus = summary
+            return controlStatusResponse(
+                message: summary,
+                summary: BarnOwlSettingsReadinessChecks.lines().joined(separator: "\n"),
+                nextCommand: "barnowl start"
+            )
+        } catch {
+            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+            publishRecordingReadinessSummary()
+            let message = "Local capture test failed: \(BarnOwlErrorFormatter.message(for: error))"
+            captureStatus = message
+            lastError = message
+            return controlStatusResponse(
+                ok: false,
+                message: message,
+                summary: BarnOwlSettingsReadinessChecks.lines().joined(separator: "\n"),
+                nextCommand: "Open Barn Owl Settings, grant Microphone and Screen/System Audio Recording, then rerun `barnowl permissions test`.",
+                error: "permissions_test_failed"
             )
         }
     }
@@ -4327,7 +4379,7 @@ final class BarnOwlAppModel: ObservableObject {
         let now = recordingHealthStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         let summary = recordingHealth.readinessSummary(
             configuration: .defaultMeetingCapture,
-            permissions: .grantedForDefaultMeetingCapture,
+            permissions: BarnOwlFirstRunReadiness.currentRecordingPermissionSet(),
             now: now
         )
         if summary != recordingReadinessSummary {

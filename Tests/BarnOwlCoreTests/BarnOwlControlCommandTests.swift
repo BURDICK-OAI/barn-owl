@@ -135,6 +135,23 @@ func controlCommandNameIncludesCodexPrimaryCases() {
     #expect(names.contains("meeting_delete"))
     #expect(names.contains("meeting_purge_temp_audio"))
     #expect(names.contains("diagnostics_export"))
+    #expect(names.contains("permissions_check"))
+    #expect(names.contains("permissions_test"))
+}
+
+@Test
+func permissionsCommandsDecodeForCliSetupFlow() throws {
+    let check = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"permissions_check"}"#.utf8)
+    )
+    let test = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"permissions_test"}"#.utf8)
+    )
+
+    #expect(check.command == .permissionsCheck)
+    #expect(test.command == .permissionsTest)
 }
 
 @Test

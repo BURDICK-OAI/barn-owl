@@ -774,6 +774,11 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_export.add_argument("--output", help="Path for the redacted Markdown diagnostics report.")
     add_format(diagnostics_export)
 
+    permissions = subparsers.add_parser("permissions")
+    permissions_subparsers = permissions.add_subparsers(dest="permissions_command", required=True)
+    add_format(permissions_subparsers.add_parser("check"))
+    add_format(permissions_subparsers.add_parser("test"))
+
     feedback = subparsers.add_parser("feedback")
     feedback_subparsers = feedback.add_subparsers(dest="feedback_command", required=True)
     feedback_slack_parser = feedback_subparsers.add_parser("slack")
@@ -945,6 +950,16 @@ def main(argv: list[str]) -> int:
         payload = {
             "command": "diagnostics_export",
             "outputPath": output_path,
+            "format": output_format,
+        }
+    elif args.command == "permissions" and args.permissions_command == "check":
+        payload = {
+            "command": "permissions_check",
+            "format": output_format,
+        }
+    elif args.command == "permissions" and args.permissions_command == "test":
+        payload = {
+            "command": "permissions_test",
             "format": output_format,
         }
     elif args.command == "title" and args.title_command == "set":

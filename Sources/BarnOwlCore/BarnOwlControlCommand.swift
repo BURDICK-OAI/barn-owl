@@ -36,6 +36,8 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case contextDelete = "context_delete"
     case chat = "chat"
     case diagnosticsExport = "diagnostics_export"
+    case permissionsCheck = "permissions_check"
+    case permissionsTest = "permissions_test"
 }
 
 public struct BarnOwlControlCommand: Codable, Equatable, Sendable {

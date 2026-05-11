@@ -507,6 +507,24 @@ enum BarnOwlFirstRunReadiness {
         ]
     }
 
+    static func currentRecordingPermissionSet(
+        userDefaults: UserDefaults = .standard
+    ) -> RecordingPermissionSet {
+        let microphoneDecision = effectivePermissionDecision(
+            currentMicrophoneDecision(),
+            captureSucceeded: userDefaults.bool(forKey: microphoneCaptureSucceededDefaultsKey)
+        )
+        let systemAudioDecision = effectiveSystemAudioPermissionDecision(
+            currentSystemAudioDecision(),
+            captureSucceeded: userDefaults.bool(forKey: systemAudioCaptureSucceededDefaultsKey)
+        )
+
+        return RecordingPermissionSet(
+            microphone: CapturePermissionState(kind: .microphone, decision: microphoneDecision),
+            systemAudio: CapturePermissionState(kind: .systemAudioScreenCapture, decision: systemAudioDecision)
+        )
+    }
+
     static func markCaptureSucceeded(trackKind: AudioTrackKind) {
         switch trackKind {
         case .microphone:

@@ -64,6 +64,8 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 
 - Status: `barnowl status`
 - Status checklist: `barnowl status --format markdown`
+- Permissions check: `barnowl permissions check`
+- Permissions local capture test: `barnowl permissions test`
 - Current meeting: `barnowl current`
 - Start: `barnowl start --title "Meeting" --type "Team Meeting" --context "..."`
 - Stop: `barnowl stop`
