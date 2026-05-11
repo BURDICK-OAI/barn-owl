@@ -1,0 +1,303 @@
+# Distribution
+
+BarnOwl has two shareable artifact types:
+
+- Source handoff for another developer to build and inspect.
+- App package for someone who only needs to run BarnOwl.
+
+Do not send the raw working folder. It can contain local build products, `.env.local`,
+Git objects, Xcode state, and other machine-specific files. Generate artifacts under
+`dist/` instead.
+
+## Build Artifacts
+
+```sh
+scripts/package-all.sh
+```
+
+This creates:
+
+- `dist/BarnOwl-source-handoff.zip`
+- `dist/BarnOwl.app.zip`
+- `dist/BarnOwl-release-manifest.json`
+- `dist/SHA256SUMS`
+
+Send those files only. `dist/` is ignored by Git and can be regenerated any time
+from the current source.
+
+## Internal/GitHub Download Checklist
+
+Barn Owl is distributed as a direct-download macOS app package, not through the
+Mac App Store. For an internal GitHub release or similar download page, attach:
+
+- `BarnOwl.app.zip`
+- `BarnOwl-source-handoff.zip`
+- `BarnOwl-release-manifest.json`
+- `BarnOwl-update-manifest.json`
+- `SHA256SUMS`
+
+Before sharing, verify checksums locally:
+
+```sh
+cd dist
+shasum -a 256 -c SHA256SUMS
+```
+
+Or run the full dist integrity check:
+
+```sh
+scripts/verify-dist.sh dist
+```
+
+That command verifies the expected file set, `SHA256SUMS`, release manifest
+artifact paths, manifest SHA-256 values, the update manifest, and the app package
+release gate.
+
+The lightweight internal path uses an ad-hoc signed app plus checksum-verified
+manifests. Recipients may see Gatekeeper friction on first launch because the app
+is not notarized. That is an intentional tradeoff for a small internal tool.
+
+For a package that opens cleanly on another Mac without Gatekeeper warnings, use
+the optional Developer ID flow below and confirm `scripts/verify-release.sh
+--direct-download dist/BarnOwl.app.zip` passes.
+
+The optional Developer ID release-candidate command is:
+
+```sh
+BARNOWL_CODESIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)" \
+BARNOWL_NOTARY_PROFILE="BarnOwlNotary" \
+scripts/release-direct-download.sh
+```
+
+That command runs the verifier, packages the source and app artifacts, notarizes
+and staples the app, runs the strict direct-download gate, and validates
+`SHA256SUMS`. It also requires a committed, clean Git checkout so
+`BarnOwl-release-manifest.json` can identify the exact source revision. For an
+intentional local-only exception, set `BARNOWL_ALLOW_DIRTY_RELEASE=1`; do not use
+that override for a shared GitHub/internal release.
+
+## Regenerate Packages
+
+Run this any time you want the shareable zips to include the latest BarnOwl
+changes:
+
+```sh
+cd /path/to/BarnOwl
+scripts/package-all.sh
+```
+
+The command replaces the existing zips in `dist/`:
+
+```text
+dist/BarnOwl-source-handoff.zip
+dist/BarnOwl.app.zip
+dist/BarnOwl-release-manifest.json
+dist/BarnOwl-update-manifest.json
+dist/SHA256SUMS
+```
+
+Before sending them, confirm `dist/` contains only the shareable artifacts:
+
+```sh
+find dist -maxdepth 1 -type f -print
+```
+
+Expected output:
+
+```text
+dist/BarnOwl-source-handoff.zip
+dist/BarnOwl.app.zip
+dist/BarnOwl-release-manifest.json
+dist/SHA256SUMS
+```
+
+Do not send `.build/`, `DerivedData/`, `.env.local`, the raw repository folder,
+or anything outside `dist/`. Those are local development files and can contain
+machine-specific state.
+
+Verify a downloaded artifact against `SHA256SUMS` with:
+
+```sh
+cd dist
+shasum -a 256 -c SHA256SUMS
+```
+
+## Clean Local Install
+
+For a local install/update pass that behaves like a new user onboarding, package
+the app and install the verified `dist/BarnOwl.app.zip`:
+
+```sh
+scripts/package-all.sh
+scripts/install-local-app.sh --yes --reset-state
+```
+
+The install script verifies the app archive with `scripts/verify-release.sh`,
+extracts `BarnOwl.app`, confirms the bundle id is `com.barnowl.mac`, backs up an
+existing destination app, installs to `/Applications/Barn Owl.app`, verifies the
+installed signature, and clears Barn Owl local data/keychain/TCC decisions when
+`--reset-state` is passed. Use `--launch` if you want it to open the app after
+installation.
+
+`BarnOwl-release-manifest.json` records the app version, build number, packaging
+time, source commit when available, signing mode, and the SHA-256 values for the
+source and app zips. Use it as the audit record for an internal GitHub release.
+
+If packaging fails, check the build log:
+
+```sh
+less .build/package/package-app.xcodebuild.log
+```
+
+If the source handoff fails with a secret-scan error, remove the reported secret
+from source before regenerating. Do not bypass the scan.
+
+## Source Handoff
+
+```sh
+scripts/package-source-handoff.sh
+```
+
+The source package script runs `scripts/verify-source-handoff.sh` before
+returning. You can also verify an existing archive directly:
+
+```sh
+scripts/verify-source-handoff.sh dist/BarnOwl-source-handoff.zip
+```
+
+The source package excludes:
+
+- `.git/`
+- `.env`, `.env.*` except `.env.example`
+- `DerivedData/`
+- `.tools/`
+- `.build/`, `build/`, `dist/`
+- generated release artifacts such as `BarnOwl.app.zip`,
+  `BarnOwl-source-handoff.zip`, `BarnOwl-release-manifest.json`, and
+  `SHA256SUMS`
+- Xcode user state
+
+The script also runs `scripts/scan-secrets.sh` against the staged source before
+creating the archive. The scan checks for common OpenAI keys, non-empty key
+environment assignments, private keys, GitHub tokens, and Slack tokens while
+excluding generated build output and `.env.example`.
+
+Because `.tools/` is excluded, source handoff recipients need XcodeGen available
+on `PATH` to regenerate the project. `scripts/verify.sh` uses the bundled local
+copy when present, otherwise falls back to `xcodegen` from `PATH`. If XcodeGen is
+not available but `BarnOwl.xcodeproj` is present, it continues with the included
+generated project and prints a warning.
+
+## App Package
+
+```sh
+scripts/package-app.sh
+```
+
+The app package builds `BarnOwl.app`, stages it under `.build/package/`, bundles
+the local CLI and Codex skill resources, strips debug symbols, re-signs the
+staged app ad hoc with hardened runtime enabled, and zips it into `dist/`.
+
+The app package does not include local recordings, meeting databases, generated
+notes, or OpenAI API keys. Recipients need to add their own OpenAI API key in
+BarnOwl Settings.
+
+Normal app installs and in-app updates replace only the app bundle. They preserve
+the user's Barn Owl recordings, notes, meeting database, preferences, and
+Keychain API key. Use `scripts/reset-local-state.sh --yes` or
+`scripts/install-local-app.sh --reset-state` only for fresh-onboarding QA.
+
+Remote update archives must be delivered over HTTPS and include a SHA-256
+checksum in the update manifest. The archive must contain a valid Barn Owl app
+bundle with a valid code signature; ad-hoc signatures are allowed for this
+lightweight internal distribution path.
+
+`BarnOwl-update-manifest.json` is the app-facing update feed. You can publish it
+beside `BarnOwl.app.zip` in a Git-hosted raw/static location, or send both files
+ad hoc. In Settings, point Barn Owl at the manifest URL or local manifest path.
+The app checks on launch, periodically while idle, and when the user clicks
+Update.
+
+### Developer ID Package
+
+Barn Owl is not targeting the Mac App Store. For an internal or GitHub-style
+direct download that opens cleanly under Gatekeeper, package with a Developer ID
+Application identity and a notarytool keychain profile:
+
+```sh
+xcrun notarytool store-credentials "BarnOwlNotary" \
+  --apple-id "APPLE_ID_EMAIL" \
+  --team-id "APPLE_TEAM_ID" \
+  --password "APP_SPECIFIC_PASSWORD"
+```
+
+Then build, sign, notarize, staple, and zip. Prefer
+`scripts/release-direct-download.sh` above for a release candidate; use this lower
+level command only when you need to debug packaging:
+
+```sh
+BARNOWL_CODESIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)" \
+BARNOWL_NOTARIZE=1 \
+BARNOWL_NOTARY_PROFILE="BarnOwlNotary" \
+scripts/package-app.sh dist/BarnOwl.app.zip
+```
+
+The script signs the staged app with hardened runtime and a timestamp, submits a
+temporary zip to Apple notarization, staples the accepted ticket to the app, and
+then writes the final `dist/BarnOwl.app.zip`.
+
+`scripts/release-direct-download.sh` is stricter than `scripts/package-app.sh`:
+it refuses dirty or commitless Git checkouts unless
+`BARNOWL_ALLOW_DIRTY_RELEASE=1` is set. Prefer the stricter script for anything
+you intend to share.
+
+## Release Verification
+
+Validate the full `dist/` package set before sharing it:
+
+```sh
+scripts/verify-dist.sh dist
+```
+
+`scripts/package-all.sh` runs this automatically after writing
+`BarnOwl-release-manifest.json` and `SHA256SUMS`.
+
+Validate a generated app package before sharing it:
+
+```sh
+scripts/verify-release.sh dist/BarnOwl.app.zip
+```
+
+`scripts/package-all.sh` runs this local/developer release check automatically.
+The check verifies the archive shape, bundle identifier, code signature,
+hardened runtime flag, required code-signing entitlements, bundled CLI, bundled
+Codex skill resources, and rejects bundled local/private state such as databases,
+logs, raw audio, tokens, update manifests, manual QA evidence, and `.env` files.
+
+For a direct-download build, sign with Developer ID, notarize, staple the ticket,
+then run:
+
+```sh
+scripts/verify-release.sh --direct-download dist/BarnOwl.app.zip
+```
+
+That stricter mode rejects ad-hoc signatures, requires a team identifier,
+requires Developer ID Application signing, runs Gatekeeper assessment, and
+validates the stapled notarization ticket.
+
+For a full direct-download package-set gate, run:
+
+```sh
+scripts/verify-dist.sh --direct-download dist
+```
+
+When `BARNOWL_NOTARIZE=1` is set, `scripts/package-all.sh` runs this stricter
+direct-download verification automatically after packaging.
+
+## Release Notes
+
+Current packages are lightweight internal builds. They are ad-hoc signed,
+checksum verified, and not notarized. Expect first-launch Gatekeeper friction on
+other Macs. A DMG, Developer ID notarization, Sparkle feed, or stronger update
+signature scheme can come later; none is required for the initial internal app
+package download.

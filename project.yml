@@ -1,0 +1,225 @@
+name: BarnOwl
+options:
+  bundleIdPrefix: com.barnowl
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    SWIFT_VERSION: 6.0
+    MACOSX_DEPLOYMENT_TARGET: 26.0
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  BarnOwl:
+    type: application
+    platform: macOS
+    sources:
+      - Apps/BarnOwlMac
+    dependencies:
+      - target: BarnOwlCore
+      - sdk: EventKit.framework
+      - target: BarnOwlAudio
+      - target: BarnOwlTranscription
+      - target: BarnOwlOpenAI
+      - target: BarnOwlContext
+      - target: BarnOwlPersistence
+      - target: BarnOwlNotes
+      - sdk: Security.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.barnowl.mac
+        EXECUTABLE_NAME: BarnOwlApp
+        INFOPLIST_FILE: Apps/BarnOwlMac/Info.plist
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_ENTITLEMENTS: Apps/BarnOwlMac/BarnOwl.entitlements
+        DEVELOPMENT_TEAM: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+  BarnOwlCore:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlCore
+  BarnOwlAudio:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlAudio
+    dependencies:
+      - target: BarnOwlCore
+      - sdk: AVFoundation.framework
+      - sdk: ScreenCaptureKit.framework
+      - sdk: CoreMedia.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreAudio.framework
+  BarnOwlOpenAI:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlOpenAI
+    dependencies:
+      - target: BarnOwlCore
+  BarnOwlTranscription:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlTranscription
+    dependencies:
+      - target: BarnOwlCore
+      - target: BarnOwlOpenAI
+  BarnOwlContext:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlContext
+    dependencies:
+      - target: BarnOwlCore
+      - sdk: EventKit.framework
+  BarnOwlPersistence:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlPersistence
+    dependencies:
+      - target: BarnOwlCore
+      - target: BarnOwlTranscription
+      - sdk: libsqlite3.tbd
+  BarnOwlNotes:
+    type: framework
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Sources/BarnOwlNotes
+    dependencies:
+      - target: BarnOwlCore
+  BarnOwlCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlCoreTests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlCore
+  BarnOwlAudioTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlAudioTests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlAudio
+      - target: BarnOwlCore
+  BarnOwlOpenAITests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlOpenAITests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlOpenAI
+  BarnOwlTranscriptionTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlTranscriptionTests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlCore
+      - target: BarnOwlTranscription
+  BarnOwlContextTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlContextTests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlContext
+  BarnOwlNotesTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlNotesTests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlNotes
+  BarnOwlPersistenceTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
+    sources:
+      - Tests/BarnOwlPersistenceTests
+    dependencies:
+      - target: BarnOwl
+      - target: BarnOwlPersistence
+      - target: BarnOwlTranscription
+schemes:
+  BarnOwl:
+    build:
+      targets:
+        BarnOwl: all
+    test:
+      targets:
+        - BarnOwlCoreTests
+        - BarnOwlAudioTests
+        - BarnOwlOpenAITests
+        - BarnOwlTranscriptionTests
+        - BarnOwlContextTests
+        - BarnOwlNotesTests
+        - BarnOwlPersistenceTests

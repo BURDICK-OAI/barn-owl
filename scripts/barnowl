@@ -1,0 +1,632 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+DEFAULT_URL = "http://127.0.0.1:8765"
+DEFAULT_APP_PATH = "/Applications/Barn Owl.app"
+DEFAULT_TOKEN_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "control-bridge-token"
+
+
+def command_name(value: str) -> str:
+    return value.replace("-", "_")
+
+
+def unavailable_response(error: Exception) -> dict:
+    return {
+        "ok": False,
+        "message": "Barn Owl control bridge is unavailable. Is Barn Owl running?",
+        "error": str(error),
+    }
+
+
+def redact_error_text(value: str) -> str:
+    replacements = [
+        (r"sk-(proj-)?[A-Za-z0-9_-]{8,}", "[redacted API key]"),
+        (r"/Users/[^\n\r\t]+/Library/Application Support/[^\n\r\t]+", "[redacted local path]"),
+        (r"/Users/[^/\s]+/[^\n\r\t ]*", "[redacted local path]"),
+        (r"/private/(tmp|var)/[^\n\r\t ]*", "[redacted local path]"),
+        (r"/var/folders/[^\n\r\t ]*", "[redacted local path]"),
+    ]
+    sanitized = value
+    for pattern, replacement in replacements:
+        sanitized = re.sub(pattern, replacement, sanitized)
+    if len(sanitized) > 320:
+        sanitized = sanitized[:320] + "..."
+    return sanitized
+
+
+def sanitize_response_errors(value):
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            if key in {"error", "lastError", "errorMessage"} and isinstance(item, str):
+                sanitized[key] = redact_error_text(item)
+            else:
+                sanitized[key] = sanitize_response_errors(item)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_response_errors(item) for item in value]
+    return value
+
+
+def bridge_headers() -> dict:
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("BARNOWL_BRIDGE_TOKEN")
+    if token is None:
+        try:
+            token = DEFAULT_TOKEN_PATH.read_text(encoding="utf-8")
+        except OSError:
+            token = ""
+    token = token.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def open_barn_owl() -> None:
+    app_path = os.environ.get("BARNOWL_APP", DEFAULT_APP_PATH)
+    try:
+        if os.path.exists(app_path):
+            subprocess.run(["open", app_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        else:
+            subprocess.run(["open", "-a", "Barn Owl"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except Exception:
+        pass
+
+
+def post_once(payload: dict, base_url: str) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/command",
+        data=data,
+        headers=bridge_headers(),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8")
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return {"ok": False, "message": body or str(error), "error": str(error)}
+    except Exception as error:
+        return unavailable_response(error)
+
+
+def retry_after_launch(operation, launch: bool = True) -> dict:
+    response = operation()
+    if response.get("ok") or not launch or "unavailable" not in response.get("message", "").lower():
+        return response
+    open_barn_owl()
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        response = operation()
+        if response.get("ok") or "unavailable" not in response.get("message", "").lower():
+            return response
+    return response
+
+
+def post(payload: dict, base_url: str, launch: bool = True) -> dict:
+    return retry_after_launch(lambda: post_once(payload, base_url), launch=launch)
+
+
+def get_status_once(base_url: str) -> dict:
+    try:
+        with urllib.request.urlopen(f"{base_url}/status", timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as error:
+        return unavailable_response(error)
+
+
+def get_status(base_url: str, launch: bool = True) -> dict:
+    return retry_after_launch(lambda: get_status_once(base_url), launch=launch)
+
+
+def parse_duration(value: str) -> float:
+    text = value.strip().lower()
+    if not text:
+        raise argparse.ArgumentTypeError("duration cannot be empty")
+    suffix = text[-1]
+    multiplier = 1
+    number = text
+    if suffix in {"s", "m", "h"}:
+        number = text[:-1]
+        multiplier = {"s": 1, "m": 60, "h": 3600}[suffix]
+    try:
+        seconds = float(number) * multiplier
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"invalid duration: {value}") from error
+    if seconds < 0:
+        raise argparse.ArgumentTypeError("duration must be nonnegative")
+    return seconds
+
+
+def wait_condition_met(response: dict, until: str) -> bool:
+    if until == "stopped":
+        return response.get("recordingStatus") != "recording" and response.get("status") != "Recording"
+    if until == "notes":
+        return response.get("notesReady") is True
+    if until == "complete":
+        return response.get("jobState") == "complete" and response.get("notesReady") is True
+    return False
+
+
+def terminal_failure(response: dict) -> bool:
+    return (
+        response.get("jobState") == "failed"
+        or response.get("recordingStatus") == "failed"
+        or response.get("errorCode") == "terminal_failure"
+    )
+
+
+def wait_for_condition(payload: dict, base_url: str, timeout_seconds: float, launch: bool = True) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    until = payload.get("until", "complete")
+    last_response = None
+    interval = 1.0
+    while True:
+        response = post(payload, base_url, launch=launch)
+        last_response = response
+        if response.get("ok") is False:
+            return response
+        if wait_condition_met(response, until):
+            response["ok"] = True
+            response["message"] = response.get("message") or f"Wait condition satisfied: {until}."
+            return response
+        if terminal_failure(response):
+            response["ok"] = False
+            response["errorCode"] = response.get("errorCode") or "terminal_failure"
+            response["message"] = response.get("message") or "Barn Owl reached a failed state."
+            return response
+        if time.monotonic() >= deadline:
+            timeout_response = dict(last_response or {})
+            timeout_response["ok"] = False
+            timeout_response["errorCode"] = "timeout"
+            timeout_response["error"] = f"Timed out waiting for {until} after {timeout_seconds:g}s."
+            timeout_response["message"] = timeout_response["error"]
+            return timeout_response
+        time.sleep(min(interval, max(0.1, deadline - time.monotonic())))
+        interval = min(interval * 1.2, 2.0)
+
+
+def markdown_response(response: dict) -> str:
+    if response.get("jobs") is not None:
+        lines = ["# Barn Owl Jobs"]
+        jobs = response.get("jobs") or []
+        if not jobs:
+            lines.append("")
+            lines.append("No jobs found.")
+        for status in ["failed", "running", "pending", "succeeded", "canceled"]:
+            grouped = [job for job in jobs if job.get("status") == status]
+            if not grouped:
+                continue
+            lines.append("")
+            lines.append(f"## {status.title()}")
+            for job in grouped:
+                detail = f"- `{job.get('id')}` {job.get('type', 'job')}"
+                if job.get("meetingID"):
+                    detail += f" meeting `{job['meetingID']}`"
+                detail += f" attempts={job.get('attemptCount', 0)} updated={job.get('updatedAt', 'unknown')}"
+                lines.append(detail)
+                if job.get("errorMessage"):
+                    lines.append(f"  - Error: {job['errorMessage']}")
+        if response.get("nextCommand"):
+            lines.append("")
+            lines.append(f"Next: `{response['nextCommand']}`")
+        return "\n".join(lines).rstrip()
+    if (
+        response.get("bridgeStatus") or response.get("recordingStatus") or response.get("nextCommand")
+    ) and not any(response.get(key) for key in [
+        "notes",
+        "transcript",
+        "summary",
+        "answer",
+        "actions",
+        "decisions",
+        "contextItems",
+        "meetings",
+        "meeting",
+        "current",
+    ]):
+        if "wait" in response.get("message", "").lower() or response.get("errorCode") in {"timeout", "terminal_failure"}:
+            lines = ["# Barn Owl Wait", ""]
+            state = "complete" if response.get("ok") else "failed"
+            if response.get("errorCode") == "timeout":
+                state = "timed out"
+            lines.append(f"- Result: {state}")
+            lines.append(f"- Message: {response.get('message', 'Barn Owl wait response.')}")
+            if response.get("meetingID"):
+                lines.append(f"- Meeting: `{response['meetingID']}`")
+            lines.append(f"- Job state: {response.get('jobState') or 'unknown'}")
+            lines.append(f"- Notes: {'ready' if response.get('notesReady') else 'not ready'}")
+            lines.append(f"- Transcript: {'ready' if response.get('transcriptReady') else 'not ready'}")
+            lines.append(f"- Summary: {'ready' if response.get('summaryReady') else 'not ready'}")
+            if response.get("lastError"):
+                lines.append(f"- Last error: {response['lastError']}")
+            if response.get("nextCommand"):
+                lines.append("")
+                lines.append(f"Next: `{response['nextCommand']}`")
+            return "\n".join(lines).rstrip()
+        lines = ["# Barn Owl Status", ""]
+        checks = [
+            ("Bridge", response.get("bridgeStatus") or "unknown"),
+            ("App", response.get("appStatus") or "unknown"),
+            ("Recording", response.get("recordingStatus") or response.get("status") or "unknown"),
+            ("API key", "configured" if response.get("apiKeyConfigured") else "missing"),
+            ("Readiness", response.get("readinessState") or "unknown"),
+            ("Jobs", response.get("jobState") or "unknown"),
+            ("Notes", "ready" if response.get("notesReady") else "not ready"),
+            ("Transcript", "ready" if response.get("transcriptReady") else "not ready"),
+            ("Summary", "ready" if response.get("summaryReady") else "not ready"),
+        ]
+        for label, value in checks:
+            mark = "x" if value in {"configured", "ready", "complete", "running"} else " "
+            lines.append(f"- [{mark}] {label}: {value}")
+        if response.get("meetingID"):
+            lines.append(f"- Meeting: `{response['meetingID']}`")
+        if response.get("sessionID"):
+            lines.append(f"- Session: `{response['sessionID']}`")
+        if response.get("title"):
+            lines.append(f"- Title: {response['title']}")
+        if response.get("lastError"):
+            lines.append(f"- Last error: {response['lastError']}")
+        if response.get("nextCommand"):
+            lines.append("")
+            lines.append(f"Next: `{response['nextCommand']}`")
+        return "\n".join(lines).rstrip()
+    if response.get("notes"):
+        return response["notes"].rstrip()
+    if response.get("transcript"):
+        return "# Transcript\n\n" + response["transcript"].rstrip()
+    if response.get("summary"):
+        return "# Summary\n\n" + response["summary"].rstrip()
+    if response.get("answer"):
+        return response["answer"].rstrip()
+    if response.get("actions") or response.get("decisions"):
+        parts = []
+        if response.get("actions"):
+            parts.append("## Action Items\n\n" + "\n".join(f"- {item}" for item in response["actions"]))
+        if response.get("decisions"):
+            parts.append("## Decisions\n\n" + "\n".join(f"- {item}" for item in response["decisions"]))
+        return "\n\n".join(parts)
+    if response.get("contextItems"):
+        lines = ["# Context"]
+        for item in response["contextItems"]:
+            lines.append("")
+            lines.append(f"## {item.get('source', 'context')} ({item.get('state', 'unknown')}) `{item.get('id')}`")
+            if item.get("meetingID"):
+                lines.append(f"Meeting: `{item['meetingID']}`")
+                lines.append("")
+            lines.append(item.get("body", ""))
+        return "\n".join(lines).rstrip()
+    if response.get("meetings"):
+        lines = ["# Meetings"]
+        for meeting in response["meetings"]:
+            started = meeting.get("startedAt") or "unknown date"
+            overview = meeting.get("overview") or ""
+            lines.append(f"\n- **{meeting.get('title', 'Untitled Meeting')}** `{meeting.get('id')}`")
+            lines.append(f"  - Started: {started}")
+            if meeting.get("meetingType"):
+                lines.append(f"  - Type: {meeting['meetingType']}")
+            if overview:
+                lines.append(f"  - {overview}")
+        return "\n".join(lines).rstrip()
+    if response.get("meeting") or response.get("current"):
+        meeting = response.get("meeting") or response.get("current")
+        lines = [f"# {meeting.get('title', 'Barn Owl Meeting')}"]
+        lines.append("")
+        lines.append(f"- ID: {meeting.get('id')}")
+        if meeting.get("startedAt"):
+            lines.append(f"- Started: {meeting['startedAt']}")
+        if meeting.get("meetingType"):
+            lines.append(f"- Type: {meeting['meetingType']}")
+        if meeting.get("status"):
+            lines.append(f"- Status: {meeting['status']}")
+        if meeting.get("overview"):
+            lines.append("")
+            lines.append(meeting["overview"])
+        return "\n".join(lines).rstrip()
+    return response.get("message", "Barn Owl response.")
+
+
+def print_response(response: dict, output_format: str, human: bool) -> int:
+    response = sanitize_response_errors(response)
+    if human:
+        output_format = "markdown"
+    if output_format == "markdown":
+        print(markdown_response(response))
+    else:
+        status = response.get("status")
+        title = response.get("title")
+        if output_format == "human":
+            details = " ".join(part for part in [status, title] if part)
+            print(f"{response.get('message', 'Barn Owl response.')} {details}".strip())
+        else:
+            print(json.dumps(response, sort_keys=True))
+    return 0 if response.get("ok") else 1
+
+
+def add_format(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--format", choices=["json", "markdown", "human"], default="json")
+    parser.add_argument("--json", action="store_true", help="Force JSON output.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="barnowl")
+    parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument("--human", action="store_true")
+    parser.add_argument("--no-launch", action="store_true", help="Do not launch Barn Owl if the bridge is unavailable.")
+    parser.add_argument("--format", choices=["json", "markdown", "human"], default="json")
+    parser.add_argument("--json", action="store_true", help="Force JSON output.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    add_format(subparsers.add_parser("status"))
+    add_format(subparsers.add_parser("current"))
+
+    wait = subparsers.add_parser("wait")
+    wait_target = wait.add_mutually_exclusive_group(required=True)
+    wait_target.add_argument("--session")
+    wait_target.add_argument("--latest", action="store_true")
+    wait.add_argument("--until", choices=["complete", "notes", "stopped"], default="complete")
+    wait.add_argument("--timeout", type=parse_duration, default=parse_duration("10m"))
+    add_format(wait)
+
+    start = subparsers.add_parser("start")
+    start.add_argument("--title")
+    start.add_argument("--type", dest="meeting_type")
+    start.add_argument("--context")
+    start.add_argument("--source", default="cli")
+
+    subparsers.add_parser("stop")
+
+    meetings = subparsers.add_parser("meetings")
+    meetings_subparsers = meetings.add_subparsers(dest="meetings_command", required=True)
+    meetings_search = meetings_subparsers.add_parser("search")
+    meetings_search.add_argument("query")
+    meetings_search.add_argument("--limit", type=int, default=10)
+    add_format(meetings_search)
+    meetings_recent = meetings_subparsers.add_parser("recent")
+    meetings_recent.add_argument("--limit", type=int, default=10)
+    add_format(meetings_recent)
+
+    meeting = subparsers.add_parser("meeting")
+    meeting_subparsers = meeting.add_subparsers(dest="meeting_command", required=True)
+    for name in ["get", "transcript", "notes", "summary", "context", "actions"]:
+        leaf = meeting_subparsers.add_parser(name)
+        leaf.add_argument("meeting_id")
+        add_format(leaf)
+    meeting_delete = meeting_subparsers.add_parser("delete")
+    meeting_delete.add_argument("meeting_id")
+    meeting_delete.add_argument("--yes", action="store_true")
+    add_format(meeting_delete)
+    meeting_purge = meeting_subparsers.add_parser("purge-temp-audio")
+    meeting_purge.add_argument("meeting_id")
+    meeting_purge.add_argument("--yes", action="store_true")
+    add_format(meeting_purge)
+
+    jobs = subparsers.add_parser("jobs")
+    jobs_subparsers = jobs.add_subparsers(dest="jobs_command", required=True)
+    jobs_list = jobs_subparsers.add_parser("list")
+    jobs_list.add_argument("--session")
+    add_format(jobs_list)
+    jobs_retry = jobs_subparsers.add_parser("retry")
+    jobs_retry.add_argument("--session")
+    jobs_retry.add_argument("--job")
+    add_format(jobs_retry)
+    jobs_dismiss = jobs_subparsers.add_parser("dismiss")
+    jobs_dismiss.add_argument("--job", required=True)
+    add_format(jobs_dismiss)
+
+    chat = subparsers.add_parser("chat")
+    chat.add_argument("query")
+    add_format(chat)
+
+    ask_notes = subparsers.add_parser("ask-notes")
+    ask_notes.add_argument("question")
+    ask_notes.add_argument("--session")
+    add_format(ask_notes)
+
+    context = subparsers.add_parser("context")
+    context_subparsers = context.add_subparsers(dest="context_command", required=True)
+    context_add = context_subparsers.add_parser("add")
+    context_add.add_argument("context", nargs="?")
+    context_add.add_argument("--session")
+    context_add.add_argument("--source", default="cli")
+    context_set = context_subparsers.add_parser("set")
+    context_set.add_argument("context", nargs="?")
+    context_set.add_argument("--session")
+    context_set.add_argument("--source", default="cli")
+    context_list = context_subparsers.add_parser("list")
+    context_list.add_argument("--session")
+    add_format(context_list)
+    for name in ["accept", "ignore", "delete"]:
+        leaf = context_subparsers.add_parser(name)
+        leaf.add_argument("context_id")
+        add_format(leaf)
+
+    title = subparsers.add_parser("title")
+    title_subparsers = title.add_subparsers(dest="title_command", required=True)
+    title_set = title_subparsers.add_parser("set")
+    title_set.add_argument("title")
+    title_set.add_argument("--session")
+
+    meeting_type = subparsers.add_parser("type")
+    type_subparsers = meeting_type.add_subparsers(dest="type_command", required=True)
+    type_set = type_subparsers.add_parser("set")
+    type_set.add_argument("meeting_type")
+    type_set.add_argument("--session")
+
+    notes = subparsers.add_parser("notes")
+    notes_subparsers = notes.add_subparsers(dest="notes_command", required=True)
+    notes_update = notes_subparsers.add_parser("update")
+    notes_update.add_argument("prompt")
+    notes_update.add_argument("--session")
+
+    open_parser = subparsers.add_parser("open")
+    open_subparsers = open_parser.add_subparsers(dest="open_command", required=True)
+    open_subparsers.add_parser("current")
+    open_subparsers.add_parser("latest")
+
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    launch = "--no-launch" not in argv
+    argv = [argument for argument in argv if argument != "--no-launch"]
+    args = build_parser().parse_args(argv)
+    output_format = "json" if getattr(args, "json", False) else getattr(args, "format", "json")
+    human = args.human
+
+    if args.command == "status":
+        return print_response(get_status(args.url, launch=launch), output_format, human)
+
+    if args.command == "current":
+        payload = {"command": "get_current"}
+    elif args.command == "wait":
+        payload = {
+            "command": "wait",
+            "sessionID": args.session,
+            "latest": args.latest,
+            "until": args.until,
+            "format": output_format,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return print_response(
+            wait_for_condition(payload, args.url, timeout_seconds=args.timeout, launch=launch),
+            output_format,
+            human,
+        )
+    elif args.command == "start":
+        payload = {
+            "command": "start_recording",
+            "title": args.title,
+            "meetingType": args.meeting_type,
+            "context": args.context,
+            "source": args.source,
+        }
+    elif args.command == "stop":
+        payload = {"command": "stop_recording"}
+    elif args.command == "meetings" and args.meetings_command == "search":
+        payload = {
+            "command": "meetings_search",
+            "query": args.query,
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "meetings" and args.meetings_command == "recent":
+        payload = {
+            "command": "meetings_recent",
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "meeting":
+        command_map = {
+            "get": "meeting_get",
+            "transcript": "meeting_transcript",
+            "notes": "meeting_notes",
+            "summary": "meeting_summary",
+            "context": "meeting_context",
+            "actions": "meeting_actions",
+            "delete": "meeting_delete",
+            "purge-temp-audio": "meeting_purge_temp_audio",
+        }
+        if args.meeting_command in {"delete", "purge-temp-audio"} and not args.yes:
+            response = {
+                "ok": False,
+                "message": f"`barnowl meeting {args.meeting_command}` is destructive and requires --yes.",
+                "meetingID": args.meeting_id,
+                "errorCode": "confirmation_required",
+                "error": "Pass --yes to confirm.",
+            }
+            return print_response(response, output_format, human)
+        payload = {
+            "command": command_map[args.meeting_command],
+            "meetingID": args.meeting_id,
+            "confirmed": getattr(args, "yes", None),
+            "format": output_format,
+        }
+    elif args.command == "jobs":
+        if args.jobs_command == "list":
+            payload = {
+                "command": "jobs_list",
+                "sessionID": args.session,
+                "format": output_format,
+            }
+        elif args.jobs_command == "retry":
+            payload = {
+                "command": "jobs_retry",
+                "sessionID": args.session,
+                "jobID": args.job,
+                "format": output_format,
+            }
+        elif args.jobs_command == "dismiss":
+            payload = {
+                "command": "jobs_dismiss",
+                "jobID": args.job,
+                "format": output_format,
+            }
+        else:
+            raise AssertionError(f"unhandled jobs command: {args.jobs_command}")
+    elif args.command == "chat":
+        payload = {"command": "chat", "query": args.query, "format": output_format}
+    elif args.command == "ask-notes":
+        payload = {
+            "command": "ask_notes",
+            "sessionID": args.session,
+            "query": args.question,
+            "format": output_format,
+        }
+    elif args.command == "context" and args.context_command in {"add", "set"}:
+        context = args.context if args.context is not None else sys.stdin.read()
+        payload = {
+            "command": "append_context" if args.context_command == "add" else "set_context",
+            "sessionID": args.session,
+            "context": context,
+            "source": args.source,
+        }
+    elif args.command == "context" and args.context_command == "list":
+        payload = {
+            "command": "context_list",
+            "sessionID": args.session,
+            "format": output_format,
+        }
+    elif args.command == "context" and args.context_command in {"accept", "ignore", "delete"}:
+        payload = {
+            "command": f"context_{args.context_command}",
+            "contextItemID": args.context_id,
+            "format": output_format,
+        }
+    elif args.command == "title" and args.title_command == "set":
+        payload = {"command": "set_title", "sessionID": args.session, "title": args.title}
+    elif args.command == "type" and args.type_command == "set":
+        payload = {
+            "command": "set_meeting_type",
+            "sessionID": args.session,
+            "meetingType": args.meeting_type,
+        }
+    elif args.command == "notes" and args.notes_command == "update":
+        payload = {"command": "update_notes", "sessionID": args.session, "prompt": args.prompt}
+    elif args.command == "open" and args.open_command == "current":
+        payload = {"command": "open_current_meeting"}
+    elif args.command == "open" and args.open_command == "latest":
+        payload = {"command": "open_latest_meeting"}
+    else:
+        raise AssertionError(f"unhandled command: {args.command}")
+
+    payload = {key: value for key, value in payload.items() if value is not None}
+    return print_response(post(payload, args.url, launch=launch), output_format, human)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

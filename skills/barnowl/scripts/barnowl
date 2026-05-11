@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n "${BARNOWL_CLI:-}" && -x "$BARNOWL_CLI" ]]; then
+  exec "$BARNOWL_CLI" "$@"
+fi
+
+USER_CLI="$HOME/bin/barnowl"
+if [[ -x "$USER_CLI" ]]; then
+  exec "$USER_CLI" "$@"
+fi
+
+APP_CLI="/Applications/Barn Owl.app/Contents/MacOS/barnowl"
+if [[ -x "$APP_CLI" ]]; then
+  exec "$APP_CLI" "$@"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_CLI="$(cd "$SCRIPT_DIR/../../.." && pwd)/scripts/barnowl"
+if [[ -x "$REPO_CLI" ]]; then
+  exec "$REPO_CLI" "$@"
+fi
+
+echo '{"ok":false,"message":"Barn Owl CLI was not found.","error":"missing_cli"}'
+exit 1
