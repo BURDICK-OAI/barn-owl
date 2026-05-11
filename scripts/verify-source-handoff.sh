@@ -66,6 +66,7 @@ required_entries=(
   "BarnOwl/scripts/verify-source-handoff.sh"
   "BarnOwl/scripts/verify-dist.sh"
   "BarnOwl/scripts/verify-production-readiness.sh"
+  "BarnOwl/scripts/verify-cli-codex-qa.sh"
   "BarnOwl/scripts/reset-local-state.sh"
   "BarnOwl/scripts/install-local-app.sh"
 )

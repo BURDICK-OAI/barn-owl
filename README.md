@@ -91,6 +91,13 @@ confirmation and requires `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL` to be configured.
 Use `BARNOWL_FEEDBACK_OWNER_USERNAME` to override the default owner username and
 `BARNOWL_SLACK_FEEDBACK_CHANNEL` if the webhook supports channel overrides.
 
+After installing a release candidate, the CLI/Codex part of manual QA can be
+checked and recorded with:
+
+```sh
+scripts/verify-cli-codex-qa.sh --evidence PATH_TO_MANUAL_QA_EVIDENCE
+```
+
 ## Distribution
 
 Generate shareable artifacts from the current source with:

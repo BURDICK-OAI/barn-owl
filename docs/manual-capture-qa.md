@@ -41,6 +41,14 @@ scripts/verify-production-readiness.sh \
   --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-YYYYMMDD-HHMMSS.md
 ```
 
+The CLI/Codex feedback section can be checked automatically after installing the
+release candidate:
+
+```sh
+scripts/verify-cli-codex-qa.sh \
+  --evidence .build/manual-qa/manual-capture-qa-evidence-YYYYMMDD-HHMMSS.md
+```
+
 Use a real audio signal for both sources:
 
 - Mic: speak for at least 15 seconds during capture.
