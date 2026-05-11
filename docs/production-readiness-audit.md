@@ -34,10 +34,10 @@ Commands run successfully during this pass:
 - `scripts/verify.sh`
   - Result: `** TEST SUCCEEDED **`
   - Latest observed result bundle:
-    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-48-18--0700.xcresult`
-  - Verified the Barn Owl test suite after the draft-first Slack feedback and
-    installed-app QA evidence updates. Run again after any source change before
-    release.
+    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.11_00-15-27--0700.xcresult`
+  - Verified the Barn Owl test suite after the microphone permission request
+    path, Settings readiness action feedback, and installed-app QA evidence
+    updates. Run again after any source change before release.
 - `scripts/package-all.sh`
   - Result: created `dist/BarnOwl-source-handoff.zip` and
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
@@ -76,14 +76,16 @@ Commands run successfully during this pass:
   - Expected failure without manual QA evidence:
     `manual QA evidence is required; pass --manual-qa-evidence PATH`
 - `scripts/collect-manual-qa-evidence.sh`
-  - Result: generates `.build/manual-qa/manual-capture-qa-evidence-*.md`.
+  - Result: generates `.build/manual-qa/manual-capture-qa-evidence-*.md` for
+    the current `dist/BarnOwl.app.zip`.
   - The evidence file records the current `dist/BarnOwl.app.zip` SHA, installed
     bundle metadata, installed code-signature/hardened-runtime state, bundled
     CLI presence, bundled Codex skill presence, temp audio counts, and redacted
     diagnostics metadata. The manual flow checkboxes are intentionally unchecked
     until a real capture/TCC pass is performed.
 - `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-*.md`
-  - Current expected failure is limited to unchecked manual capture/TCC evidence:
+  - Current expected failure is limited to unchecked manual capture/TCC evidence
+    after the installed CLI/Codex checks were completed:
     first-run grant, microphone denied, system-audio denied, previously denied
     retry, permission revoked while recording, source-unavailable case, final
     notes/transcript visibility, live-preview/final-transcript separation, and
@@ -105,6 +107,12 @@ Commands run successfully during this pass:
   - Verified installed CLI status, redacted diagnostics export, draft-only Slack
     feedback behavior, missing-webhook post guard, and bundled Codex skill
     guidance against `/Applications/Barn Owl.app/Contents/MacOS/barnowl`.
+- `/Applications/Barn Owl.app/Contents/MacOS/barnowl permissions test --format json`
+  - Current machine result: `microphone_permission_blocked`
+  - Verified the installed app now proactively requests/checks microphone access
+    before the local capture test and reports the macOS-denied state with the
+    recovery path. Because this machine already has microphone access denied,
+    macOS will not show the prompt again until the user grants or resets TCC.
 
 The local package is intentionally lightweight:
 
@@ -121,7 +129,7 @@ The local package is intentionally lightweight:
 | Audit full UI surface area | UI files under `Apps/BarnOwlMac/`, especially `RecorderWindow`, `MenuBarView`, `SettingsView`, onboarding, lifecycle presentation, updater, and app model were inspected and changed during the UI pass. | Partially verified by code inspection and tests; needs manual visual QA. |
 | First launch/setup flow understandable | Readiness/onboarding state tests cover required checks, missing API key, permissions, storage warning, and completed checklist behavior. | Automated coverage present; clean-machine manual QA still required. |
 | API key setup avoids repeated prompts | `BarnOwlAPIKeyStore` now uses data-protection Keychain, migrates legacy local/keychain values, caches misses, avoids repeated denied prompts, exposes a Settings repair action for user-initiated re-save, and has focused tests in `BarnOwlAPIKeyStoreTests`. Readiness now distinguishes saved-but-untested keys from verified keys. | Covered by tests. |
-| Start recording state is obvious and safe | Recording state machine tests cover permission readiness, double-start rejection, double-stop handling, and lifecycle presentation. | Covered by tests; real TCC/manual capture still required. |
+| Start recording state is obvious and safe | Recording state machine tests cover permission readiness, double-start rejection, double-stop handling, and lifecycle presentation. Start now explicitly requests microphone access before creating the recording session; denied/restricted states fail quickly with actionable macOS recovery text. | Covered by tests and installed CLI permission smoke; real TCC/manual capture still required. |
 | Live recording UI responsive | Realtime controller tests cover buffering, tiny-buffer suppression, server-error degradation, stale transcript suppression, and UI presentation helpers. Chat auto-scroll now defers scroll work to avoid layout during layout. | Covered by tests; needs real recording observation. |
 | Expensive user-visible paths stay responsive | Performance smoke tests cover large notes rendering, deterministic overlap stitching across many chunk boundaries, and local library search across many saved meetings. These use generous budgets to catch accidental pathological work without turning unit tests into brittle microbenchmarks. Runtime metrics now include final diarization and summary model-request phase timings in addition to capture, realtime preview, final processing, temp audio, and cleanup durations. | Covered by tests and runtime instrumentation; real-device profiling still recommended before broader rollout. |
 | Stop recording and final processing states are obvious | Lifecycle presentation, durable job timeline, processing recovery, and failure/retry tests cover completed, failed, and pending job states. | Covered by tests. |

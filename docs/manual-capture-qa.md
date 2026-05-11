@@ -340,5 +340,6 @@ This pass is done only when all of the following are true:
 
 - `ScreenCaptureKitSystemAudioSource` currently checks OS availability but does not visibly request or validate a specific system-audio permission path. Manual QA should confirm what macOS actually prompts for.
 - `AVFoundationMicrophoneAudioSource.startMicrophoneCapture` touches the input node but does not by itself prove chunk writing. Treat `recording` state as insufficient evidence; verify files and metadata.
-- The app model uses a generic permission-denied message for microphone and system audio. QA should record whether that is specific enough for a user to recover.
+- The app now explicitly requests microphone access before `Start Recording`, Settings `Run Test`, and CLI `permissions test`. QA should still confirm that a clean `notDetermined` machine shows the native prompt, and that a previously denied machine fails quickly with the recovery text instead of hanging.
+- System-audio permission recovery may still depend on macOS relaunch behavior. QA should record whether the prompt, Settings row, and retry behavior match the app copy.
 - The default configuration requires both microphone and system audio. Any mic-only or system-only success must be explicitly reflected in state and persisted; otherwise it is a bug, not a feature with a nice hat.
