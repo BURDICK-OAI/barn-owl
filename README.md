@@ -75,7 +75,9 @@ The install script verifies `dist/BarnOwl.app.zip`, replaces
 `/Applications/Barn Owl.app`, and preserves existing Barn Owl recordings, notes,
 settings, and Keychain data by default. It clears Barn Owl local app data,
 Keychain state, and macOS permission decisions only when `--reset-state` is
-passed for fresh-onboarding QA.
+passed for fresh-onboarding QA. App-bundle backups are kept outside
+`/Applications` so macOS Privacy settings continue to point at the real installed
+app, not a stale backup bundle.
 
 If a user hits an error, ask them to run
 `barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md` or open Barn
@@ -135,9 +137,30 @@ Send those files only. Do not send the raw working folder. See [docs/distributio
 To refresh the shareable zips after making changes, rerun `scripts/package-all.sh`.
 It replaces the files in `dist/` with packages built from the current source.
 
+To publish the GitHub-backed update feed, run:
+
+```sh
+scripts/publish-git-update.sh
+git add Updates/BarnOwl
+git commit
+git push origin main
+gh release create v0.1.0-build.7 dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+```
+
+Barn Owl defaults to this manifest URL for installed apps:
+
+```text
+https://raw.githubusercontent.com/BURDICK-OAI/barn-owl/main/Updates/BarnOwl/BarnOwl-update-manifest.json
+```
+
+The tracked manifest points at `BarnOwl.app.zip` attached to the matching
+GitHub Release tag; binary zips are not committed to Git history.
+
 ## OpenAI API Key
 
-BarnOwl stores the OpenAI API key in macOS Keychain. Do not commit local `.env` files or plaintext secrets.
+BarnOwl stores the OpenAI API key in a restricted local user config file for the
+current macOS user. Older Keychain entries are treated as legacy migration
+sources only. Do not commit local `.env` files or plaintext secrets.
 
 For app users, open Barn Owl Settings, paste an OpenAI API key into OpenAI Connection, and choose Save & Test Key. See [docs/openai-api-key-setup.md](docs/openai-api-key-setup.md) for the short setup guide.
 
@@ -165,3 +188,9 @@ scripts/barnowl feedback slack --yes
 ## Privacy Notes
 
 BarnOwl is designed around local-first meeting artifacts. Raw audio chunks are treated as temporary processing inputs and should be cleaned up after successful transcription and artifact persistence.
+
+Recording is local-first even when the network is unavailable: BarnOwl keeps
+capturing microphone/system audio locally, saves final-processing jobs in its
+local queue, and retries connectivity failures automatically. The CLI can still
+inspect the queued work with `barnowl status` and retry failed non-connectivity
+jobs with `barnowl jobs retry`.

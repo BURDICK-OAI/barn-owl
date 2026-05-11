@@ -27,6 +27,7 @@ public struct OpenAIRealtimeTranscriptionClient: Sendable {
     private let configuration: OpenAIConfiguration
     private let endpointURL: URL
     private let model: String
+    private let prompt: String?
     private let sampleRate: Int
     private let transport: any RealtimeWebSocketTransport
 
@@ -34,12 +35,15 @@ public struct OpenAIRealtimeTranscriptionClient: Sendable {
         configuration: OpenAIConfiguration,
         endpointURL: URL? = nil,
         model: String = OpenAIModelCatalog.liveTranscription,
+        prompt: String? = nil,
         sampleRate: Int = Self.defaultSampleRate,
         transport: any RealtimeWebSocketTransport = URLSessionRealtimeWebSocketTransport()
     ) {
         self.configuration = configuration
         self.model = model
-        self.endpointURL = endpointURL ?? URL(string: "wss://api.openai.com/v1/realtime/transcription_sessions?model=\(model)")!
+        let trimmedPrompt = prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.prompt = trimmedPrompt?.isEmpty == false ? trimmedPrompt : nil
+        self.endpointURL = endpointURL ?? URL(string: "wss://api.openai.com/v1/realtime?intent=transcription")!
         self.sampleRate = sampleRate
         self.transport = transport
     }
@@ -81,8 +85,9 @@ public struct OpenAIRealtimeTranscriptionClient: Sendable {
 
     public func makeSessionUpdateMessage() throws -> String {
         try Self.encodeJSON(
-            RealtimeClientMessage.sessionUpdate(
+            RealtimeClientMessage.transcriptionSessionUpdate(
                 model: model,
+                prompt: prompt,
                 sampleRate: sampleRate
             )
         )
@@ -183,7 +188,7 @@ public actor URLSessionRealtimeWebSocketTransport: RealtimeWebSocketTransport {
 }
 
 private enum RealtimeClientMessage: Encodable {
-    case sessionUpdate(model: String, sampleRate: Int)
+    case transcriptionSessionUpdate(model: String, prompt: String?, sampleRate: Int)
     case inputAudioBufferAppend(audio: String)
     case inputAudioBufferCommit
 
@@ -197,10 +202,10 @@ private enum RealtimeClientMessage: Encodable {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
         switch self {
-        case let .sessionUpdate(model, sampleRate):
+        case let .transcriptionSessionUpdate(model, prompt, sampleRate):
             try container.encode("session.update", forKey: .type)
             try container.encode(
-                RealtimeTranscriptionSession(model: model, sampleRate: sampleRate),
+                RealtimeTranscriptionSession(model: model, prompt: prompt, sampleRate: sampleRate),
                 forKey: .session
             )
 
@@ -217,36 +222,33 @@ private enum RealtimeClientMessage: Encodable {
 private struct RealtimeTranscriptionSession: Encodable {
     var type = "transcription"
     var audio: RealtimeTranscriptionAudio
-    var include: [String] = ["item.input_audio_transcription.logprobs"]
 
     private enum CodingKeys: String, CodingKey {
         case type
         case audio
-        case include
     }
 
-    init(model: String, sampleRate: Int) {
-        audio = RealtimeTranscriptionAudio(model: model, sampleRate: sampleRate)
+    init(model: String, prompt: String?, sampleRate: Int) {
+        audio = RealtimeTranscriptionAudio(model: model, prompt: prompt, sampleRate: sampleRate)
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
         try container.encode(audio, forKey: .audio)
-        try container.encode(include, forKey: .include)
     }
 }
 
 private struct RealtimeTranscriptionAudio: Encodable {
     var input: RealtimeTranscriptionAudioInput
 
-    init(model: String, sampleRate: Int) {
-        input = RealtimeTranscriptionAudioInput(model: model, sampleRate: sampleRate)
+    init(model: String, prompt: String?, sampleRate: Int) {
+        input = RealtimeTranscriptionAudioInput(model: model, prompt: prompt, sampleRate: sampleRate)
     }
 }
 
 private struct RealtimeTranscriptionAudioInput: Encodable {
-    var format: RealtimeTranscriptionAudioFormat
+    var format: RealtimeAudioFormat
     var transcription: RealtimeInputAudioTranscription
 
     private enum CodingKeys: String, CodingKey {
@@ -255,9 +257,9 @@ private struct RealtimeTranscriptionAudioInput: Encodable {
         case turnDetection = "turn_detection"
     }
 
-    init(model: String, sampleRate: Int) {
-        format = RealtimeTranscriptionAudioFormat(rate: sampleRate)
-        transcription = RealtimeInputAudioTranscription(model: model)
+    init(model: String, prompt: String?, sampleRate: Int) {
+        format = RealtimeAudioFormat(rate: sampleRate)
+        transcription = RealtimeInputAudioTranscription(model: model, prompt: prompt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -268,7 +270,7 @@ private struct RealtimeTranscriptionAudioInput: Encodable {
     }
 }
 
-private struct RealtimeTranscriptionAudioFormat: Encodable {
+private struct RealtimeAudioFormat: Encodable {
     var type = "audio/pcm"
     var rate: Int
 }
@@ -276,6 +278,7 @@ private struct RealtimeTranscriptionAudioFormat: Encodable {
 private struct RealtimeInputAudioTranscription: Encodable {
     var model: String
     var language = "en"
+    var prompt: String?
 }
 
 private struct RealtimeServerEvent: Decodable {

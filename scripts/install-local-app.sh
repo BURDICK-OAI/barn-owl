@@ -113,13 +113,33 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST" 2>/dev/null || true)"
 DEST_PARENT="$(/usr/bin/dirname "$DESTINATION")"
 DEST_NAME="$(/usr/bin/basename "$DESTINATION")"
-BACKUP_PATH="$DEST_PARENT/$DEST_NAME.backup.$(/bin/date -u '+%Y%m%d%H%M%S')"
+BACKUP_ROOT="${BARNOWL_INSTALL_BACKUP_DIR:-"${HOME:?HOME is required}/Library/Application Support/Barn Owl/App Backups"}"
+BACKUP_PATH="$BACKUP_ROOT/$DEST_NAME.backup.$(/bin/date -u '+%Y%m%d%H%M%S')"
+
+move_legacy_application_backups() {
+  [[ "$DEST_PARENT" == "/Applications" ]] || return 0
+
+  while IFS= read -r -d '' legacy_backup; do
+    local_name="$(/usr/bin/basename "$legacy_backup")"
+    target="$BACKUP_ROOT/$local_name"
+    suffix=1
+    while [[ -e "$target" ]]; do
+      target="$BACKUP_ROOT/$local_name.$suffix"
+      suffix=$((suffix + 1))
+    done
+    echo "Moving legacy /Applications backup out of permission scope: $legacy_backup -> $target"
+    /bin/mv "$legacy_backup" "$target" || true
+  done < <(/usr/bin/find "$DEST_PARENT" -maxdepth 1 -type d -name "$DEST_NAME.backup.*" -print0 2>/dev/null)
+}
 
 echo "Stopping running Barn Owl processes..."
 /usr/bin/pkill -x "BarnOwlApp" 2>/dev/null || true
 /usr/bin/pkill -x "Barn Owl" 2>/dev/null || true
 
 /bin/mkdir -p "$DEST_PARENT"
+/bin/mkdir -p "$BACKUP_ROOT"
+/bin/chmod 700 "$BACKUP_ROOT" 2>/dev/null || true
+move_legacy_application_backups
 
 if [[ -e "$DESTINATION" ]]; then
   echo "Backing up existing app to: $BACKUP_PATH"

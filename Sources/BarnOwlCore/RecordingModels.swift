@@ -365,6 +365,12 @@ public struct RecordingStateMachine: Codable, Equatable, Sendable {
     }
 
     @discardableResult
+    public mutating func resetToIdle() -> RecordingTransitionResult {
+        state = .idle
+        return .accepted(state)
+    }
+
+    @discardableResult
     public mutating func fail(_ failure: RecordingFailure) -> RecordingTransitionResult {
         state = .failed(failure)
         return .accepted(state)

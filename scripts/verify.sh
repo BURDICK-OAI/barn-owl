@@ -16,4 +16,16 @@ else
   exit 1
 fi
 xcodebuild clean -scheme BarnOwl -derivedDataPath DerivedData CODE_SIGN_IDENTITY=-
-xcodebuild test -scheme BarnOwl -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGN_IDENTITY=-
+xcodebuild build-for-testing -scheme BarnOwl -destination 'platform=macOS' -derivedDataPath DerivedData CODE_SIGN_IDENTITY=-
+
+for bundle in \
+  DerivedData/Build/Products/Debug/BarnOwlCoreTests.xctest \
+  DerivedData/Build/Products/Debug/BarnOwlAudioTests.xctest \
+  DerivedData/Build/Products/Debug/BarnOwlOpenAITests.xctest \
+  DerivedData/Build/Products/Debug/BarnOwlTranscriptionTests.xctest \
+  DerivedData/Build/Products/Debug/BarnOwlContextTests.xctest \
+  DerivedData/Build/Products/Debug/BarnOwlNotesTests.xctest \
+  DerivedData/Build/Products/Debug/BarnOwlPersistenceTests.xctest
+do
+  xcrun xctest "$bundle"
+done

@@ -554,6 +554,7 @@ final class BarnOwlAppModel: ObservableObject {
     private var rollingFinalTranscriptionQueuedChunkCount = 0
     private var jobRunnerTask: Task<Void, Never>?
     private var jobRunnerWakeTask: Task<Void, Never>?
+    private var completionReadyResetTask: Task<Void, Never>?
     private var updateAvailabilityTimer: AnyCancellable?
     private var lastAudibleAudioAt: Date?
     private var didAutoStopForSilence = false
@@ -562,6 +563,7 @@ final class BarnOwlAppModel: ObservableObject {
     private static let realtimePersistenceInterval: TimeInterval = 5
     private static let realtimePreviewCharacterLimit = 1_200
     static let finalTranscriptionIdleStatus = "Idle."
+    private static let completionReadyResetDelayNanoseconds: UInt64 = 2_000_000_000
     private static let autoStopSilenceInterval: TimeInterval = 15 * 60
     private static let autoStopSilenceRMSThreshold: Double = 0.01
     private static let periodicUpdateCheckInterval: TimeInterval = 6 * 60 * 60
@@ -778,6 +780,23 @@ final class BarnOwlAppModel: ObservableObject {
                 preview: "Recording could not start."
             )
             return
+        }
+
+        let hasSystemAudioEvidence = BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence()
+        captureStatus = hasSystemAudioEvidence
+            ? "Checking system audio readiness."
+            : "Requesting system audio permission."
+        let systemAudioDecision = BarnOwlFirstRunReadiness.requestSystemAudioDecisionIfNeeded()
+        if systemAudioDecision != .granted {
+            recordActivity(
+                level: .warning,
+                category: "capture",
+                message: "System audio permission is not confirmed yet.",
+                details: hasSystemAudioEvidence
+                    ? "Barn Owl has prior system-audio capture evidence and will verify capture during recording."
+                    : "Barn Owl will attempt capture so macOS can show the required permission prompt if needed.",
+                updatePreview: false
+            )
         }
 
         let matchedCalendarContext = await resolveCalendarContext(around: startedAt)
@@ -2377,7 +2396,13 @@ final class BarnOwlAppModel: ObservableObject {
         let resolvedActiveMeetingID = activeMeetingID ?? activeSession?.id ?? displayedNote?.id
         let apiKeyConfigured = BarnOwlAPIKeyStore.hasConfiguredAPIKey()
         let apiKeyVerified = BarnOwlAPIKeyStore.hasVerifiedAPIKey()
-        let readinessState = String(describing: recordingReadinessSummary.state)
+        let firstRunReadiness = BarnOwlFirstRunReadiness.currentSnapshot(
+            hasConfiguredAPIKey: apiKeyConfigured,
+            hasVerifiedAPIKey: apiKeyVerified
+        )
+        let readinessState = status == .idle
+            ? firstRunReadiness.overallState.rawValue
+            : String(describing: recordingReadinessSummary.state)
         let sanitizedLastError = Self.sanitizedControlString(lastError)
         let sanitizedError = Self.sanitizedControlString(error)
         let resolvedErrorCode = errorCode ?? sanitizedError
@@ -2420,7 +2445,7 @@ final class BarnOwlAppModel: ObservableObject {
             citations: citations,
             jobState: jobState,
             readinessState: readinessState,
-            setupReady: apiKeyVerified && recordingReadinessSummary.state != .blocked,
+            setupReady: !firstRunReadiness.menuBarSetupNeeded,
             apiKeyConfigured: apiKeyConfigured,
             apiKeyVerified: apiKeyVerified,
             notesReady: notesReady ?? notes.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
@@ -3205,9 +3230,9 @@ final class BarnOwlAppModel: ObservableObject {
         publishRecordingReadinessSummary()
         let snapshot = BarnOwlFirstRunReadiness.currentSnapshot()
         let lines = BarnOwlSettingsReadinessChecks.lines()
-        let nextCommand = snapshot.criticalReady
-            ? "barnowl start"
-            : "barnowl permissions test"
+        let nextCommand = snapshot.menuBarSetupNeeded
+            ? "barnowl permissions test"
+            : "barnowl start"
         return controlStatusResponse(
             message: snapshot.summary,
             summary: lines.joined(separator: "\n"),
@@ -3242,16 +3267,33 @@ final class BarnOwlAppModel: ObservableObject {
             )
         }
 
+        let hasSystemAudioEvidence = BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence()
+        captureStatus = hasSystemAudioEvidence
+            ? "Checking system audio readiness."
+            : "Requesting system audio permission."
+        let systemAudioDecision = BarnOwlFirstRunReadiness.requestSystemAudioDecisionIfNeeded()
+        if systemAudioDecision != .granted {
+            recordActivity(
+                level: .warning,
+                category: "capture",
+                message: "System audio permission is not confirmed yet.",
+                details: hasSystemAudioEvidence
+                    ? "Barn Owl has prior system-audio capture evidence and will verify capture during the local test."
+                    : "Barn Owl will run the local capture test so macOS can show the required permission prompt if needed.",
+                updatePreview: false
+            )
+        }
+
         captureStatus = "Running local mic/system-audio capture test."
         do {
-            let summary = try await BarnOwlLocalCaptureReadinessTest.run()
-            BarnOwlFirstRunReadiness.markLocalCaptureTestSucceeded()
+            let result = try await BarnOwlLocalCaptureReadinessTest.run()
+            result.applyReadinessMarkers()
             publishRecordingReadinessSummary()
-            captureStatus = summary
+            captureStatus = result.summary
             return controlStatusResponse(
-                message: summary,
+                message: result.summary,
                 summary: BarnOwlSettingsReadinessChecks.lines().joined(separator: "\n"),
-                nextCommand: "barnowl start"
+                nextCommand: result.capturedAllRequiredTracks ? "barnowl start" : "Play audio from another app, then rerun `barnowl permissions test`."
             )
         } catch {
             BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
@@ -3865,6 +3907,7 @@ final class BarnOwlAppModel: ObservableObject {
         await refreshRecoveryAttentionItems()
         await refreshProcessingTimeline(meetingID: session.id)
         resetMenuCaptureStatusAfterCompletion()
+        scheduleReadyResetAfterCompletion()
     }
 
     private func handleFinalProcessingFailed(session: RecordingSession?, error: Error, willRetry: Bool) async {
@@ -3872,7 +3915,11 @@ final class BarnOwlAppModel: ObservableObject {
             BarnOwlAPIKeyStore.invalidateCachedAPIKeyAfterAuthenticationFailure()
         }
         let sessionID = session?.id
-        let message = willRetry ? "Final transcript job will retry." : "Final transcript job failed."
+        let message = if willRetry && BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error) {
+            "Saved locally. Final processing will retry when network is available."
+        } else {
+            willRetry ? "Final transcript job will retry." : "Final transcript job failed."
+        }
         recordActivity(
             level: .warning,
             category: "jobs",
@@ -4132,6 +4179,8 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     private func resetSessionSurface() {
+        completionReadyResetTask?.cancel()
+        completionReadyResetTask = nil
         cancelLiveTranscriptionTasks()
         rollingFinalTranscriptionCoordinator = nil
         rollingFinalTranscriptionEnqueueTasks.removeAll()
@@ -4195,6 +4244,30 @@ final class BarnOwlAppModel: ObservableObject {
         recordingHealth = .idle
         recordingHealthStartedAt = nil
         publishRecordingReadinessSummary()
+    }
+
+    private func scheduleReadyResetAfterCompletion() {
+        completionReadyResetTask?.cancel()
+        guard case .completed = stateMachine.state else { return }
+
+        completionReadyResetTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.completionReadyResetDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self,
+                      case .completed = self.stateMachine.state,
+                      self.progressFraction == nil,
+                      !Self.hasActiveProcessing(self.processingTimelineItems),
+                      !Self.hasFailedProcessing(self.processingTimelineItems)
+                else {
+                    return
+                }
+
+                self.apply(self.stateMachine.resetToIdle())
+                self.resetMenuCaptureStatusAfterCompletion()
+                self.completionReadyResetTask = nil
+            }
+        }
     }
 
     private func handleRealtimeTranscriptionUpdate(
@@ -4412,9 +4485,12 @@ final class BarnOwlAppModel: ObservableObject {
 
     private func publishRecordingReadinessSummary() {
         let now = recordingHealthStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let permissions: RecordingPermissionSet = status == .recording
+            ? .grantedForDefaultMeetingCapture
+            : BarnOwlFirstRunReadiness.currentRecordingPermissionSet()
         let summary = recordingHealth.readinessSummary(
             configuration: .defaultMeetingCapture,
-            permissions: BarnOwlFirstRunReadiness.currentRecordingPermissionSet(),
+            permissions: permissions,
             now: now
         )
         if summary != recordingReadinessSummary {

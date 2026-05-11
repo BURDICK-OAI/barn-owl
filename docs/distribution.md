@@ -134,10 +134,10 @@ scripts/install-local-app.sh --yes --reset-state
 
 The install script verifies the app archive with `scripts/verify-release.sh`,
 extracts `BarnOwl.app`, confirms the bundle id is `com.barnowl.mac`, backs up an
-existing destination app, installs to `/Applications/Barn Owl.app`, verifies the
-installed signature, and clears Barn Owl local data/keychain/TCC decisions when
-`--reset-state` is passed. Use `--launch` if you want it to open the app after
-installation.
+existing destination app outside `/Applications`, installs to
+`/Applications/Barn Owl.app`, verifies the installed signature, and clears Barn
+Owl local data/keychain/TCC decisions when `--reset-state` is passed. Use
+`--launch` if you want it to open the app after installation.
 
 `BarnOwl-release-manifest.json` records the app version, build number, packaging
 time, source commit when available, signing mode, and the SHA-256 values for the
@@ -217,6 +217,25 @@ beside `BarnOwl.app.zip` in a Git-hosted raw/static location, or send both files
 ad hoc. In Settings, point Barn Owl at the manifest URL or local manifest path.
 The app checks on launch, periodically while idle, and when the user clicks
 Update.
+
+For the default GitHub-backed feed, run:
+
+```sh
+scripts/publish-git-update.sh
+git add Updates/BarnOwl
+git commit
+git push origin main
+gh release create v0.1.0-build.7 dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+```
+
+Installed apps default to:
+
+```text
+https://raw.githubusercontent.com/BURDICK-OAI/barn-owl/main/Updates/BarnOwl/BarnOwl-update-manifest.json
+```
+
+The tracked manifest points at `BarnOwl.app.zip` attached to the matching
+GitHub Release tag; binary zips are not committed to Git history.
 
 ### Developer ID Package
 

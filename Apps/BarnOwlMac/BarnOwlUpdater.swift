@@ -129,6 +129,8 @@ enum BarnOwlUpdateError: LocalizedError, Equatable {
 @MainActor
 enum BarnOwlUpdaterSettings {
     static let manifestURLDefaultsKey = "BarnOwlUpdateManifestURL"
+    static let defaultGitManifestURLString =
+        "https://raw.githubusercontent.com/BURDICK-OAI/barn-owl/main/Updates/BarnOwl/BarnOwl-update-manifest.json"
 
     static var manifestURLString: String {
         get {
@@ -167,19 +169,33 @@ enum BarnOwlUpdaterSettings {
         if FileManager.default.fileExists(atPath: localManifest.path(percentEncoded: false)) {
             return localManifest
         }
-        throw BarnOwlUpdateError.noManifestConfigured
+
+        guard let defaultURL = BarnOwlUpdater.url(from: defaultGitManifestURLString) else {
+            throw BarnOwlUpdateError.invalidManifestURL(defaultGitManifestURLString)
+        }
+        return defaultURL
     }
 
     static func resolvedManifestDisplayPath() -> String {
         if !manifestURLString.isEmpty {
             return manifestURLString
         }
-        return (try? defaultManifestURL().path(percentEncoded: false))
-            ?? "~/Library/Application Support/Barn Owl/update-manifest.json"
+        if let localManifest = try? defaultManifestURL(),
+           FileManager.default.fileExists(atPath: localManifest.path(percentEncoded: false)) {
+            return localManifest.path(percentEncoded: false)
+        }
+        return defaultGitManifestURLString
     }
 
     static var updateChannelLabel: String {
-        manifestURLString.isEmpty ? "Local development manifest" : "Custom update feed"
+        if !manifestURLString.isEmpty {
+            return "Custom update feed"
+        }
+        if let localManifest = try? defaultManifestURL(),
+           FileManager.default.fileExists(atPath: localManifest.path(percentEncoded: false)) {
+            return "Local development manifest"
+        }
+        return "GitHub update feed"
     }
 }
 

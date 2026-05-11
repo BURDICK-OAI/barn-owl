@@ -225,6 +225,7 @@ Fill these in during the pass:
 - [ ] Previously denied retry path passed
 - [ ] Permission revoked while recording path passed
 - [ ] Source unavailable case passed or documented as not applicable
+- [ ] Realtime preview produced visible text while recording
 - [ ] Final notes and transcript are visible
 - [ ] Live preview stayed visually separate from final transcript
 - [ ] No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors
@@ -266,6 +267,7 @@ EOF
   cat <<'EOF'
 - Permission prompts or System Settings permission panes
 - Preparing, recording, processing, completed, and failure/retry states
+- Realtime preview showing live text during recording
 - Temp audio directory while recording
 - Temp audio directory after finalization
 - Completed meeting notes/transcript/history view

@@ -21,7 +21,7 @@ func missingAPIKeyThrows() {
 func modelCatalogKeepsPipelinesSeparate() {
     #expect(OpenAIModelCatalog.liveTranscription != OpenAIModelCatalog.finalDiarization)
     #expect(OpenAIModelCatalog.liveTranscription != OpenAIModelCatalog.realtimeVoice)
-    #expect(OpenAIModelCatalog.liveTranscription == "gpt-4o-transcribe-latest")
+    #expect(OpenAIModelCatalog.liveTranscription == "gpt-4o-transcribe")
     #expect(OpenAIModelCatalog.realtimeVoice == "gpt-realtime-2")
     #expect(OpenAIModelCatalog.realtimeReasoning == "gpt-realtime-2")
     #expect(OpenAIModelCatalog.finalDiarization == "gpt-4o-transcribe-diarize")

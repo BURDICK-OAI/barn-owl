@@ -76,6 +76,12 @@ struct MenuBarView: View {
             refreshReadinessSnapshot()
             Task { await model.refreshUpdateAvailability() }
         }
+        .onChange(of: model.status) { _, _ in
+            refreshReadinessSnapshot()
+        }
+        .onChange(of: model.captureStatus) { _, _ in
+            refreshReadinessSnapshot()
+        }
     }
 
     private var menuHeader: some View {
@@ -173,6 +179,7 @@ struct MenuBarView: View {
             .tint(BarnOwlDesign.amber)
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(BarnOwlDesign.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)

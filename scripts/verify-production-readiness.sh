@@ -86,6 +86,7 @@ required_checked_labels=(
   "Previously denied retry path passed"
   "Permission revoked while recording path passed"
   "Source unavailable case passed or documented as not applicable"
+  "Realtime preview produced visible text while recording"
   "Final notes and transcript are visible"
   "Live preview stayed visually separate from final transcript"
   "No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors"

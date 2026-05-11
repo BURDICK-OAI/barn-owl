@@ -120,15 +120,14 @@ targets:
     platform: macOS
     settings:
       base:
-        BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
-      - Tests/BarnOwlCoreTests
+      - Tests/BarnOwlCoreTests/RecordingHealthTests.swift
+      - Tests/BarnOwlCoreTests/PerformanceMetricsTests.swift
+      - Tests/BarnOwlCoreTests/BarnOwlControlCommandTests.swift
     dependencies:
-      - target: BarnOwl
       - target: BarnOwlCore
-  BarnOwlAudioTests:
+  BarnOwlAppTests:
     type: bundle.unit-test
     platform: macOS
     settings:
@@ -137,9 +136,25 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
-      - Tests/BarnOwlAudioTests
+      - Tests/BarnOwlCoreTests/BarnOwlAPIKeyStoreTests.swift
+      - Tests/BarnOwlCoreTests/BarnOwlRealtimeTranscriptionControllerTests.swift
+      - Tests/BarnOwlCoreTests/RecordingSessionTests.swift
     dependencies:
       - target: BarnOwl
+      - target: BarnOwlCore
+      - target: BarnOwlAudio
+      - target: BarnOwlOpenAI
+      - target: BarnOwlPersistence
+      - target: BarnOwlTranscription
+  BarnOwlAudioTests:
+    type: bundle.unit-test
+    platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    sources:
+      - Tests/BarnOwlAudioTests
+    dependencies:
       - target: BarnOwlAudio
       - target: BarnOwlCore
   BarnOwlOpenAITests:
@@ -147,66 +162,57 @@ targets:
     platform: macOS
     settings:
       base:
-        BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
       - Tests/BarnOwlOpenAITests
     dependencies:
-      - target: BarnOwl
+      - target: BarnOwlCore
       - target: BarnOwlOpenAI
   BarnOwlTranscriptionTests:
     type: bundle.unit-test
     platform: macOS
     settings:
       base:
-        BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
       - Tests/BarnOwlTranscriptionTests
     dependencies:
-      - target: BarnOwl
       - target: BarnOwlCore
+      - target: BarnOwlOpenAI
       - target: BarnOwlTranscription
   BarnOwlContextTests:
     type: bundle.unit-test
     platform: macOS
     settings:
       base:
-        BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
       - Tests/BarnOwlContextTests
     dependencies:
-      - target: BarnOwl
+      - target: BarnOwlCore
       - target: BarnOwlContext
   BarnOwlNotesTests:
     type: bundle.unit-test
     platform: macOS
     settings:
       base:
-        BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
       - Tests/BarnOwlNotesTests
     dependencies:
-      - target: BarnOwl
+      - target: BarnOwlCore
       - target: BarnOwlNotes
   BarnOwlPersistenceTests:
     type: bundle.unit-test
     platform: macOS
     settings:
       base:
-        BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BarnOwl.app/Contents/MacOS/BarnOwlApp"
     sources:
       - Tests/BarnOwlPersistenceTests
     dependencies:
-      - target: BarnOwl
+      - target: BarnOwlCore
+      - target: BarnOwlOpenAI
       - target: BarnOwlPersistence
       - target: BarnOwlTranscription
 schemes:
@@ -223,3 +229,11 @@ schemes:
         - BarnOwlContextTests
         - BarnOwlNotesTests
         - BarnOwlPersistenceTests
+  BarnOwlAppHostedTests:
+    build:
+      targets:
+        BarnOwl: all
+        BarnOwlAppTests: all
+    test:
+      targets:
+        - BarnOwlAppTests

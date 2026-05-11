@@ -38,12 +38,12 @@ struct BarnOwlReadinessOnboardingView: View {
             HStack(alignment: .center, spacing: 10) {
                 readinessTitle
                 Spacer(minLength: 8)
-                BarnOwlReadinessPill(state: snapshot.criticalReady ? .ready : .missing)
+                BarnOwlReadinessPill(state: snapshot.overallState)
             }
 
             VStack(alignment: .leading, spacing: 8) {
                 readinessTitle
-                BarnOwlReadinessPill(state: snapshot.criticalReady ? .ready : .missing)
+                BarnOwlReadinessPill(state: snapshot.overallState)
             }
         }
     }
@@ -212,21 +212,45 @@ struct BarnOwlReadinessSnapshot: Equatable {
     }
 
     var menuBarSetupNeeded: Bool {
-        menuBarBlockingChecks.contains { $0.state != .ready }
+        menuBarBlockingChecks.contains { $0.state == .missing }
     }
 
     var allReady: Bool {
         checks.allSatisfy { $0.state == .ready }
     }
 
+    var overallState: BarnOwlReadinessState {
+        if menuBarSetupNeeded {
+            return .missing
+        }
+        if allReady {
+            return .ready
+        }
+        return .warning
+    }
+
+    var statusTitle: String {
+        switch overallState {
+        case .ready:
+            return "Ready"
+        case .warning:
+            return "Review needed"
+        case .missing:
+            return "Setup needed"
+        }
+    }
+
     var summary: String {
         if criticalReady && allReady {
             return "Barn Owl is ready to record, transcribe, save notes, and check for updates."
         }
+        if menuBarSetupNeeded {
+            return "Finish the missing setup items before the first real meeting."
+        }
         if criticalReady {
             return "Recording is ready. A couple of optional setup checks can still be finished."
         }
-        return "Finish the missing setup items before the first real meeting."
+        return "Recording can start, but review the warnings before an important meeting."
     }
 
     private var requiredChecks: [BarnOwlReadinessCheck] {
@@ -337,7 +361,6 @@ enum BarnOwlFirstRunReadiness {
         systemAudioDecision: CapturePermissionDecision? = nil
     ) -> BarnOwlReadinessSnapshot {
         let storageCheck = currentStorageCheck()
-        let microphonePreviouslySucceeded = testRecordingSucceeded || microphoneCaptureSucceeded
         let systemAudioPreviouslySucceeded = testRecordingSucceeded || systemAudioCaptureSucceeded
         let resolvedMicrophoneDecision = microphoneDecision ?? currentMicrophoneDecision()
         let resolvedSystemAudioDecision = systemAudioDecision ?? currentSystemAudioDecision()
@@ -345,10 +368,7 @@ enum BarnOwlFirstRunReadiness {
         return snapshot(
             apiKeyConfigured: hasConfiguredAPIKey,
             apiKeyVerified: hasVerifiedAPIKey,
-            microphoneDecision: effectivePermissionDecision(
-                resolvedMicrophoneDecision,
-                captureSucceeded: microphonePreviouslySucceeded
-            ),
+            microphoneDecision: resolvedMicrophoneDecision,
             systemAudioDecision: effectiveSystemAudioPermissionDecision(
                 resolvedSystemAudioDecision,
                 captureSucceeded: systemAudioPreviouslySucceeded
@@ -520,6 +540,56 @@ enum BarnOwlFirstRunReadiness {
         }
     }
 
+    static func requestSystemAudioDecision() -> CapturePermissionDecision {
+        guard #available(macOS 14.2, *) else {
+            return .unavailable
+        }
+        if CGPreflightScreenCaptureAccess() {
+            return .granted
+        }
+        return CGRequestScreenCaptureAccess() ? .granted : currentSystemAudioDecision()
+    }
+
+    static func hasSystemAudioCaptureEvidence(userDefaults: UserDefaults = .standard) -> Bool {
+        userDefaults.bool(forKey: testRecordingSucceededDefaultsKey)
+            || userDefaults.bool(forKey: systemAudioCaptureSucceededDefaultsKey)
+    }
+
+    static func requestSystemAudioDecisionIfNeeded(userDefaults: UserDefaults = .standard) -> CapturePermissionDecision {
+        let currentDecision = currentSystemAudioDecision()
+        guard !hasSystemAudioCaptureEvidence(userDefaults: userDefaults) else {
+            return effectiveSystemAudioPermissionDecision(currentDecision, captureSucceeded: true)
+        }
+        guard currentDecision != .granted else {
+            return .granted
+        }
+        return requestSystemAudioDecision()
+    }
+
+    nonisolated static func systemAudioPermissionBlockedMessage(
+        for decision: CapturePermissionDecision
+    ) -> String {
+        switch decision {
+        case .denied, .restricted, .notDetermined:
+            return "System audio capture is not allowed in macOS. Open System Settings > Privacy & Security > Screen & System Audio Recording, allow Barn Owl, quit and relaunch Barn Owl if macOS asks, then retry."
+        case .unavailable:
+            return "This macOS version does not expose the system-audio capture path Barn Owl uses."
+        default:
+            return "Barn Owl needs Screen/System Audio Recording permission before recording system audio."
+        }
+    }
+
+    nonisolated static func systemAudioPermissionRecoveryCommand(
+        for decision: CapturePermissionDecision
+    ) -> String {
+        switch decision {
+        case .unavailable:
+            return "Use a supported macOS version for system-audio capture."
+        default:
+            return "Open System Settings > Privacy & Security > Screen & System Audio Recording, allow Barn Owl, then rerun `barnowl permissions test`."
+        }
+    }
+
     nonisolated static func diagnosticLines(
         userDefaults: UserDefaults = .standard
     ) -> [String] {
@@ -556,10 +626,7 @@ enum BarnOwlFirstRunReadiness {
     static func currentRecordingPermissionSet(
         userDefaults: UserDefaults = .standard
     ) -> RecordingPermissionSet {
-        let microphoneDecision = effectivePermissionDecision(
-            currentMicrophoneDecision(),
-            captureSucceeded: userDefaults.bool(forKey: microphoneCaptureSucceededDefaultsKey)
-        )
+        let microphoneDecision = currentMicrophoneDecision()
         let systemAudioDecision = effectiveSystemAudioPermissionDecision(
             currentSystemAudioDecision(),
             captureSucceeded: userDefaults.bool(forKey: systemAudioCaptureSucceededDefaultsKey)
@@ -595,20 +662,6 @@ enum BarnOwlFirstRunReadiness {
         UserDefaults.standard.set(false, forKey: systemAudioCaptureSucceededDefaultsKey)
     }
 
-    private static func effectivePermissionDecision(
-        _ decision: CapturePermissionDecision,
-        captureSucceeded: Bool
-    ) -> CapturePermissionDecision {
-        guard captureSucceeded else { return decision }
-
-        switch decision {
-        case .granted, .unknown, .checking, .requesting:
-            return .granted
-        case .notDetermined, .denied, .restricted, .unavailable:
-            return decision
-        }
-    }
-
     private static func effectiveSystemAudioPermissionDecision(
         _ decision: CapturePermissionDecision,
         captureSucceeded: Bool
@@ -616,10 +669,10 @@ enum BarnOwlFirstRunReadiness {
         guard captureSucceeded else { return decision }
 
         switch decision {
-        case .unavailable:
-            return .unavailable
-        case .granted, .unknown, .checking, .requesting, .notDetermined, .denied, .restricted:
+        case .granted, .unknown, .checking, .requesting, .notDetermined:
             return .granted
+        case .denied, .restricted, .unavailable:
+            return decision
         }
     }
 

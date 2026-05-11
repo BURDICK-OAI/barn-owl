@@ -58,6 +58,51 @@ enum BarnOwlMeetingProcessingError: Error, Equatable {
     case noRecordedAudioFiles(UUID)
 }
 
+enum BarnOwlProcessingRetryPolicy {
+    static let offlineQueuedMessage = "Network unavailable. Recording is saved locally; Barn Owl will retry final processing automatically."
+
+    static func shouldKeepQueuedForConnectivity(_ error: Error) -> Bool {
+        guard let urlError = urlError(in: error) else {
+            return false
+        }
+
+        switch urlError.code {
+        case .notConnectedToInternet,
+             .networkConnectionLost,
+             .cannotConnectToHost,
+             .cannotFindHost,
+             .dnsLookupFailed,
+             .timedOut,
+             .dataNotAllowed,
+             .internationalRoamingOff:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func urlError(in error: Error) -> URLError? {
+        if let urlError = error as? URLError {
+            return urlError
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            return URLError(URLError.Code(rawValue: nsError.code))
+        }
+
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return urlError(in: underlying)
+        }
+
+        if let underlyingErrors = nsError.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] {
+            return underlyingErrors.compactMap(urlError(in:)).first
+        }
+
+        return nil
+    }
+}
+
 enum BarnOwlJobType {
     static let finalProcessing = "final_processing"
     static let noteUpdate = "note_update"
@@ -202,12 +247,21 @@ actor BarnOwlJobRunner {
             let decodedSession = job.payloadJSON
                 .flatMap { $0.data(using: .utf8) }
                 .flatMap { try? JSONDecoder().decode(FinalProcessingJobPayload.self, from: $0).session }
-            let willRetry = job.attemptCount < maxAttempts
+            let keepQueuedForConnectivity = BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error)
+            let willRetry = keepQueuedForConnectivity || job.attemptCount < maxAttempts
             var next = job
             next.status = willRetry ? .pending : .failed
-            next.errorMessage = BarnOwlErrorFormatter.message(for: error)
+            next.errorMessage = keepQueuedForConnectivity
+                ? BarnOwlProcessingRetryPolicy.offlineQueuedMessage
+                : BarnOwlErrorFormatter.message(for: error)
             next.updatedAt = Date()
-            next.scheduledAt = willRetry ? Date().addingTimeInterval(Self.backoffDelay(afterAttempt: job.attemptCount)) : nil
+            next.scheduledAt = willRetry
+                ? Date().addingTimeInterval(
+                    keepQueuedForConnectivity
+                        ? Self.connectivityRetryDelay(afterAttempt: job.attemptCount)
+                        : Self.backoffDelay(afterAttempt: job.attemptCount)
+                )
+                : nil
             next.completedAt = willRetry ? nil : Date()
             try? await database.upsertJob(next)
             await onFinalProcessingFailed?(decodedSession, error, willRetry)
@@ -223,6 +277,17 @@ actor BarnOwlJobRunner {
             30
         default:
             90
+        }
+    }
+
+    private static func connectivityRetryDelay(afterAttempt attempt: Int) -> TimeInterval {
+        switch attempt {
+        case 0, 1:
+            60
+        case 2:
+            120
+        default:
+            300
         }
     }
 }
@@ -317,6 +382,7 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         )
         let context = await MeetingContextBuilder.context(for: session, contextRoot: try? Self.defaultContextRoot())
         let result = try await pipeline.run(session: session, audioFiles: audioFiles, context: context)
+        BarnOwlAPIKeyStore.markAPIKeyVerified(configuration.apiKey)
         var finalSession = session
         finalSession.title = MeetingTitleSuggester.title(
             currentTitle: session.title,
@@ -342,6 +408,10 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         } else {
             meetingFacts.title = finalSession.title
         }
+        BarnOwlRealtimeTranscriptionHintsStore.learn(
+            meetingFacts: meetingFacts,
+            segments: result.segments
+        )
         await scopedProgress?(MeetingProcessingProgress(
             message: "Running final cleanup pass...",
             details: "\(result.segments.count) final speaker turn(s)",

@@ -54,6 +54,9 @@ Use a real audio signal for both sources:
 
 - Mic: speak for at least 15 seconds during capture.
 - System audio: play non-sensitive audio for at least 15 seconds. Use throwaway test audio, not a real meeting. QA is not the place to accidentally archive the CFO.
+- Realtime preview: confirm visible preview text appears during the recording,
+  before stopping and before final notes are generated. This verifies the live
+  path, not just the final high-quality fallback.
 
 Run manual QA against the exact `dist/BarnOwl.app.zip` release candidate you
 intend to share. `scripts/verify-production-readiness.sh` rejects evidence whose
@@ -87,6 +90,8 @@ Verify or change decisions in System Settings:
 
 - Microphone: System Settings -> Privacy & Security -> Microphone -> Barn Owl
 - Screen & System Audio Recording, or equivalent wording for the OS version: System Settings -> Privacy & Security -> Screen & System Audio Recording -> Barn Owl
+- Verify System Settings shows the current `/Applications/Barn Owl.app` entry,
+  not an old path or `Barn Owl.app.backup.*` bundle.
 
 After toggling system-audio or screen-capture permissions, fully quit and relaunch Barn Owl. macOS often requires relaunch for those changes to apply.
 
@@ -118,16 +123,21 @@ expected to persist across versions.
 10. Generate mic and system audio for at least 15 seconds.
 11. Confirm the app transitions to `recording`.
 12. Confirm the primary action is `Stop Recording`.
-13. Click `Stop Recording`.
-14. Confirm the app transitions through `processing`.
-15. Confirm the app returns to `idle`.
-16. Confirm the primary action is again `Start Recording`.
+13. Confirm realtime preview text appears while recording, before clicking
+    `Stop Recording`.
+14. Click `Stop Recording`.
+15. Confirm the app transitions through `processing`.
+16. Confirm the app returns to `idle`.
+17. Confirm the primary action is again `Start Recording`.
 
 Expected result:
 
 - The app does not show `recording` until capture has actually started.
 - A single `RecordingSession` is created for the attempt.
 - Both microphone and system-audio sources are represented as active capture sources.
+- Realtime preview produces visible text during capture; it is allowed to lag by
+  multiple seconds, but it must not stay stuck at only “Recording started” or
+  “Waiting for audio” while clear speech is present.
 - Temporary audio chunk metadata exists for microphone and system audio with monotonic sequence numbers.
 - Temporary audio chunk files exist while capture is active or before finalization.
 - After finalization, chunk metadata is `finalized`, `deletedAudioAt` is set, `temporaryAudioPath` is `null`, and raw audio chunk files are gone.
@@ -140,6 +150,7 @@ Evidence to capture:
 - A redacted Settings -> Export Developer Diagnostics file after at least one
   failure/retry run.
 - Screenshot of `preparing`, `recording`, `processing`, and returned `idle` states.
+- Screenshot or screen recording of live realtime preview text while recording.
 - Console or Xcode logs for the run.
 - The temp chunk root path used by the build.
 - Directory listing while recording showing mic and system-audio chunk files.
@@ -147,6 +158,9 @@ Evidence to capture:
 - Metadata JSON for representative mic and system-audio chunks after finalize.
 - Installed CLI smoke:
   - `barnowl status --format json`
+  - During a live recording, confirm `realtimeStatus` advances past waiting for
+    audio, such as `Realtime transcription updated.` or
+    `Realtime transcribing live.`
   - `barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md --format json`
   - `barnowl feedback slack --force --format json`
   - `barnowl feedback slack --yes --force --format json` with no webhook set, confirming it refuses to post.
@@ -328,6 +342,8 @@ This pass is done only when all of the following are true:
 
 - Mic capture writes chunks.
 - System audio capture writes chunks.
+- Realtime preview produces visible text while recording, before the final
+  diarized transcript runs.
 - Chunks are deleted on finalize.
 - No raw audio is retained after finalize, failed start cleanup, denied-permission cleanup, or revoked-permission cleanup.
 - Denied mic permission is visible, retryable, and does not retain raw audio.

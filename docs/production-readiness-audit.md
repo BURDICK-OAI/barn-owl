@@ -15,7 +15,7 @@ the same thing as production readiness.
 ## Current Verdict
 
 Barn Owl is in good local developer-build shape. It builds, tests, packages, and
-has stronger privacy, Keychain, local bridge, release-verification, and storage
+has stronger privacy, local API-key storage, local bridge, release-verification, and storage
 guards than before this pass.
 
 Barn Owl is not targeting the Mac App Store or a Developer ID notarized release.
@@ -32,12 +32,10 @@ artifacts, or ad-hoc zip transfer. These are the remaining hard blockers:
 Commands run successfully during this pass:
 
 - `scripts/verify.sh`
-  - Result: `** TEST SUCCEEDED **`
-  - Latest observed result bundle:
-    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.11_00-15-27--0700.xcresult`
-  - Verified the Barn Owl test suite after the microphone permission request
-    path, Settings readiness action feedback, and installed-app QA evidence
-    updates. Run again after any source change before release.
+  - Result: passed.
+  - Verified the Barn Owl test suite after the local API-key storage,
+    permission-readiness, realtime, installed-app smoke, and offline queued
+    final-processing changes. Run again after any source change before release.
 - `scripts/package-all.sh`
   - Result: created `dist/BarnOwl-source-handoff.zip` and
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
@@ -88,8 +86,9 @@ Commands run successfully during this pass:
     after the installed CLI/Codex checks were completed:
     first-run grant, microphone denied, system-audio denied, previously denied
     retry, permission revoked while recording, source-unavailable case, final
-    notes/transcript visibility, live-preview/final-transcript separation, and
-    privacy review of user-facing errors.
+    notes/transcript visibility, realtime preview producing text during
+    recording, live-preview/final-transcript separation, and privacy review of
+    user-facing errors.
 - `scripts/install-local-app.sh --yes`
   - Result: installed verified package to `/Applications/Barn Owl.app`
   - Installed version/build: `0.1.0 (7)`
@@ -108,11 +107,22 @@ Commands run successfully during this pass:
     feedback behavior, missing-webhook post guard, and bundled Codex skill
     guidance against `/Applications/Barn Owl.app/Contents/MacOS/barnowl`.
 - `/Applications/Barn Owl.app/Contents/MacOS/barnowl permissions test --format json`
-  - Current machine result: `microphone_permission_blocked`
-  - Verified the installed app now proactively requests/checks microphone access
-    before the local capture test and reports the macOS-denied state with the
-    recovery path. Because this machine already has microphone access denied,
-    macOS will not show the prompt again until the user grants or resets TCC.
+  - Current machine result: microphone and system-audio capture succeeded in
+    the installed app after local API-key setup.
+  - Verified the installed app proactively requests/checks microphone and
+    system-audio access, reports setup as ready when prior capture evidence
+    proves the path works, and no longer blocks recording on stale macOS
+    preflight values.
+- Installed runtime smoke through `/Applications/Barn Owl.app/Contents/MacOS/barnowl`
+  - Created a disposable OpenAI API key named `Barn Owl Codex` through the
+    secure connector and saved it to Barn Owl's restricted local user config.
+  - Started a recording from the installed CLI, played disposable macOS system
+    audio, observed `Realtime transcription streaming` and `Realtime
+    transcription updated`, stopped the recording, waited for final processing,
+    and retrieved final notes/transcript.
+  - Final notes/transcript captured the system-audio smoke phrases as call
+    speaker content, proving the real system-audio path works even though
+    macOS screen-capture preflight can remain false on this local machine.
 
 The local package is intentionally lightweight:
 
@@ -128,24 +138,25 @@ The local package is intentionally lightweight:
 | --- | --- | --- |
 | Audit full UI surface area | UI files under `Apps/BarnOwlMac/`, especially `RecorderWindow`, `MenuBarView`, `SettingsView`, onboarding, lifecycle presentation, updater, and app model were inspected and changed during the UI pass. | Partially verified by code inspection and tests; needs manual visual QA. |
 | First launch/setup flow understandable | Readiness/onboarding state tests cover required checks, missing API key, permissions, storage warning, and completed checklist behavior. | Automated coverage present; clean-machine manual QA still required. |
-| API key setup avoids repeated prompts | `BarnOwlAPIKeyStore` now uses data-protection Keychain, migrates legacy local/keychain values, caches misses, avoids repeated denied prompts, exposes a Settings repair action for user-initiated re-save, and has focused tests in `BarnOwlAPIKeyStoreTests`. Readiness now distinguishes saved-but-untested keys from verified keys. | Covered by tests. |
+| API key setup avoids repeated prompts | `BarnOwlAPIKeyStore` now stores saved keys in a restricted local user config file for lightweight ad-hoc builds, treats Keychain as legacy read-only migration, avoids passive Keychain decrypts, exposes a Settings migration action for older Keychain-saved keys, and has focused tests in `BarnOwlAPIKeyStoreTests`. Readiness now distinguishes saved-but-untested keys from verified keys. | Covered by tests. |
 | Start recording state is obvious and safe | Recording state machine tests cover permission readiness, double-start rejection, double-stop handling, and lifecycle presentation. Start now explicitly requests microphone access before creating the recording session; denied/restricted states fail quickly with actionable macOS recovery text. | Covered by tests and installed CLI permission smoke; real TCC/manual capture still required. |
-| Live recording UI responsive | Realtime controller tests cover buffering, tiny-buffer suppression, server-error degradation, stale transcript suppression, and UI presentation helpers. Chat auto-scroll now defers scroll work to avoid layout during layout. | Covered by tests; needs real recording observation. |
+| Live recording UI responsive | Realtime controller tests cover buffering, tiny-buffer suppression, soft speech append, server-error degradation, stale transcript suppression, routine server-event suppression, and UI presentation helpers. Chat auto-scroll now defers scroll work to avoid layout during layout. | Covered by tests; needs real recording observation. |
 | Expensive user-visible paths stay responsive | Performance smoke tests cover large notes rendering, deterministic overlap stitching across many chunk boundaries, and local library search across many saved meetings. These use generous budgets to catch accidental pathological work without turning unit tests into brittle microbenchmarks. Runtime metrics now include final diarization and summary model-request phase timings in addition to capture, realtime preview, final processing, temp audio, and cleanup durations. | Covered by tests and runtime instrumentation; real-device profiling still recommended before broader rollout. |
 | Stop recording and final processing states are obvious | Lifecycle presentation, durable job timeline, processing recovery, and failure/retry tests cover completed, failed, and pending job states. | Covered by tests. |
+| Offline recording/final processing is safe | Recording captures local chunks first. Durable jobs queue final processing in SQLite, launch recovery requeues interrupted work, raw audio is preserved until successful processing, and connectivity failures now remain pending with automatic retry instead of becoming terminal after the normal retry cap. | Covered by tests; full airplane-mode/manual network-loss QA still recommended. |
 | Completed meeting view separates notes/transcript/history | Recorder workspace tests cover live preview versus final transcript separation; persistence tests cover history/search/state. | Covered by tests; manual UI review still useful. |
 | Diagnostics/errors actionable and private | Error formatter and diagnostics log tests cover redaction of API keys, paths, and response bodies; diagnostics log files use restricted permissions; localized setup/capture errors are shown as friendly descriptions instead of internal enum text. Settings now includes **Export Developer Diagnostics**, which writes a redacted Markdown report with app/setup/update/recent error metadata while omitting API keys, private paths, raw audio, transcripts, and diagnostic details that may contain meeting content. | Covered by tests. |
 | CLI/Codex bridge visible state is safe | Control bridge POST commands require bearer-token auth; token file has private permissions; CLI reads token; HTTP auth tests cover unauthorized and authorized POST behavior. The bridge now creates the token before listening so the first authorized POST after first launch does not fail due to lazy token creation. Control responses and the bundled CLI redact user-visible error fields so persisted job/status errors do not expose API keys or private local paths. | Covered by tests and installed CLI smoke. |
 | CLI/Codex users can report failures safely | Control responses suggest `barnowl feedback slack` for reportable non-owner errors and expose `barnowl feedback slack --yes` only as the confirmed post command. The CLI defaults to a local redacted draft, requires explicit `--yes` before Slack posting, requires `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL`, suppresses owner-user nudges by default, and filters validation errors such as missing IDs or missing `--yes`. | Covered by tests, CLI compile, secret scan, and installed CLI smoke. |
 | Privacy-forward local storage | SQLite DB, local library files, temp audio metadata/files, diagnostics logs, and local context files restrict permissions. Temp raw audio is finalized/deleted and metadata clears raw paths. | Covered by persistence tests. |
-| Realtime preview separate from final transcript | UI/state tests assert live preview and final transcript separation. Rolling transcription cache is deleted after completed final processing. | Covered by tests. |
+| Realtime preview works and stays separate from final transcript | UI/state tests assert live preview and final transcript separation. Realtime client tests cover the current Realtime transcription session payload; installed-app smoke confirmed realtime audio append/commit plus transcript delta/completed events after clear speech. Rolling transcription cache is deleted after completed final processing. Production readiness evidence now requires visible realtime preview text during recording, before final processing. | Covered by tests and installed smoke; clean-machine manual QA still required. |
 | No secrets in source/packages | `scripts/scan-secrets.sh` is run by `scripts/verify.sh` and source handoff packaging. | Covered by scripts; scanner remains pattern-based. |
 | App builds | `scripts/verify.sh` regenerates project when XcodeGen is available, cleans, and runs the Barn Owl test suite. It resolves XcodeGen from the bundled local copy or `PATH`; sanitized source handoffs can also fall back to the included generated `BarnOwl.xcodeproj` with a warning. | Passing. |
 | Relevant tests pass | Latest verifier passed across core, audio, OpenAI, transcription, context, notes, and persistence tests. | Passing. |
 | App packages correctly | `scripts/package-all.sh` builds source and app zips, writes `dist/BarnOwl-release-manifest.json`, `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`, then runs `scripts/verify-dist.sh` to validate the expected dist file set, source handoff archive, checksums, release/update manifest SHA-256 values, and app release gate. `scripts/package-app.sh` uses `ditto -c -k --keepParent` to preserve signing metadata for bundled executables and signs lightweight internal packages ad hoc with hardened runtime. | Passing for lightweight internal artifacts. |
 | Clean local install path exists | `scripts/install-local-app.sh --yes` verifies `dist/BarnOwl.app.zip`, extracts and validates the Barn Owl bundle id, backs up an existing destination app, installs to `/Applications/Barn Owl.app` by default, and verifies the installed signature. It preserves local user data by default. `--reset-state` is explicitly destructive and test-only for fresh onboarding QA. | Executed against `/Applications/Barn Owl.app`; installed app launches and bridge status responds. |
 | Release gate exists | `scripts/verify-release.sh` validates local/internal artifacts, exact app archive shape, absence of bundled local/private state, required macOS privacy usage descriptions, required code-signing entitlements, bundled CLI, bundled Codex skill resources, valid code signature, and hardened runtime. | Present and exercised. |
-| Local and Git-style update artifacts are verified | `scripts/update-local.sh` and `scripts/publish-local-update.sh` sign local update apps with hardened runtime; `publish-local-update.sh` runs `scripts/verify-release.sh` on the generated update archive before writing the manifest. `scripts/package-all.sh` now writes `BarnOwl-update-manifest.json` for Git-hosted or ad-hoc update feeds. Remote update installs require HTTPS, checksum, valid Barn Owl bundle identity, and a valid app signature; ad-hoc signatures are allowed for the lightweight internal path. The app checks on launch, periodically while idle, and when the user asks. | Verified by packaging gates; updater policy covered by focused tests and needs full app smoke after install. |
+| Local and Git-style update artifacts are verified | `scripts/update-local.sh` and `scripts/publish-local-update.sh` sign local update apps with hardened runtime; `publish-local-update.sh` runs `scripts/verify-release.sh` on the generated update archive before writing the manifest. `scripts/package-all.sh` writes `BarnOwl-update-manifest.json`; `scripts/publish-git-update.sh` writes the tracked GitHub raw manifest in `Updates/BarnOwl/` and points it at the matching GitHub Release asset URL. Remote update installs require HTTPS, checksum, valid Barn Owl bundle identity, and a valid app signature; ad-hoc signatures are allowed for the lightweight internal path. The app defaults to the GitHub raw update manifest, checks on launch, periodically while idle, and when the user asks. | Verified by packaging gates; updater policy covered by focused tests and needs full app smoke after install. |
 | Lightweight internal distribution ready | The app package is ad-hoc signed with hardened runtime, checksummed, and paired with an update manifest. Gatekeeper friction is expected on first launch because the app is intentionally not Developer ID notarized. A release candidate must pass `scripts/verify-dist.sh dist`, then clean-machine capture QA. | Packaging ready; clean-machine manual QA still required. |
 | Manual QA documented | `docs/manual-capture-qa.md` documents permission, capture, denial, revocation, source-unavailable, chunk cleanup, and privacy evidence steps. `scripts/collect-manual-qa-evidence.sh` creates a repeatable redacted evidence file for clean-machine QA passes under `.build/manual-qa/` and records the tested app artifact SHA-256. `scripts/verify-production-readiness.sh` requires completed manual QA evidence matching the current `dist/BarnOwl.app.zip`, zero raw audio files, and a verified internal package before reporting `production_ready=true`. | Documented and tooled, not executed in this pass. |
 | Clean onboarding reset is available | `scripts/reset-local-state.sh --yes` removes Barn Owl local app data, caches, preferences, saved state, HTTP storage, CrashReporter plists, temp Barn Owl test/capture artifacts, saved OpenAI Keychain entries, and Barn Owl TCC permission decisions. | Executed locally to prepare a fresh onboarding pass. |
@@ -174,6 +185,7 @@ Minimum manual evidence still needed:
 - Microphone denied and retry evidence.
 - System-audio denied and retry evidence.
 - Permission revoked while recording evidence.
+- Realtime preview text appearing during recording before stop/final processing.
 - Active recording chunk files plus post-finalization proof that raw audio files
   are removed.
 - Logs showing actionable errors without API keys, private paths, transcript

@@ -7,26 +7,21 @@ import Testing
 @Suite(.serialized)
 struct BarnOwlAPIKeyStoreTests {
     @Test
-    func saveAPIKeyWritesKeychainAndDeletesLegacyLocalFallback() throws {
+    func saveAPIKeyWritesPrivateLocalSecret() throws {
         try withTemporaryAPIKeyFile { fileURL in
-            let writer = KeychainWriterSpy()
             try writeAPIKey("sk-old-local\n", to: fileURL)
 
             try BarnOwlAPIKeyStore.withTestingOverrides(
                 environment: [:],
                 localAPIKeyFileURL: fileURL,
                 keychainReader: { _ in nil },
-                keychainWriter: { apiKey, allowsUserInteraction in
-                    writer.write(apiKey, allowsUserInteraction: allowsUserInteraction)
-                }
+                keychainWriter: { _, _ in }
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
                 try BarnOwlAPIKeyStore.saveAPIKey("  sk-local  \n")
 
-                #expect(writer.values == ["sk-local"])
-                #expect(writer.interactionFlags == [true])
-                #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+                #expect(try String(contentsOf: fileURL, encoding: .utf8) == "sk-local\n")
             }
         }
     }
@@ -56,7 +51,7 @@ struct BarnOwlAPIKeyStoreTests {
     }
 
     @Test
-    func keychainIsPreferredOverEnvironmentAndLocalFile() throws {
+    func environmentIsPreferredOverLocalFileAndKeychain() throws {
         try withTemporaryAPIKeyFile { fileURL in
             let spy = KeychainReaderSpy(result: "sk-keychain")
             try writeAPIKey("sk-local\n", to: fileURL)
@@ -71,39 +66,16 @@ struct BarnOwlAPIKeyStoreTests {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
                 let loadedKey = try BarnOwlAPIKeyStore.loadAPIKey()
-                #expect(loadedKey == "sk-keychain")
-                #expect(spy.calls == [false])
-            }
-        }
-    }
-
-    @Test
-    func environmentIsFallbackAfterKeychainMiss() throws {
-        try withTemporaryAPIKeyFile { fileURL in
-            let spy = KeychainReaderSpy(result: nil)
-
-            try BarnOwlAPIKeyStore.withTestingOverrides(
-                environment: ["OPENAI_API_KEY": "sk-environment"],
-                localAPIKeyFileURL: fileURL,
-                keychainReader: { allowsUserInteraction in
-                    try spy.read(allowsUserInteraction: allowsUserInteraction)
-                }
-            ) {
-                BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
-
-                let loadedKey = try BarnOwlAPIKeyStore.loadAPIKey()
-
                 #expect(loadedKey == "sk-environment")
-                #expect(spy.calls == [false])
+                #expect(spy.calls == [])
             }
         }
     }
 
     @Test
-    func localSecretFileIsMigratedToKeychainAndDeletedAfterSuccessfulMigration() throws {
+    func localSecretFileIsPreferredOverKeychain() throws {
         try withTemporaryAPIKeyFile { fileURL in
-            let spy = KeychainReaderSpy(result: nil)
-            let writer = KeychainWriterSpy()
+            let spy = KeychainReaderSpy(result: "sk-keychain")
             try writeAPIKey("sk-local\n", to: fileURL)
 
             try BarnOwlAPIKeyStore.withTestingOverrides(
@@ -111,21 +83,39 @@ struct BarnOwlAPIKeyStoreTests {
                 localAPIKeyFileURL: fileURL,
                 keychainReader: { allowsUserInteraction in
                     try spy.read(allowsUserInteraction: allowsUserInteraction)
-                },
-                keychainWriter: { apiKey, allowsUserInteraction in
-                    writer.write(apiKey, allowsUserInteraction: allowsUserInteraction)
                 }
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
                 let loadedKey = try BarnOwlAPIKeyStore.loadAPIKey()
+
                 #expect(loadedKey == "sk-local")
-                #expect(writer.values == ["sk-local"])
-                #expect(writer.interactionFlags == [false])
-                #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+                #expect(spy.calls == [])
+            }
+        }
+    }
+
+    @Test
+    func keychainFallbackIsMigratedToPrivateLocalSecretWhenReadable() throws {
+        try withTemporaryAPIKeyFile { fileURL in
+            let spy = KeychainReaderSpy(result: "sk-keychain")
+
+            try BarnOwlAPIKeyStore.withTestingOverrides(
+                environment: [:],
+                localAPIKeyFileURL: fileURL,
+                keychainReader: { allowsUserInteraction in
+                    try spy.read(allowsUserInteraction: allowsUserInteraction)
+                },
+                keychainWriter: { _, _ in }
+            ) {
+                BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
+
+                let loadedKey = try BarnOwlAPIKeyStore.loadAPIKey()
+                #expect(loadedKey == "sk-keychain")
+                #expect(try String(contentsOf: fileURL, encoding: .utf8) == "sk-keychain\n")
 
                 let cachedKey = try BarnOwlAPIKeyStore.loadAPIKey()
-                #expect(cachedKey == "sk-local")
+                #expect(cachedKey == "sk-keychain")
                 #expect(BarnOwlAPIKeyStore.hasConfiguredAPIKey())
                 #expect(spy.calls == [false])
             }
@@ -158,7 +148,7 @@ struct BarnOwlAPIKeyStoreTests {
     }
 
     @Test
-    func statusChecksUseNonInteractiveKeychainFallbackOnce() throws {
+    func statusChecksTreatKeychainOnlySecretsAsMigrationNeeded() throws {
         try withTemporaryAPIKeyFile { fileURL in
             let spy = KeychainReaderSpy(result: "sk-keychain")
 
@@ -171,14 +161,16 @@ struct BarnOwlAPIKeyStoreTests {
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
-                #expect(BarnOwlAPIKeyStore.hasConfiguredAPIKey())
+                #expect(!BarnOwlAPIKeyStore.hasConfiguredAPIKey())
                 let diagnostics = BarnOwlAPIKeyStore.diagnosticLines()
 
                 #expect(spy.calls == [false])
-                #expect(diagnostics.contains("keychain_default=true"))
-                #expect(diagnostics.contains("keychain_storage=data_protection"))
-                #expect(diagnostics.contains("keychain_fallback=legacy_login_keychain_migration"))
-                #expect(diagnostics.contains("load_api_key_success=true"))
+                #expect(diagnostics.contains("secret_storage=local_user_config"))
+                #expect(diagnostics.contains("keychain_default=false"))
+                #expect(diagnostics.contains("keychain_storage=legacy_read_only_migration"))
+                #expect(diagnostics.contains("keychain_fallback=user_initiated_migration"))
+                #expect(diagnostics.contains("keychain_reference_exists=true"))
+                #expect(diagnostics.contains("load_api_key_success=false"))
             }
         }
     }
@@ -199,7 +191,7 @@ struct BarnOwlAPIKeyStoreTests {
 
                 #expect(!BarnOwlAPIKeyStore.hasConfiguredAPIKey())
 
-                #expect(spy.calls == [false])
+                #expect(spy.calls == [])
             }
         }
     }
@@ -221,7 +213,7 @@ struct BarnOwlAPIKeyStoreTests {
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
-                let configuration = try BarnOwlAPIKeyStore.makeConfiguration()
+                let configuration = try BarnOwlAPIKeyStore.makeConfiguration(allowKeychainPrompt: true)
                 let cachedConfiguration = try BarnOwlAPIKeyStore.makeConfiguration()
 
                 #expect(configuration.apiKey == "sk-keychain")
@@ -261,13 +253,12 @@ struct BarnOwlAPIKeyStoreTests {
     }
 
     @Test
-    func repairingKeychainAccessUsesUserInitiatedReadAndReSavesCurrentKey() throws {
+    func repairingKeychainAccessUsesUserInitiatedReadAndSavesLocalSecret() throws {
         try withTemporaryAPIKeyFile { fileURL in
             let reader = KeychainReaderSpy(
                 result: "sk-keychain",
                 noninteractiveError: BarnOwlAPIKeyStoreTestError.needsInteraction
             )
-            let writer = KeychainWriterSpy()
 
             try BarnOwlAPIKeyStore.withTestingOverrides(
                 environment: [:],
@@ -275,17 +266,14 @@ struct BarnOwlAPIKeyStoreTests {
                 keychainReader: { allowsUserInteraction in
                     try reader.read(allowsUserInteraction: allowsUserInteraction)
                 },
-                keychainWriter: { apiKey, allowsUserInteraction in
-                    writer.write(apiKey, allowsUserInteraction: allowsUserInteraction)
-                }
+                keychainWriter: { _, _ in }
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
                 try BarnOwlAPIKeyStore.repairSavedAPIKeyAccess()
 
                 #expect(reader.calls == [false, true])
-                #expect(writer.values == ["sk-keychain"])
-                #expect(writer.interactionFlags == [true])
+                #expect(try String(contentsOf: fileURL, encoding: .utf8) == "sk-keychain\n")
             }
         }
     }
@@ -294,7 +282,6 @@ struct BarnOwlAPIKeyStoreTests {
     func repairingKeychainAccessDoesNotPromptAgainWhenKeyIsCached() throws {
         try withTemporaryAPIKeyFile { fileURL in
             let reader = KeychainReaderSpy(result: "sk-keychain")
-            let writer = KeychainWriterSpy()
 
             try BarnOwlAPIKeyStore.withTestingOverrides(
                 environment: [:],
@@ -302,9 +289,7 @@ struct BarnOwlAPIKeyStoreTests {
                 keychainReader: { allowsUserInteraction in
                     try reader.read(allowsUserInteraction: allowsUserInteraction)
                 },
-                keychainWriter: { apiKey, allowsUserInteraction in
-                    writer.write(apiKey, allowsUserInteraction: allowsUserInteraction)
-                }
+                keychainWriter: { _, _ in }
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
@@ -313,14 +298,13 @@ struct BarnOwlAPIKeyStoreTests {
 
                 #expect(loadedKey == "sk-keychain")
                 #expect(reader.calls == [false])
-                #expect(writer.values == ["sk-keychain"])
-                #expect(writer.interactionFlags == [true])
+                #expect(try String(contentsOf: fileURL, encoding: .utf8) == "sk-keychain\n")
             }
         }
     }
 
     @Test
-    func keychainLoadUsesNonInteractiveReadWithoutBackfillingLocalSecret() throws {
+    func keychainLoadUsesNonInteractiveReadAndBackfillsLocalSecret() throws {
         try withTemporaryAPIKeyFile { fileURL in
             let spy = KeychainReaderSpy(result: "sk-keychain")
 
@@ -337,7 +321,7 @@ struct BarnOwlAPIKeyStoreTests {
 
                 #expect(loadedKey == "sk-keychain")
                 #expect(spy.calls == [false])
-                #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+                #expect(try String(contentsOf: fileURL, encoding: .utf8) == "sk-keychain\n")
             }
         }
     }
@@ -403,10 +387,9 @@ struct BarnOwlAPIKeyStoreTests {
     }
 
     @Test
-    func authenticationFailureSkipsStaleKeychainAndReloadsLocalSecret() throws {
+    func authenticationFailureKeepsLocalSecretPreferredOverStaleKeychain() throws {
         try withTemporaryAPIKeyFile { fileURL in
             let reader = KeychainReaderSpy(result: "sk-stale-keychain")
-            let writer = KeychainWriterSpy()
             try writeAPIKey("sk-valid-local\n", to: fileURL)
 
             try BarnOwlAPIKeyStore.withTestingOverrides(
@@ -415,23 +398,19 @@ struct BarnOwlAPIKeyStoreTests {
                 keychainReader: { allowsUserInteraction in
                     try reader.read(allowsUserInteraction: allowsUserInteraction)
                 },
-                keychainWriter: { apiKey, allowsUserInteraction in
-                    writer.write(apiKey, allowsUserInteraction: allowsUserInteraction)
-                }
+                keychainWriter: { _, _ in }
             ) {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
                 let staleKey = try BarnOwlAPIKeyStore.loadAPIKey()
-                #expect(staleKey == "sk-stale-keychain")
+                #expect(staleKey == "sk-valid-local")
 
                 BarnOwlAPIKeyStore.invalidateCachedAPIKeyAfterAuthenticationFailure()
 
                 let reloadedKey = try BarnOwlAPIKeyStore.loadAPIKey()
                 #expect(reloadedKey == "sk-valid-local")
-                #expect(reader.calls == [false])
-                #expect(writer.values == ["sk-valid-local"])
-                #expect(writer.interactionFlags == [false])
-                #expect(!FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)))
+                #expect(reader.calls == [])
+                #expect(try String(contentsOf: fileURL, encoding: .utf8) == "sk-valid-local\n")
             }
         }
     }
@@ -511,7 +490,7 @@ struct BarnOwlSettingsReadinessChecksTests {
 
     @MainActor
     @Test
-    func savedButUntestedAPIKeyRequiresValidationBeforeSetupIsReady() throws {
+    func savedButUntestedAPIKeyShowsReviewNeededWithoutBlockingSetup() throws {
         let snapshot = BarnOwlFirstRunReadiness.snapshot(
             apiKeyConfigured: true,
             apiKeyVerified: false,
@@ -528,6 +507,34 @@ struct BarnOwlSettingsReadinessChecksTests {
         #expect(apiKeyCheck.actionTitle == "Test Key")
         #expect(apiKeyCheck.action == .testAPIKey)
         #expect(!snapshot.criticalReady)
+        #expect(!snapshot.menuBarSetupNeeded)
+        #expect(snapshot.overallState == .warning)
+        #expect(snapshot.statusTitle == "Review needed")
+        #expect(snapshot.summary == "Recording can start, but review the warnings before an important meeting.")
+    }
+
+    @MainActor
+    @Test
+    func priorSuccessfulCaptureTrustsOnlySystemAudioWhenMacOSStatusIsStale() throws {
+        let snapshot = BarnOwlFirstRunReadiness.currentSnapshot(
+            hasConfiguredAPIKey: true,
+            hasVerifiedAPIKey: true,
+            testRecordingSucceeded: false,
+            microphoneCaptureSucceeded: true,
+            systemAudioCaptureSucceeded: true,
+            microphoneDecision: .notDetermined,
+            systemAudioDecision: .notDetermined
+        )
+
+        let microphone = try #require(snapshot.checks.first { $0.id == .microphone })
+        let systemAudio = try #require(snapshot.checks.first { $0.id == .systemAudio })
+
+        #expect(microphone.state == .missing)
+        #expect(microphone.action == .runCaptureTest)
+        #expect(systemAudio.state == .ready)
+        #expect(systemAudio.action == nil)
+        #expect(snapshot.menuBarSetupNeeded)
+        #expect(snapshot.overallState == .missing)
     }
 
     @MainActor
@@ -619,7 +626,7 @@ struct BarnOwlSettingsReadinessChecksTests {
 
     @MainActor
     @Test
-    func successfulCaptureKeepsMicrophoneDenialButTrustsVerifiedSystemAudio() {
+    func priorSuccessfulCaptureDoesNotOverrideCurrentDeniedPermissions() {
         let snapshot = BarnOwlFirstRunReadiness.currentSnapshot(
             hasConfiguredAPIKey: true,
             hasVerifiedAPIKey: true,
@@ -635,8 +642,8 @@ struct BarnOwlSettingsReadinessChecksTests {
 
         #expect(microphone?.state == .missing)
         #expect(microphone?.action == .openMicrophoneSettings)
-        #expect(systemAudio?.state == .ready)
-        #expect(systemAudio?.action == nil)
+        #expect(systemAudio?.state == .missing)
+        #expect(systemAudio?.action == .openSystemAudioSettings)
     }
 
     @MainActor
@@ -656,6 +663,64 @@ struct BarnOwlSettingsReadinessChecksTests {
 
         #expect(systemAudio?.state == .missing)
         #expect(systemAudio?.action == .openSystemAudioSettings)
+    }
+
+    @Test
+    func realtimeHintsLearnVocabularyWithoutTranscriptExcerpts() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appending(path: "BarnOwlRealtimeHints-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appending(path: "hints.json", directoryHint: .notDirectory)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        BarnOwlRealtimeTranscriptionHintsStore.learn(
+            meetingFacts: MeetingFacts(
+                title: "Barn Owl Sync",
+                participants: ["Alice Example", "Bob Example"],
+                projects: ["Codex Bridge"],
+                meetingType: "Planning / Review"
+            ),
+            segments: [
+                TranscriptSegment(
+                    speakerLabel: "Alice Example",
+                    text: "This sentence should not be stored as a realtime hint.",
+                    startTime: 0,
+                    endTime: 1
+                )
+            ],
+            fileURL: fileURL
+        )
+
+        let prompt = try #require(BarnOwlRealtimeTranscriptionHintsStore.currentPrompt(fileURL: fileURL))
+        #expect(!prompt.contains("Barn Owl Sync"))
+        #expect(prompt.contains("Codex Bridge"))
+        #expect(prompt.contains("Alice Example"))
+        #expect(!prompt.contains("Planning / Review"))
+        #expect(!prompt.contains("Realtime Smoke"))
+        #expect(!prompt.contains("This sentence should not be stored"))
+    }
+
+    @Test
+    func realtimeHintsIgnorePersistedSmokeTestTerms() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appending(path: "BarnOwlRealtimeHints-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appending(path: "hints.json", directoryHint: .notDirectory)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let data = try JSONEncoder().encode(RealtimeTranscriptionHints(terms: [
+            "Installed App Realtime Smoke",
+            "Barn Owl Smoke Test",
+            "Room Speaker A",
+            "Codex Bridge"
+        ]))
+        try data.write(to: fileURL)
+
+        let prompt = try #require(BarnOwlRealtimeTranscriptionHintsStore.currentPrompt(fileURL: fileURL))
+        #expect(!prompt.contains("Installed App Realtime Smoke"))
+        #expect(!prompt.contains("Barn Owl Smoke Test"))
+        #expect(!prompt.contains("Room Speaker A"))
+        #expect(prompt.contains("Codex Bridge"))
     }
 }
 

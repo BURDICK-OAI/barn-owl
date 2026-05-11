@@ -1,6 +1,6 @@
 # OpenAI API Key Setup
 
-Barn Owl uses your own OpenAI API key for transcription, summaries, note edits, and meeting chat. The app stores the key in macOS Keychain for your user account. The app bundle does not contain an API key.
+Barn Owl uses your own OpenAI API key for transcription, summaries, note edits, and meeting chat. The app stores the key in a private local user config file for your macOS account. The app bundle does not contain an API key.
 
 ## Create a key
 
@@ -16,18 +16,17 @@ If you want tighter control, create a dedicated OpenAI project for Barn Owl and 
 2. Paste the key into OpenAI Connection.
 3. Choose Save & Test Key.
 
-Barn Owl saves the key to macOS Keychain, then makes a small OpenAI authentication check. If the test fails, Settings will show whether the key was rejected, missing permissions, out of quota, or blocked by a network issue.
+Barn Owl saves the key locally with restricted file permissions, then makes a small OpenAI authentication check. If the test fails, Settings will show whether the key was rejected, missing permissions, out of quota, or blocked by a network issue.
 
-## Repair repeated Keychain prompts
+## Migrate older Keychain keys
 
-If macOS repeatedly asks for access to Barn Owl's saved OpenAI key, open Barn Owl
-Settings and choose Repair Keychain Access in the OpenAI Connection section. This
-is a user-initiated repair path that re-saves the current key into Barn Owl's
-current Keychain storage. If macOS asks during that repair, choose Always Allow
-once.
+Older Barn Owl builds stored the key in macOS Keychain. Lightweight ad-hoc app
+packages can trigger repeated Keychain approval prompts after updates, so current
+builds prefer the private local user config file instead.
 
-If repair cannot read the old saved key, paste the key again and choose Save &
-Test Key. Barn Owl will store the new value in the current Keychain location.
+If this Mac has an older Keychain-saved key, open Barn Owl Settings and choose
+Migrate Keychain Key in the OpenAI Connection section. If migration cannot read
+the old saved key, paste the key again and choose Save & Test Key.
 
 ## Replace or revoke
 

@@ -160,6 +160,10 @@ DISABLE_LIBRARY_VALIDATION="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.secur
 [[ "$DISABLE_LIBRARY_VALIDATION" == "true" ]] \
   || fail "missing required entitlement: com.apple.security.cs.disable-library-validation"
 
+AUDIO_INPUT="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$ENTITLEMENTS_PLIST" 2>/dev/null || true)"
+[[ "$AUDIO_INPUT" == "true" ]] \
+  || fail "missing required entitlement: com.apple.security.device.audio-input"
+
 if [[ "$DIRECT_DOWNLOAD" -eq 1 ]]; then
   echo "$SIGNATURE_INFO" | grep -q 'Signature=adhoc' \
     && fail "direct-download release cannot use an ad-hoc signature"
@@ -193,6 +197,7 @@ else
 fi
 echo "hardened_runtime=true"
 echo "disable_library_validation_entitlement=true"
+echo "audio_input_entitlement=true"
 if [[ "$DIRECT_DOWNLOAD" -eq 1 ]]; then
   echo "direct_download_ready=true"
 else

@@ -22,24 +22,48 @@ enum BarnOwlAPIKeyStore {
     private static let memoryCache = APIKeyMemoryCache()
     private static let dependencies = APIKeyStoreDependencyBox()
 
-    static func makeConfiguration(allowKeychainPrompt: Bool = true) throws -> OpenAIConfiguration {
+    static func makeConfiguration(allowKeychainPrompt: Bool = false) throws -> OpenAIConfiguration {
         OpenAIConfiguration(apiKey: try loadAPIKey(allowKeychainPrompt: allowKeychainPrompt))
     }
 
     static func hasConfiguredAPIKey() -> Bool {
-        do {
-            _ = try loadAPIKey(allowKeychainPrompt: false)
+        if memoryCache.hasValue {
             return true
-        } catch {
-            return false
         }
+
+        if let environmentKey = dependencies.environment()[account]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !environmentKey.isEmpty {
+            return true
+        }
+
+        if let fileKey = try? loadFileAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fileKey.isEmpty {
+            return true
+        }
+
+        return false
     }
 
     static func hasVerifiedAPIKey() -> Bool {
-        guard let storedFingerprint = UserDefaults.standard.string(forKey: verifiedKeyFingerprintDefaultsKey),
-              let apiKey = try? loadAPIKey(allowKeychainPrompt: false) else {
+        guard let storedFingerprint = UserDefaults.standard.string(forKey: verifiedKeyFingerprintDefaultsKey) else {
             return false
         }
+
+        if let cachedKey = memoryCache.load()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cachedKey.isEmpty {
+            return storedFingerprint == fingerprint(for: cachedKey)
+        }
+
+        if let environmentKey = dependencies.environment()[account]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !environmentKey.isEmpty {
+            return storedFingerprint == fingerprint(for: environmentKey)
+        }
+
+        guard let apiKey = try? loadFileAPIKey()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !apiKey.isEmpty else {
+            return false
+        }
+
         return storedFingerprint == fingerprint(for: apiKey)
     }
 
@@ -53,15 +77,31 @@ enum BarnOwlAPIKeyStore {
         clearAPIKeyVerification()
     }
 
-    static func loadAPIKey(allowKeychainPrompt: Bool = true) throws -> String {
+    static func loadAPIKey(allowKeychainPrompt: Bool = false) throws -> String {
         if let cachedKey = memoryCache.load() {
             return cachedKey
+        }
+
+        if let environmentKey = dependencies.environment()[account]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !environmentKey.isEmpty {
+            memoryCache.store(environmentKey)
+            return environmentKey
+        }
+
+        do {
+            if let fileKey = try loadLocalFileAPIKey() {
+                memoryCache.store(fileKey)
+                return fileKey
+            }
+        } catch {
+            // Fall through to keychain fallback and then the standard missing-key error.
         }
 
         if memoryCache.shouldAttemptNoninteractiveKeychainRead {
             do {
                 if let keychainKey = try dependencies.loadKeychainAPIKey(allowsUserInteraction: false)?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !keychainKey.isEmpty {
+                    try? saveFileAPIKey(keychainKey)
                     memoryCache.store(keychainKey)
                     return keychainKey
                 }
@@ -79,6 +119,7 @@ enum BarnOwlAPIKeyStore {
             do {
                 if let keychainKey = try dependencies.loadKeychainAPIKey(allowsUserInteraction: true)?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !keychainKey.isEmpty {
+                    try? saveFileAPIKey(keychainKey)
                     memoryCache.store(keychainKey)
                     return keychainKey
                 }
@@ -86,27 +127,6 @@ enum BarnOwlAPIKeyStore {
                 // Fall through to environment/local-file fallback. Repeated password prompts are worse
                 // than reporting the missing-key path; users can re-save the key from Settings.
             }
-        }
-
-        if let environmentKey = dependencies.environment()[account]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !environmentKey.isEmpty {
-            memoryCache.store(environmentKey)
-            return environmentKey
-        }
-
-        do {
-            if let fileKey = try loadLocalFileAPIKey() {
-                do {
-                    try dependencies.saveKeychainAPIKey(fileKey, allowsUserInteraction: false)
-                    try? deleteFileAPIKey()
-                } catch {
-                    // Keep the legacy local-file fallback usable if Keychain migration fails.
-                }
-                memoryCache.store(fileKey)
-                return fileKey
-            }
-        } catch {
-            // Fall through to the standard missing-key error. A corrupt local file is not usable.
         }
 
         throw OpenAIConfigurationError.missingAPIKey
@@ -118,8 +138,7 @@ enum BarnOwlAPIKeyStore {
             throw BarnOwlAPIKeyStoreError.invalidAPIKey
         }
 
-        try dependencies.saveKeychainAPIKey(trimmedKey, allowsUserInteraction: true)
-        try? deleteFileAPIKey()
+        try saveFileAPIKey(trimmedKey)
         clearAPIKeyVerification()
         memoryCache.store(trimmedKey)
     }
@@ -141,7 +160,7 @@ enum BarnOwlAPIKeyStore {
             throw BarnOwlAPIKeyStoreError.invalidAPIKey
         }
 
-        try dependencies.saveKeychainAPIKey(key, allowsUserInteraction: true)
+        try saveFileAPIKey(key)
         memoryCache.store(key)
     }
 
@@ -149,7 +168,7 @@ enum BarnOwlAPIKeyStore {
         try? deleteFileAPIKey()
         clearAPIKeyVerification()
         memoryCache.clear()
-        try dependencies.deleteKeychainAPIKey()
+        try? dependencies.deleteKeychainAPIKey()
     }
 
     static func diagnosticLines() -> [String] {
@@ -184,9 +203,11 @@ enum BarnOwlAPIKeyStore {
             lines.append("local_file_readable=false")
         }
 
-        lines.append("keychain_default=true")
-        lines.append("keychain_storage=data_protection")
-        lines.append("keychain_fallback=legacy_login_keychain_migration")
+        lines.append("secret_storage=local_user_config")
+        lines.append("keychain_default=false")
+        lines.append("keychain_storage=legacy_read_only_migration")
+        lines.append("keychain_fallback=user_initiated_migration")
+        lines.append("keychain_reference_exists=\(dependencies.keychainContainsAPIKey())")
 
         lines.append("load_api_key_success=\(hasConfiguredAPIKey())")
         return lines
@@ -251,6 +272,10 @@ enum BarnOwlAPIKeyStore {
             return apiKey
         }
 
+        guard allowsUserInteraction else {
+            return nil
+        }
+
         guard let legacyAPIKey = try copyKeychainAPIKey(
             allowsUserInteraction: allowsUserInteraction,
             storage: .legacyLogin
@@ -260,6 +285,21 @@ enum BarnOwlAPIKeyStore {
 
         try? saveKeychainAPIKey(legacyAPIKey.trimmingCharacters(in: .whitespacesAndNewlines), allowsUserInteraction: false)
         return legacyAPIKey
+    }
+
+    fileprivate static func keychainContainsAPIKeyReference() -> Bool {
+        keychainContainsAPIKeyReference(storage: .dataProtection)
+            || keychainContainsAPIKeyReference(storage: .legacyLogin)
+    }
+
+    private static func keychainContainsAPIKeyReference(storage: KeychainStorage) -> Bool {
+        var query = baseKeychainQuery(allowsUserInteraction: false, storage: storage)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return status == errSecSuccess
     }
 
     private static func copyKeychainAPIKey(
@@ -418,6 +458,9 @@ enum BarnOwlAPIKeyStore {
             let context = LAContext()
             context.interactionNotAllowed = true
             query[kSecUseAuthenticationContext as String] = context
+            // LAContext.interactionNotAllowed should be enough, but legacy login-keychain reads can
+            // still block on some local/ad-hoc installs. The raw value avoids the deprecated symbol.
+            query[kSecUseAuthenticationUI as String] = "fail"
         }
         return query
     }
@@ -524,6 +567,7 @@ private struct APIKeyStoreDependencies {
     var environment: @Sendable () -> [String: String]
     var localAPIKeyFileURLOverride: (@Sendable () throws -> URL?)?
     var keychainReader: @Sendable (_ allowsUserInteraction: Bool) throws -> String?
+    var keychainPresence: @Sendable () -> Bool
     var keychainWriter: @Sendable (_ apiKey: String, _ allowsUserInteraction: Bool) throws -> Void
     var keychainDeleter: @Sendable () throws -> Void
 
@@ -531,6 +575,7 @@ private struct APIKeyStoreDependencies {
         environment: { ProcessInfo.processInfo.environment },
         localAPIKeyFileURLOverride: nil,
         keychainReader: BarnOwlAPIKeyStore.loadKeychainAPIKey,
+        keychainPresence: BarnOwlAPIKeyStore.keychainContainsAPIKeyReference,
         keychainWriter: BarnOwlAPIKeyStore.saveKeychainAPIKey,
         keychainDeleter: BarnOwlAPIKeyStore.deleteKeychainAPIKey
     )
@@ -558,6 +603,13 @@ private final class APIKeyStoreDependencyBox: @unchecked Sendable {
             dependencies.keychainReader
         }
         return try reader(allowsUserInteraction)
+    }
+
+    func keychainContainsAPIKey() -> Bool {
+        let presence = lock.withLock {
+            dependencies.keychainPresence
+        }
+        return presence()
     }
 
     func saveKeychainAPIKey(_ apiKey: String, allowsUserInteraction: Bool) throws {
@@ -603,6 +655,14 @@ private final class APIKeyStoreDependencyBox: @unchecked Sendable {
             environment: environmentProvider,
             localAPIKeyFileURLOverride: localAPIKeyFileURLProvider,
             keychainReader: keychainReader ?? previous.keychainReader,
+            keychainPresence: keychainReader.map { reader in
+                { @Sendable in
+                    guard let key = try? reader(false)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                        return false
+                    }
+                    return !key.isEmpty
+                }
+            } ?? previous.keychainPresence,
             keychainWriter: keychainWriter ?? previous.keychainWriter,
             keychainDeleter: keychainDeleter ?? previous.keychainDeleter
         )

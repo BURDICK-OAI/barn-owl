@@ -78,6 +78,71 @@ func realtimeControllerDoesNotCommitTinyBuffers() async throws {
 }
 
 @Test
+func realtimeControllerAppendsSoftSpeech() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 32, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.12
+    ))
+    await controller.stop()
+
+    let appendCount = await client.appendCount
+    await MainActor.run {
+        #expect(appendCount >= 1)
+        #expect(sink.healthStates.contains(.receivingAudio))
+        #expect(!sink.diagnostics.contains { $0.kind == .audioSilenceSkipped })
+    }
+}
+
+@Test
+func realtimeControllerDoesNotWarnForRoutineServerEvents() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await client.push(.unhandled("input_audio_buffer.committed"))
+    await client.push(.unhandled("conversation.item.added"))
+    await client.push(.unhandled("conversation.item.done"))
+    await client.push(.unhandled("barnowl.unknown_event"))
+    try await Task.sleep(nanoseconds: 80_000_000)
+    await controller.stop()
+
+    await MainActor.run {
+        #expect(sink.diagnostics.contains {
+            $0.kind == .eventUnhandled && $0.details == "barnowl.unknown_event"
+        })
+        #expect(!sink.diagnostics.contains {
+            $0.kind == .eventUnhandled && $0.details == "input_audio_buffer.committed"
+        })
+        #expect(!sink.diagnostics.contains {
+            $0.kind == .eventUnhandled && $0.details == "conversation.item.added"
+        })
+        #expect(!sink.diagnostics.contains {
+            $0.kind == .eventUnhandled && $0.details == "conversation.item.done"
+        })
+    }
+}
+
+@Test
 func realtimeControllerDegradesOnServerErrorEvent() async throws {
     let client = FakeRealtimeStreamingClient()
     let sink = RealtimeControllerTestSink()
@@ -99,7 +164,7 @@ func realtimeControllerDegradesOnServerErrorEvent() async throws {
         #expect(sink.diagnostics.contains {
             $0.kind == .eventError
                 && ($0.details?.contains("fallback") ?? false)
-                && !($0.details?.contains("session.audio") ?? false)
+                && ($0.details?.contains("session.audio") ?? false)
         })
     }
 }

@@ -68,7 +68,7 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            BarnOwlMark(status: readinessSnapshot.criticalReady ? .idle : .failed, headTurn: 0.2)
+            BarnOwlMark(status: readinessSnapshot.overallState == .missing ? .failed : .idle, headTurn: 0.2)
                 .frame(width: 46, height: 46)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -82,9 +82,9 @@ struct SettingsView: View {
             Spacer()
 
             BarnOwlSettingsStatusPill(
-                title: readinessSnapshot.criticalReady ? "Ready" : "Setup needed",
-                systemImage: readinessSnapshot.criticalReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                tint: readinessSnapshot.criticalReady ? BarnOwlSettingsTheme.success : BarnOwlSettingsTheme.warning
+                title: readinessSnapshot.statusTitle,
+                systemImage: readinessSnapshot.overallState == .ready ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                tint: readinessSnapshot.overallState == .ready ? BarnOwlSettingsTheme.success : BarnOwlSettingsTheme.warning
             )
         }
     }
@@ -105,7 +105,7 @@ struct SettingsView: View {
                 )
                 .foregroundStyle(apiKeyConnectionState.tint)
 
-                Text("Each macOS user adds their own OpenAI API key. Barn Owl stores it in Keychain and keeps it out of the app bundle.")
+                Text("Each macOS user adds their own OpenAI API key. Barn Owl stores it in a private local user config file and keeps it out of the app bundle.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -127,7 +127,7 @@ struct SettingsView: View {
                     settingsStatusMessage(apiKeyStatus)
                 }
 
-                Text("Need a key? Create one in the OpenAI dashboard, paste it here, then Save & Test. If macOS keeps asking for Keychain access, use Repair Keychain Access from this section.")
+                Text("Need a key? Create one in the OpenAI dashboard, paste it here, then Save & Test. If this Mac has an older Keychain-saved key, use Migrate Keychain Key once or paste the key again.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -188,7 +188,7 @@ struct SettingsView: View {
             .buttonStyle(.bordered)
             .disabled(!hasStoredAPIKey || isValidatingAPIKey || isRepairingAPIKeyAccess)
 
-            Button("Repair Keychain Access") {
+            Button("Migrate Keychain Key") {
                 repairAPIKeyAccess()
             }
             .buttonStyle(.bordered)
@@ -270,7 +270,7 @@ struct SettingsView: View {
                     tint: BarnOwlSettingsTheme.success
                 )
 
-                Text("Barn Owl checks a local or HTTPS update manifest on launch, periodically while idle, and when you ask. This can point at a Git-hosted manifest or a manifest sent with an ad-hoc app build.")
+                Text("Barn Owl checks the GitHub update feed on launch, periodically while idle, and when you ask. You can override it with another HTTPS manifest or a local manifest path for testing.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -458,7 +458,7 @@ struct SettingsView: View {
         do {
             try BarnOwlAPIKeyStore.saveAPIKey(apiKey)
             apiKey = ""
-            apiKeyStatus = "Saved to macOS Keychain. Testing OpenAI connection..."
+            apiKeyStatus = "Saved locally. Testing OpenAI connection..."
             apiKeyConnectionState = .testing
             refreshAPIKeyStatus()
             refreshReadinessChecks()
@@ -466,7 +466,7 @@ struct SettingsView: View {
                 await validateSavedAPIKey(successMessage: "Saved and tested. OpenAI authentication works.")
             }
         } catch {
-            apiKeyStatus = "Could not save API key to macOS Keychain."
+            apiKeyStatus = "Could not save API key."
             refreshAPIKeyStatus()
         }
     }
@@ -495,10 +495,10 @@ struct SettingsView: View {
 
         do {
             try BarnOwlAPIKeyStore.repairSavedAPIKeyAccess()
-            apiKeyStatus = "Re-saved the key to Barn Owl's current Keychain storage. If macOS asks, choose Always Allow once."
+            apiKeyStatus = "Migrated the saved key to Barn Owl's local user config."
         } catch {
             apiKeyConnectionState = .failed
-            apiKeyStatus = "Could not repair Keychain access. Paste the key again, then choose Save & Test Key."
+            apiKeyStatus = "Could not read the older Keychain key. Paste the key again, then choose Save & Test Key."
         }
     }
 
@@ -802,11 +802,18 @@ struct SettingsView: View {
             return
         }
 
-        readinessActionStatus = "Running a short local mic/system-audio capture test..."
+        let hasSystemAudioEvidence = BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence()
+        readinessActionStatus = hasSystemAudioEvidence
+            ? "Checking system audio readiness..."
+            : "Requesting system audio permission..."
+        let systemAudioDecision = BarnOwlFirstRunReadiness.requestSystemAudioDecisionIfNeeded()
+        readinessActionStatus = systemAudioDecision == .granted
+            ? "Running a short local mic/system-audio capture test..."
+            : "Running a short local capture test. macOS may ask for Screen & System Audio Recording permission."
         do {
-            let summary = try await BarnOwlLocalCaptureReadinessTest.run()
-            BarnOwlFirstRunReadiness.markLocalCaptureTestSucceeded()
-            readinessActionStatus = summary
+            let result = try await BarnOwlLocalCaptureReadinessTest.run()
+            result.applyReadinessMarkers()
+            readinessActionStatus = result.summary
         } catch {
             BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
             readinessActionStatus = "Local capture test failed: \(BarnOwlErrorFormatter.message(for: error))"
@@ -841,13 +848,13 @@ private enum APIKeyConnectionState {
         case .missing:
             return "No API key saved yet."
         case .savedUntested:
-            return "API key saved in macOS Keychain. Test it to finish setup."
+            return "API key saved locally. Test it to finish setup."
         case .testing:
             return "Testing the saved API key with OpenAI."
         case .verified:
-            return "API key saved in macOS Keychain and verified with OpenAI."
+            return "API key saved locally and verified with OpenAI."
         case .failed:
-            return "API key saved in macOS Keychain, but the last test failed."
+            return "API key saved locally, but the last test failed."
         }
     }
 
@@ -900,11 +907,50 @@ enum BarnOwlSettingsReadinessChecks {
     }
 }
 
+struct BarnOwlLocalCaptureReadinessResult {
+    let capturedTrackKinds: Set<AudioTrackKind>
+
+    var capturedMicrophone: Bool {
+        capturedTrackKinds.contains(.microphone) || capturedTrackKinds.contains(.mixed)
+    }
+
+    var capturedSystemAudio: Bool {
+        capturedTrackKinds.contains(.systemAudio) || capturedTrackKinds.contains(.mixed)
+    }
+
+    var capturedAllRequiredTracks: Bool {
+        capturedMicrophone && capturedSystemAudio
+    }
+
+    var summary: String {
+        if capturedAllRequiredTracks {
+            return "Local capture test passed. Mic and system-audio tracks were captured without uploading audio."
+        }
+
+        return "Local capture test captured microphone audio. System audio was not observed during the short test; play audio from another app and rerun to verify call/system audio capture."
+    }
+
+    @MainActor
+    func applyReadinessMarkers() {
+        if capturedAllRequiredTracks {
+            BarnOwlFirstRunReadiness.markLocalCaptureTestSucceeded()
+            return
+        }
+
+        if capturedMicrophone {
+            BarnOwlFirstRunReadiness.markCaptureSucceeded(trackKind: .microphone)
+        }
+        if capturedSystemAudio {
+            BarnOwlFirstRunReadiness.markCaptureSucceeded(trackKind: .systemAudio)
+        }
+    }
+}
+
 enum BarnOwlLocalCaptureReadinessTest {
     @MainActor
-    static func run(durationNanoseconds: UInt64 = 1_100_000_000) async throws -> String {
+    static func run(durationNanoseconds: UInt64 = 1_100_000_000) async throws -> BarnOwlLocalCaptureReadinessResult {
         let sessionID = UUID()
-        var capturedTrackKinds: [AudioTrackKind] = []
+        var capturedTrackKinds: Set<AudioTrackKind> = []
         let coordinator = BarnOwlAudioCaptureFactory.makeCoordinator(
             sessionID: sessionID,
             progressHandler: { progress in
@@ -914,7 +960,7 @@ enum BarnOwlLocalCaptureReadinessTest {
                 else {
                     return
                 }
-                capturedTrackKinds.append(progress.trackKind)
+                capturedTrackKinds.insert(progress.trackKind)
             }
         )
 
@@ -922,13 +968,12 @@ enum BarnOwlLocalCaptureReadinessTest {
             try await coordinator.start(configuration: .defaultMeetingCapture)
             try await Task.sleep(nanoseconds: durationNanoseconds)
             await coordinator.stop()
-            let missingTrackKinds = [AudioTrackKind.microphone, .systemAudio]
-                .filter { !capturedTrackKinds.contains($0) }
-            if !missingTrackKinds.isEmpty {
-                throw BarnOwlLocalCaptureReadinessError.missingTracks(missingTrackKinds)
+            let result = BarnOwlLocalCaptureReadinessResult(capturedTrackKinds: capturedTrackKinds)
+            if !result.capturedMicrophone {
+                throw BarnOwlLocalCaptureReadinessError.missingTracks([.microphone])
             }
             await BarnOwlAudioCaptureFactory.deleteTemporaryAudio(for: sessionID)
-            return "Local capture test passed. Mic and system-audio tracks were captured without uploading audio."
+            return result
         } catch {
             await coordinator.stop()
             await BarnOwlAudioCaptureFactory.deleteTemporaryAudio(for: sessionID)

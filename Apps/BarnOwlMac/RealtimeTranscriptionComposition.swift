@@ -83,8 +83,18 @@ actor BarnOwlRealtimeTranscriptionController {
     static let droppedStatusInterval = 25
     static let skippedSilenceStatusInterval = 50
     static let stopSilenceDuration: TimeInterval = 0.65
-    static let speechRMSFloor = 0.006
+    static let speechRMSFloor = 0.0005
     static let staleTranscriptGraceInterval: TimeInterval = 8
+    static let routineServerEventTypes: Set<String> = [
+        "conversation.item.added",
+        "conversation.item.done",
+        "input_audio_buffer.committed",
+        "input_audio_buffer.speech_started",
+        "input_audio_buffer.speech_stopped",
+        "rate_limits.updated",
+        "session.created",
+        "session.updated"
+    ]
 
     private let client: any BarnOwlRealtimeStreamingClient
     private let manualCommitInterval: TimeInterval
@@ -108,6 +118,7 @@ actor BarnOwlRealtimeTranscriptionController {
 
     init(
         configuration: OpenAIConfiguration,
+        prompt: String? = BarnOwlRealtimeTranscriptionHintsStore.currentPrompt(),
         updateHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeTranscriptionUpdate) -> Void,
         healthHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeHealthState) -> Void,
         diagnosticsHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeDiagnosticEvent) -> Void = { _ in }
@@ -115,6 +126,7 @@ actor BarnOwlRealtimeTranscriptionController {
         self.init(
             client: OpenAIRealtimeTranscriptionClient(
                 configuration: configuration,
+                prompt: prompt,
                 transport: URLSessionRealtimeWebSocketTransport()
             ),
             updateHandler: updateHandler,
@@ -297,15 +309,24 @@ actor BarnOwlRealtimeTranscriptionController {
                     await emit(.eventReceived, "Realtime transcript completed.", details: "characters=\(text.count)")
                     await healthHandler(.transcribing)
                     await updateHandler(BarnOwlRealtimeTranscriptionUpdate(text: text, isFinal: true))
-                case .error:
+                case .error(let message):
                     isDegraded = true
+                    let safeMessage = BarnOwlErrorFormatter.sanitizeForUserDisplay(message)
+                    let fallbackDetails = "Realtime preview switched to fallback. Final transcription will still run after recording stops."
+                    let details = safeMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? fallbackDetails
+                        : "\(fallbackDetails) Server message: \(safeMessage)"
                     await emit(
                         .eventError,
                         "Realtime server returned an error.",
-                        details: "Realtime preview switched to fallback. Final transcription will still run after recording stops."
+                        details: details
                     )
                     await healthHandler(.fallbackActive)
+                    return
                 case .unhandled(let eventType):
+                    guard !Self.routineServerEventTypes.contains(eventType) else {
+                        break
+                    }
                     await emit(.eventUnhandled, "Realtime event ignored.", details: eventType)
                     break
                 }

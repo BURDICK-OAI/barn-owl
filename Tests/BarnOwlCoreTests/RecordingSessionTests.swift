@@ -124,6 +124,31 @@ func stateMachineRejectsDoubleStopWithoutLosingFinishedSession() {
 }
 
 @Test
+func stateMachineCanSettleCompletedRecordingBackToIdle() {
+    var machine = RecordingStateMachine()
+    let session = RecordingSession(
+        id: .init(uuidString: "00000000-0000-0000-0000-000000000033")!,
+        title: "Completed Meeting",
+        startedAt: .init(timeIntervalSince1970: 90),
+        audioSources: .defaultMeetingCapture
+    )
+
+    machine.beginStart(session: session, permissions: .grantedForDefaultMeetingCapture)
+    machine.markRecording()
+    machine.beginStop(at: Date(timeIntervalSince1970: 120))
+    machine.beginProcessing()
+    machine.complete()
+
+    #expect(machine.state == .completed(session.finished(at: Date(timeIntervalSince1970: 120))))
+    #expect(machine.state.activeSession?.id == session.id)
+
+    machine.resetToIdle()
+
+    #expect(machine.status == .idle)
+    #expect(machine.state.activeSession == nil)
+}
+
+@Test
 func stateMachineRejectsStartWhenPermissionsAreNotReady() {
     var machine = RecordingStateMachine()
     let session = RecordingSession(
@@ -1274,6 +1299,47 @@ func jobRunnerCompletesQueuedFinalProcessingJob() async throws {
 }
 
 @Test
+func connectivityFailureKeepsFinalProcessingQueuedForOfflineMode() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000502")!
+    let now = Date(timeIntervalSince1970: 1_800_005_100)
+    let session = RecordingSession(
+        id: sessionID,
+        title: "Offline Job Runner Test",
+        startedAt: now,
+        audioSources: .defaultMeetingCapture
+    ).finished(at: now.addingTimeInterval(60))
+    try await database.upsertMeeting(BarnOwlMeetingRecord(
+        id: sessionID,
+        title: session.title,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        createdAt: now,
+        updatedAt: now
+    ))
+
+    let processor = FakeMeetingProcessor(
+        outputURL: FileManager.default.temporaryDirectory.appending(path: "offline-job-runner-test.md"),
+        error: URLError(.notConnectedToInternet)
+    )
+    let runner = BarnOwlJobRunner(
+        makeDatabase: { database },
+        meetingProcessor: processor,
+        maxAttempts: 1
+    )
+
+    _ = try await runner.enqueueFinalProcessing(session: session)
+    await runner.runAvailableJobs()
+
+    let job = try #require(await database.jobs(meetingID: sessionID, limit: 1).first)
+    #expect(job.status == .pending)
+    #expect(job.attemptCount == 1)
+    #expect(job.completedAt == nil)
+    #expect(job.scheduledAt != nil)
+    #expect(job.errorMessage == BarnOwlProcessingRetryPolicy.offlineQueuedMessage)
+}
+
+@Test
 @MainActor
 func staleRunningJobBecomesRetryableOnLaunchRecovery() async throws {
     let database = try BarnOwlDatabase.inMemory()
@@ -1740,10 +1806,12 @@ private struct NoOpSystemAudioSource: SystemAudioSource {
 
 private actor FakeMeetingProcessor: MeetingProcessing {
     private let outputURL: URL
+    private let error: (any Error)?
     private var processed: [UUID] = []
 
-    init(outputURL: URL) {
+    init(outputURL: URL, error: (any Error)? = nil) {
         self.outputURL = outputURL
+        self.error = error
     }
 
     func process(
@@ -1751,6 +1819,9 @@ private actor FakeMeetingProcessor: MeetingProcessing {
         progress: MeetingProcessingProgressHandler?
     ) async throws -> URL {
         processed.append(session.id)
+        if let error {
+            throw error
+        }
         await progress?(MeetingProcessingProgress(message: "Fake job complete.", progressFraction: 1))
         return outputURL
     }

@@ -6,13 +6,13 @@ import Testing
 func realtimeConnectionRequestUsesExpectedEndpointAndHeaders() {
     let client = OpenAIRealtimeTranscriptionClient(
         configuration: OpenAIConfiguration(apiKey: "test-key"),
-        endpointURL: URL(string: "wss://api.test/v1/realtime/transcription_sessions?model=gpt-realtime-whisper")!,
+        endpointURL: URL(string: "wss://api.test/v1/realtime?intent=transcription")!,
         transport: FakeRealtimeWebSocketTransport()
     )
 
     let request = client.makeConnectionRequest()
 
-    #expect(request.url?.absoluteString == "wss://api.test/v1/realtime/transcription_sessions?model=gpt-realtime-whisper")
+    #expect(request.url?.absoluteString == "wss://api.test/v1/realtime?intent=transcription")
     #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
     #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == nil)
 }
@@ -26,7 +26,7 @@ func realtimeConnectionRequestDefaultsToGAEndpointWithModel() {
 
     let request = client.makeConnectionRequest()
 
-    #expect(request.url?.absoluteString == "wss://api.openai.com/v1/realtime/transcription_sessions?model=\(OpenAIModelCatalog.liveTranscription)")
+    #expect(request.url?.absoluteString == "wss://api.openai.com/v1/realtime?intent=transcription")
 }
 
 @Test
@@ -54,10 +54,27 @@ func sessionUpdateMessageConfiguresRealtimeTranscriptionPCM16() throws {
     let transcription = try #require(input["transcription"] as? [String: Any])
     #expect(transcription["model"] as? String == OpenAIModelCatalog.liveTranscription)
     #expect(transcription["language"] as? String == "en")
+    #expect(transcription["prompt"] == nil)
 
     #expect(input["turn_detection"] is NSNull)
-    #expect(input["noise_reduction"] == nil)
-    #expect(session["include"] as? [String] == ["item.input_audio_transcription.logprobs"])
+    #expect(session["include"] == nil)
+}
+
+@Test
+func sessionUpdateMessageIncludesOptionalTranscriptionPrompt() throws {
+    let client = OpenAIRealtimeTranscriptionClient(
+        configuration: OpenAIConfiguration(apiKey: "test-key"),
+        prompt: "Prefer these spellings: Barn Owl, Codex.",
+        transport: FakeRealtimeWebSocketTransport()
+    )
+
+    let payload = try jsonObject(from: client.makeSessionUpdateMessage())
+    let session = try #require(payload["session"] as? [String: Any])
+    let audio = try #require(session["audio"] as? [String: Any])
+    let input = try #require(audio["input"] as? [String: Any])
+    let transcription = try #require(input["transcription"] as? [String: Any])
+
+    #expect(transcription["prompt"] as? String == "Prefer these spellings: Barn Owl, Codex.")
 }
 
 @Test
@@ -110,7 +127,7 @@ func connectSendsSessionUpdateBeforeAudioMessages() async throws {
     let transport = FakeRealtimeWebSocketTransport()
     let client = OpenAIRealtimeTranscriptionClient(
         configuration: OpenAIConfiguration(apiKey: "test-key"),
-        endpointURL: URL(string: "wss://api.test/v1/realtime/transcription_sessions?model=gpt-realtime-whisper")!,
+        endpointURL: URL(string: "wss://api.test/v1/realtime?intent=transcription")!,
         transport: transport
     )
 
