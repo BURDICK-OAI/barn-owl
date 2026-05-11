@@ -59,6 +59,13 @@ fail() {
   exit 1
 }
 
+is_checked() {
+  local evidence="$1"
+  local label="$2"
+  grep -Fxq -- "- [x] $label" "$evidence" \
+    || grep -Fxq -- "- [X] $label" "$evidence"
+}
+
 [[ "${#MANUAL_QA_EVIDENCE[@]}" -gt 0 ]] \
   || fail "manual QA evidence is required; pass --manual-qa-evidence PATH"
 
@@ -72,73 +79,60 @@ APP_ZIP="$DIST_DIR/BarnOwl.app.zip"
 [[ -f "$APP_ZIP" ]] || fail "app package not found: $APP_ZIP"
 expected_app_sha="$(shasum -a 256 "$APP_ZIP" | awk '{print $1}')"
 
+required_checked_labels=(
+  "First-run grant path passed"
+  "Microphone denied path passed"
+  "System-audio denied path passed"
+  "Previously denied retry path passed"
+  "Permission revoked while recording path passed"
+  "Source unavailable case passed or documented as not applicable"
+  "Final notes and transcript are visible"
+  "Live preview stayed visually separate from final transcript"
+  "No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors"
+  "Installed CLI status command passed"
+  "CLI start stop wait notes flow passed or was covered by the manual recording flow"
+  "CLI diagnostics export produced a redacted report"
+  "CLI feedback Slack draft produced a redacted draft without posting"
+  "CLI feedback Slack post requires explicit confirmation and configured webhook"
+  "Bundled Codex skill guidance matches the installed CLI behavior"
+)
+
 completed_manual_evidence=""
+evidence_failure_details=()
 for evidence in "${MANUAL_QA_EVIDENCE[@]}"; do
   [[ -f "$evidence" ]] || fail "manual QA evidence file not found: $evidence"
 
+  evidence_reasons=()
   if ! grep -qE "^- Artifact SHA-256: \`$expected_app_sha\`$" "$evidence"; then
-    continue
+    evidence_reasons+=("artifact SHA does not match current dist/BarnOwl.app.zip ($expected_app_sha)")
   fi
 
-  if grep -qE '^- \[ \] .*passed' "$evidence"; then
-    continue
+  for label in "${required_checked_labels[@]}"; do
+    if ! is_checked "$evidence" "$label"; then
+      evidence_reasons+=("unchecked: $label")
+    fi
+  done
+
+  if ! grep -Fq 'Raw audio files: `0`' "$evidence"; then
+    evidence_reasons+=("raw audio file count is not zero")
   fi
 
-  if ! grep -qE '^- \[[xX]\] First-run grant path passed$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Microphone denied path passed$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] System-audio denied path passed$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Previously denied retry path passed$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Permission revoked while recording path passed$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Source unavailable case passed or documented as not applicable$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Final notes and transcript are visible$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Live preview stayed visually separate from final transcript$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Installed CLI status command passed$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] CLI start stop wait notes flow passed or was covered by the manual recording flow$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] CLI diagnostics export produced a redacted report$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] CLI feedback Slack draft produced a redacted draft without posting$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] CLI feedback Slack post requires explicit confirmation and configured webhook$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE '^- \[[xX]\] Bundled Codex skill guidance matches the installed CLI behavior$' "$evidence"; then
-    continue
-  fi
-  if ! grep -qE 'Raw audio files: `0`' "$evidence"; then
-    continue
+  if [[ "${#evidence_reasons[@]}" -eq 0 ]]; then
+    completed_manual_evidence="$evidence"
+    break
   fi
 
-  completed_manual_evidence="$evidence"
-  break
+  evidence_failure_details+=("$evidence")
+  for reason in "${evidence_reasons[@]}"; do
+    evidence_failure_details+=("  - $reason")
+  done
 done
 
-[[ -n "$completed_manual_evidence" ]] \
-  || fail "no provided manual QA evidence file matches the current app package SHA and shows all required manual, CLI/Codex, diagnostics, feedback, and raw-audio cleanup checks complete"
+if [[ -z "$completed_manual_evidence" ]]; then
+  echo "manual_qa_evidence_checked=${#MANUAL_QA_EVIDENCE[@]}" >&2
+  printf '%s\n' "${evidence_failure_details[@]}" >&2
+  fail "no provided manual QA evidence file matches the current app package SHA and shows all required manual, CLI/Codex, diagnostics, feedback, and raw-audio cleanup checks complete"
+fi
 
 echo "production_ready=true"
 echo "dist=$DIST_DIR"
