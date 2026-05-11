@@ -34,7 +34,8 @@ Commands run successfully during this pass:
 - `scripts/verify.sh`
   - Result: `** TEST SUCCEEDED **`
   - Latest observed result bundle:
-    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_22-54-36--0700.xcresult`
+    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-10-39--0700.xcresult`
+  - Verified commit: `f4e5e6e`
 - `scripts/package-all.sh`
   - Result: created `dist/BarnOwl-source-handoff.zip` and
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
@@ -43,6 +44,15 @@ Commands run successfully during this pass:
 - `cd dist && shasum -a 256 -c SHA256SUMS`
   - Result: `BarnOwl-source-handoff.zip: OK`, `BarnOwl.app.zip: OK`, and
     `BarnOwl-release-manifest.json: OK`, and `BarnOwl-update-manifest.json: OK`
+  - Current artifact SHA-256 values:
+    - `BarnOwl.app.zip`:
+      `f7d5b8642df2ce2799b85d8015cc2eb323634fe9f93ef656b2d1aab47b6164c9`
+    - `BarnOwl-source-handoff.zip`:
+      `1c507fb39f5701865cd4f5afb16afb8746f4694224eb00ce41f2489d86684abd`
+    - `BarnOwl-release-manifest.json`:
+      `c4d4a7c743195a8f6946f6c78a751a50677591ba2010275356b284b524c22d4e`
+    - `BarnOwl-update-manifest.json`:
+      `b4736bed094f6bf9a8f18a173d486b716aa29477ab624893a10f6f925f4b7b9a`
 - `scripts/verify-dist.sh dist`
   - Result: `dist_check=true`
   - Verified the expected `dist/` file set, source handoff archive,
@@ -67,6 +77,22 @@ Commands run successfully during this pass:
 - `RUN_VERIFY=0 scripts/verify-production-readiness.sh`
   - Expected failure without manual QA evidence:
     `manual QA evidence is required; pass --manual-qa-evidence PATH`
+- `scripts/collect-manual-qa-evidence.sh`
+  - Result: generated
+    `.build/manual-qa/manual-capture-qa-evidence-20260510-231522.md`
+  - The evidence file is tied to current app SHA
+    `f7d5b8642df2ce2799b85d8015cc2eb323634fe9f93ef656b2d1aab47b6164c9`,
+    but the manual flow checkboxes are intentionally still unchecked.
+- `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-20260510-231522.md`
+  - Expected failure until manual QA is performed:
+    `no provided manual QA evidence file matches the current app package SHA and shows all required flow checks complete with zero raw audio files`
+- `scripts/install-local-app.sh --yes`
+  - Result: installed verified package to `/Applications/Barn Owl.app`
+  - Installed version/build: `0.1.0 (7)`
+  - Existing app backup:
+    `/Applications/Barn Owl.app.backup.20260511061620`
+  - The install did not launch the app; the next launch should exercise the
+    fresh onboarding path after the local state reset.
 
 The local package is intentionally lightweight:
 
@@ -96,7 +122,7 @@ The local package is intentionally lightweight:
 | App builds | `scripts/verify.sh` regenerates project when XcodeGen is available, cleans, and runs the Barn Owl test suite. It resolves XcodeGen from the bundled local copy or `PATH`; sanitized source handoffs can also fall back to the included generated `BarnOwl.xcodeproj` with a warning. | Passing. |
 | Relevant tests pass | Latest verifier passed across core, audio, OpenAI, transcription, context, notes, and persistence tests. | Passing. |
 | App packages correctly | `scripts/package-all.sh` builds source and app zips, writes `dist/BarnOwl-release-manifest.json`, `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`, then runs `scripts/verify-dist.sh` to validate the expected dist file set, source handoff archive, checksums, release/update manifest SHA-256 values, and app release gate. `scripts/package-app.sh` uses `ditto -c -k --keepParent` to preserve signing metadata for bundled executables and signs lightweight internal packages ad hoc with hardened runtime. | Passing for lightweight internal artifacts. |
-| Clean local install path exists | `scripts/install-local-app.sh --yes` verifies `dist/BarnOwl.app.zip`, extracts and validates the Barn Owl bundle id, backs up an existing destination app, installs to `/Applications/Barn Owl.app` by default, and verifies the installed signature. It preserves local user data by default. `--reset-state` is explicitly destructive and test-only for fresh onboarding QA. | Tested against a temporary destination under `/private/tmp`; not executed against `/Applications` in this pass. |
+| Clean local install path exists | `scripts/install-local-app.sh --yes` verifies `dist/BarnOwl.app.zip`, extracts and validates the Barn Owl bundle id, backs up an existing destination app, installs to `/Applications/Barn Owl.app` by default, and verifies the installed signature. It preserves local user data by default. `--reset-state` is explicitly destructive and test-only for fresh onboarding QA. | Executed against `/Applications/Barn Owl.app`; app not launched yet. |
 | Release gate exists | `scripts/verify-release.sh` validates local/internal artifacts, exact app archive shape, absence of bundled local/private state, required macOS privacy usage descriptions, required code-signing entitlements, bundled CLI, bundled Codex skill resources, valid code signature, and hardened runtime. | Present and exercised. |
 | Local and Git-style update artifacts are verified | `scripts/update-local.sh` and `scripts/publish-local-update.sh` sign local update apps with hardened runtime; `publish-local-update.sh` runs `scripts/verify-release.sh` on the generated update archive before writing the manifest. `scripts/package-all.sh` now writes `BarnOwl-update-manifest.json` for Git-hosted or ad-hoc update feeds. Remote update installs require HTTPS, checksum, valid Barn Owl bundle identity, and a valid app signature; ad-hoc signatures are allowed for the lightweight internal path. The app checks on launch, periodically while idle, and when the user asks. | Verified by packaging gates; updater policy covered by focused tests and needs full app smoke after install. |
 | Lightweight internal distribution ready | The app package is ad-hoc signed with hardened runtime, checksummed, and paired with an update manifest. Gatekeeper friction is expected on first launch because the app is intentionally not Developer ID notarized. A release candidate must pass `scripts/verify-dist.sh dist`, then clean-machine capture QA. | Packaging ready; clean-machine manual QA still required. |
