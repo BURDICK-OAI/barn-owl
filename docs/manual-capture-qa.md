@@ -24,16 +24,17 @@ scripts/collect-manual-qa-evidence.sh
 
 The script writes a timestamped Markdown file under `.build/manual-qa/` with
 system details, app artifact metadata, the app artifact SHA-256,
-usage-description strings, diagnostic category/level summaries, and temp audio
-counts. It intentionally omits
+usage-description strings, manual flow checkboxes, CLI/Codex feedback
+checkboxes, diagnostic category/level summaries, and temp audio counts. It intentionally omits
 diagnostic messages and details so evidence files do not preserve meeting text.
 It does not collect raw audio, transcripts, API keys, or full private paths. If
 you are testing a different app artifact or chunk root, set
 `BARNOWL_QA_APP_ARTIFACT` or `BARNOWL_QA_CHUNK_ROOT`.
 
 After completing the pass, fill in the evidence file's `Manual Flow Results`
-checkboxes. Lightweight internal production readiness requires a completed
-evidence file for the exact package you plan to share:
+and `CLI Codex Feedback Results` checkboxes. Lightweight internal production
+readiness requires a completed evidence file for the exact package you plan to
+share:
 
 ```sh
 scripts/verify-production-readiness.sh \
@@ -135,6 +136,11 @@ Evidence to capture:
 - Directory listing while recording showing mic and system-audio chunk files.
 - Directory listing after finalize showing no raw audio chunk files remain.
 - Metadata JSON for representative mic and system-audio chunks after finalize.
+- Installed CLI smoke:
+  - `barnowl status --format json`
+  - `barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md --format json`
+  - `barnowl feedback slack --force --format json`
+  - `barnowl feedback slack --yes --force --format json` with no webhook set, confirming it refuses to post.
 
 ## Microphone Denied Path
 
@@ -319,6 +325,7 @@ This pass is done only when all of the following are true:
 - Denied system-audio permission is visible, retryable, and does not silently downgrade default capture.
 - Previously denied permissions fail quickly with actionable UI and can be retried after the user grants access.
 - Evidence is attached for prompts, app states, logs, chunk metadata, and post-finalize file listings.
+- Installed CLI status, diagnostics export, feedback draft, feedback confirmation guard, and bundled Codex skill guidance are checked against the same app package.
 
 ## Current Implementation Risks To Watch
 

@@ -15,7 +15,8 @@ distribution:
 Manual QA evidence files are generated with scripts/collect-manual-qa-evidence.sh
 and then filled in during the pass. At least one provided evidence file must have
 all Manual Flow Results checkboxes checked, must report zero raw audio files, and
-must include the SHA-256 of the current BarnOwl.app.zip artifact.
+must include the SHA-256 of the current BarnOwl.app.zip artifact. It must also
+show the installed CLI/Codex diagnostics and feedback checks completed.
 EOF
 }
 
@@ -110,6 +111,24 @@ for evidence in "${MANUAL_QA_EVIDENCE[@]}"; do
   if ! grep -qE '^- \[[xX]\] No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors$' "$evidence"; then
     continue
   fi
+  if ! grep -qE '^- \[[xX]\] Installed CLI status command passed$' "$evidence"; then
+    continue
+  fi
+  if ! grep -qE '^- \[[xX]\] CLI start stop wait notes flow passed or was covered by the manual recording flow$' "$evidence"; then
+    continue
+  fi
+  if ! grep -qE '^- \[[xX]\] CLI diagnostics export produced a redacted report$' "$evidence"; then
+    continue
+  fi
+  if ! grep -qE '^- \[[xX]\] CLI feedback Slack draft produced a redacted draft without posting$' "$evidence"; then
+    continue
+  fi
+  if ! grep -qE '^- \[[xX]\] CLI feedback Slack post requires explicit confirmation and configured webhook$' "$evidence"; then
+    continue
+  fi
+  if ! grep -qE '^- \[[xX]\] Bundled Codex skill guidance matches the installed CLI behavior$' "$evidence"; then
+    continue
+  fi
   if ! grep -qE 'Raw audio files: `0`' "$evidence"; then
     continue
   fi
@@ -119,7 +138,7 @@ for evidence in "${MANUAL_QA_EVIDENCE[@]}"; do
 done
 
 [[ -n "$completed_manual_evidence" ]] \
-  || fail "no provided manual QA evidence file matches the current app package SHA and shows all required flow checks complete with zero raw audio files"
+  || fail "no provided manual QA evidence file matches the current app package SHA and shows all required manual, CLI/Codex, diagnostics, feedback, and raw-audio cleanup checks complete"
 
 echo "production_ready=true"
 echo "dist=$DIST_DIR"

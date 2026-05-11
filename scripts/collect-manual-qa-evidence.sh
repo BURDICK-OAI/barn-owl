@@ -184,6 +184,18 @@ Fill these in during the pass:
 - [ ] No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors
 EOF
 
+  append_section "CLI Codex Feedback Results"
+  cat <<'EOF'
+Fill these in during the pass:
+
+- [ ] Installed CLI status command passed
+- [ ] CLI start stop wait notes flow passed or was covered by the manual recording flow
+- [ ] CLI diagnostics export produced a redacted report
+- [ ] CLI feedback Slack draft produced a redacted draft without posting
+- [ ] CLI feedback Slack post requires explicit confirmation and configured webhook
+- [ ] Bundled Codex skill guidance matches the installed CLI behavior
+EOF
+
   append_section "Temp Audio Evidence"
   printf -- '- Chunk root: `%s`\n' "$(redact_path "$CHUNK_ROOT")"
   printf -- '- Metadata files: `%s`\n' "$(file_count "$CHUNK_ROOT" -name '*.json')"
