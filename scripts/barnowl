@@ -14,6 +14,7 @@ import urllib.request
 DEFAULT_URL = "http://127.0.0.1:8765"
 DEFAULT_APP_PATH = "/Applications/Barn Owl.app"
 DEFAULT_TOKEN_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "control-bridge-token"
+DEFAULT_LAUNCH_TIMEOUT_SECONDS = 20
 DEFAULT_FEEDBACK_ERROR_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "last-cli-error.json"
 DEFAULT_FEEDBACK_OWNER_USERNAME = "burdick"
 FEEDBACK_WEBHOOK_ENV = "BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL"
@@ -185,7 +186,11 @@ def retry_after_launch(operation, launch: bool = True) -> dict:
     if response.get("ok") or not launch or "unavailable" not in response.get("message", "").lower():
         return response
     open_barn_owl()
-    deadline = time.monotonic() + 8
+    try:
+        launch_timeout = float(os.environ.get("BARNOWL_LAUNCH_TIMEOUT_SECONDS", DEFAULT_LAUNCH_TIMEOUT_SECONDS))
+    except ValueError:
+        launch_timeout = DEFAULT_LAUNCH_TIMEOUT_SECONDS
+    deadline = time.monotonic() + max(1.0, launch_timeout)
     while time.monotonic() < deadline:
         time.sleep(0.5)
         response = operation()

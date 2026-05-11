@@ -34,25 +34,27 @@ Commands run successfully during this pass:
 - `scripts/verify.sh`
   - Result: `** TEST SUCCEEDED **`
   - Latest observed result bundle:
-    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-10-39--0700.xcresult`
-  - Verified commit: `f4e5e6e`
+    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-25-41--0700.xcresult`
+  - Verified commit: `f4bcf27`
 - `scripts/package-all.sh`
   - Result: created `dist/BarnOwl-source-handoff.zip` and
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
     `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`
   - The package flow now invokes `scripts/verify-release.sh` automatically.
+  - Latest manifest reports commit `f4bcf279262959e96558e5909d474851c05a6d81`
+    with `git_status: clean`.
 - `cd dist && shasum -a 256 -c SHA256SUMS`
   - Result: `BarnOwl-source-handoff.zip: OK`, `BarnOwl.app.zip: OK`, and
     `BarnOwl-release-manifest.json: OK`, and `BarnOwl-update-manifest.json: OK`
   - Current artifact SHA-256 values:
     - `BarnOwl.app.zip`:
-      `f7d5b8642df2ce2799b85d8015cc2eb323634fe9f93ef656b2d1aab47b6164c9`
+      `4f9596143561db28fa526a8eff0767d2e8209346bdc41d9d89b252d70da0378c`
     - `BarnOwl-source-handoff.zip`:
-      `1c507fb39f5701865cd4f5afb16afb8746f4694224eb00ce41f2489d86684abd`
+      `1c1d58b24916e5047ce2dc6ae56765256775eb62144a4a0b025b3b6dbf8ec5eb`
     - `BarnOwl-release-manifest.json`:
-      `c4d4a7c743195a8f6946f6c78a751a50677591ba2010275356b284b524c22d4e`
+      `d76432cbe6df9956ad500c1b02ca3f530ad4aac1e03ab4041f4313a837475350`
     - `BarnOwl-update-manifest.json`:
-      `b4736bed094f6bf9a8f18a173d486b716aa29477ab624893a10f6f925f4b7b9a`
+      `adcc435e7ddfcee0050d21da84054e45990d2bfa0e3d0577fc9ca4ff78d6f0fe`
 - `scripts/verify-dist.sh dist`
   - Result: `dist_check=true`
   - Verified the expected `dist/` file set, source handoff archive,
@@ -79,20 +81,27 @@ Commands run successfully during this pass:
     `manual QA evidence is required; pass --manual-qa-evidence PATH`
 - `scripts/collect-manual-qa-evidence.sh`
   - Result: generated
-    `.build/manual-qa/manual-capture-qa-evidence-20260510-231522.md`
+    `.build/manual-qa/manual-capture-qa-evidence-20260510-232925.md`
   - The evidence file is tied to current app SHA
-    `f7d5b8642df2ce2799b85d8015cc2eb323634fe9f93ef656b2d1aab47b6164c9`,
+    `4f9596143561db28fa526a8eff0767d2e8209346bdc41d9d89b252d70da0378c`,
     but the manual flow checkboxes are intentionally still unchecked.
-- `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-20260510-231522.md`
+- `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-20260510-232925.md`
   - Expected failure until manual QA is performed:
     `no provided manual QA evidence file matches the current app package SHA and shows all required flow checks complete with zero raw audio files`
 - `scripts/install-local-app.sh --yes`
   - Result: installed verified package to `/Applications/Barn Owl.app`
   - Installed version/build: `0.1.0 (7)`
   - Existing app backup:
-    `/Applications/Barn Owl.app.backup.20260511061620`
-  - The install did not launch the app; the next launch should exercise the
-    fresh onboarding path after the local state reset.
+    `/Applications/Barn Owl.app.backup.20260511062932`
+  - Installed CLI smoke after explicit app launch returned
+    `appStatus: running`, `bridgeStatus: running`, `recordingStatus: idle`, and
+    `readinessState: blocked` because no OpenAI API key is configured in the
+    clean onboarding state.
+- `/Applications/Barn Owl.app/Contents/MacOS/barnowl feedback slack --force --format json`
+  - Result: generated a redacted Slack feedback draft and posted nothing.
+  - `barnowl feedback slack --yes` requires
+    `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL`; owner-user suggestions are suppressed
+    by default unless `--force` is provided.
 
 The local package is intentionally lightweight:
 
@@ -115,14 +124,15 @@ The local package is intentionally lightweight:
 | Stop recording and final processing states are obvious | Lifecycle presentation, durable job timeline, processing recovery, and failure/retry tests cover completed, failed, and pending job states. | Covered by tests. |
 | Completed meeting view separates notes/transcript/history | Recorder workspace tests cover live preview versus final transcript separation; persistence tests cover history/search/state. | Covered by tests; manual UI review still useful. |
 | Diagnostics/errors actionable and private | Error formatter and diagnostics log tests cover redaction of API keys, paths, and response bodies; diagnostics log files use restricted permissions; localized setup/capture errors are shown as friendly descriptions instead of internal enum text. Settings now includes **Export Developer Diagnostics**, which writes a redacted Markdown report with app/setup/update/recent error metadata while omitting API keys, private paths, raw audio, transcripts, and diagnostic details that may contain meeting content. | Covered by tests. |
-| CLI/Codex bridge visible state is safe | Control bridge POST commands require bearer-token auth; token file has private permissions; CLI reads token; HTTP auth test covers unauthorized and authorized POST behavior. Control responses and the bundled CLI redact user-visible error fields so persisted job/status errors do not expose API keys or private local paths. | Covered by tests. |
+| CLI/Codex bridge visible state is safe | Control bridge POST commands require bearer-token auth; token file has private permissions; CLI reads token; HTTP auth tests cover unauthorized and authorized POST behavior. The bridge now creates the token before listening so the first authorized POST after first launch does not fail due to lazy token creation. Control responses and the bundled CLI redact user-visible error fields so persisted job/status errors do not expose API keys or private local paths. | Covered by tests and installed CLI smoke. |
+| CLI/Codex users can report failures safely | Control responses can suggest `barnowl feedback slack --yes` for reportable non-owner errors. The CLI defaults to a local redacted draft, requires explicit `--yes` before Slack posting, requires `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL`, suppresses owner-user nudges by default, and filters validation errors such as missing IDs or missing `--yes`. | Covered by tests, CLI compile, secret scan, and installed CLI smoke. |
 | Privacy-forward local storage | SQLite DB, local library files, temp audio metadata/files, diagnostics logs, and local context files restrict permissions. Temp raw audio is finalized/deleted and metadata clears raw paths. | Covered by persistence tests. |
 | Realtime preview separate from final transcript | UI/state tests assert live preview and final transcript separation. Rolling transcription cache is deleted after completed final processing. | Covered by tests. |
 | No secrets in source/packages | `scripts/scan-secrets.sh` is run by `scripts/verify.sh` and source handoff packaging. | Covered by scripts; scanner remains pattern-based. |
 | App builds | `scripts/verify.sh` regenerates project when XcodeGen is available, cleans, and runs the Barn Owl test suite. It resolves XcodeGen from the bundled local copy or `PATH`; sanitized source handoffs can also fall back to the included generated `BarnOwl.xcodeproj` with a warning. | Passing. |
 | Relevant tests pass | Latest verifier passed across core, audio, OpenAI, transcription, context, notes, and persistence tests. | Passing. |
 | App packages correctly | `scripts/package-all.sh` builds source and app zips, writes `dist/BarnOwl-release-manifest.json`, `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`, then runs `scripts/verify-dist.sh` to validate the expected dist file set, source handoff archive, checksums, release/update manifest SHA-256 values, and app release gate. `scripts/package-app.sh` uses `ditto -c -k --keepParent` to preserve signing metadata for bundled executables and signs lightweight internal packages ad hoc with hardened runtime. | Passing for lightweight internal artifacts. |
-| Clean local install path exists | `scripts/install-local-app.sh --yes` verifies `dist/BarnOwl.app.zip`, extracts and validates the Barn Owl bundle id, backs up an existing destination app, installs to `/Applications/Barn Owl.app` by default, and verifies the installed signature. It preserves local user data by default. `--reset-state` is explicitly destructive and test-only for fresh onboarding QA. | Executed against `/Applications/Barn Owl.app`; app not launched yet. |
+| Clean local install path exists | `scripts/install-local-app.sh --yes` verifies `dist/BarnOwl.app.zip`, extracts and validates the Barn Owl bundle id, backs up an existing destination app, installs to `/Applications/Barn Owl.app` by default, and verifies the installed signature. It preserves local user data by default. `--reset-state` is explicitly destructive and test-only for fresh onboarding QA. | Executed against `/Applications/Barn Owl.app`; installed app launches and bridge status responds. |
 | Release gate exists | `scripts/verify-release.sh` validates local/internal artifacts, exact app archive shape, absence of bundled local/private state, required macOS privacy usage descriptions, required code-signing entitlements, bundled CLI, bundled Codex skill resources, valid code signature, and hardened runtime. | Present and exercised. |
 | Local and Git-style update artifacts are verified | `scripts/update-local.sh` and `scripts/publish-local-update.sh` sign local update apps with hardened runtime; `publish-local-update.sh` runs `scripts/verify-release.sh` on the generated update archive before writing the manifest. `scripts/package-all.sh` now writes `BarnOwl-update-manifest.json` for Git-hosted or ad-hoc update feeds. Remote update installs require HTTPS, checksum, valid Barn Owl bundle identity, and a valid app signature; ad-hoc signatures are allowed for the lightweight internal path. The app checks on launch, periodically while idle, and when the user asks. | Verified by packaging gates; updater policy covered by focused tests and needs full app smoke after install. |
 | Lightweight internal distribution ready | The app package is ad-hoc signed with hardened runtime, checksummed, and paired with an update manifest. Gatekeeper friction is expected on first launch because the app is intentionally not Developer ID notarized. A release candidate must pass `scripts/verify-dist.sh dist`, then clean-machine capture QA. | Packaging ready; clean-machine manual QA still required. |
