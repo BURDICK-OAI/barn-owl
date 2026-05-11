@@ -34,16 +34,17 @@ Commands run successfully during this pass:
 - `scripts/verify.sh`
   - Result: `** TEST SUCCEEDED **`
   - Latest observed result bundle:
-    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-25-41--0700.xcresult`
-  - Verified the Barn Owl test suite after the production-readiness hardening
-    changes. Run again after any source change before release.
+    `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-48-18--0700.xcresult`
+  - Verified the Barn Owl test suite after the draft-first Slack feedback and
+    installed-app QA evidence updates. Run again after any source change before
+    release.
 - `scripts/package-all.sh`
   - Result: created `dist/BarnOwl-source-handoff.zip` and
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
     `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`
   - The package flow now invokes `scripts/verify-release.sh` automatically.
-  - Before sharing, confirm `dist/BarnOwl-release-manifest.json` reports the
-    intended commit with `git_status: clean`.
+  - Current manifest reports commit
+    `c7da196fb54823d1689d2743dcf2fa3858df8522` with `git_status: clean`.
 - `cd dist && shasum -a 256 -c SHA256SUMS`
   - Result: `BarnOwl-source-handoff.zip: OK`, `BarnOwl.app.zip: OK`, and
     `BarnOwl-release-manifest.json: OK`, and `BarnOwl-update-manifest.json: OK`
@@ -75,25 +76,37 @@ Commands run successfully during this pass:
   - Expected failure without manual QA evidence:
     `manual QA evidence is required; pass --manual-qa-evidence PATH`
 - `scripts/collect-manual-qa-evidence.sh`
-  - Result: generates `.build/manual-qa/manual-capture-qa-evidence-*.md`.
-  - The evidence file records the current `dist/BarnOwl.app.zip` SHA. The
-    manual flow checkboxes are intentionally unchecked until a real capture/TCC
-    pass is performed.
+  - Latest evidence file:
+    `.build/manual-qa/manual-capture-qa-evidence-20260510-235046.md`
+  - The evidence file records the current `dist/BarnOwl.app.zip` SHA
+    `048654d666147af35ac2b9cc464f8587e2a2f3649c69d4e142e14e9eb86e160b`,
+    installed bundle metadata, installed code-signature/hardened-runtime state,
+    bundled CLI presence, bundled Codex skill presence, temp audio counts, and
+    redacted diagnostics metadata. The manual flow checkboxes are intentionally
+    unchecked until a real capture/TCC pass is performed.
 - `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-*.md`
-  - Expected failure until manual QA is performed:
-    `no provided manual QA evidence file matches the current app package SHA and shows all required flow checks complete with zero raw audio files`
+  - Current expected failure is limited to unchecked manual capture/TCC evidence:
+    first-run grant, microphone denied, system-audio denied, previously denied
+    retry, permission revoked while recording, source-unavailable case, final
+    notes/transcript visibility, live-preview/final-transcript separation, and
+    privacy review of user-facing errors.
 - `scripts/install-local-app.sh --yes`
   - Result: installed verified package to `/Applications/Barn Owl.app`
   - Installed version/build: `0.1.0 (7)`
-  - Installed CLI smoke after explicit app launch returned
-    `appStatus: running`, `bridgeStatus: running`, `recordingStatus: idle`, and
-    `readinessState: blocked` because no OpenAI API key is configured in the
-    clean onboarding state.
+  - Current installed app metadata: bundle id `com.barnowl.mac`, ad-hoc
+    signature, hardened runtime, bundled CLI executable, and bundled Codex skill
+    present. The install preserved user data; the previous app was backed up to
+    `/Applications/Barn Owl.app.backup.20260511065039`.
 - `/Applications/Barn Owl.app/Contents/MacOS/barnowl feedback slack --force --format json`
   - Result: generated a redacted Slack feedback draft and posted nothing.
   - `barnowl feedback slack --yes` requires
     `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL`; owner-user suggestions are suppressed
     by default unless `--force` is provided.
+- `scripts/verify-cli-codex-qa.sh --evidence .build/manual-qa/manual-capture-qa-evidence-20260510-235046.md`
+  - Result: `cli_codex_qa=true`
+  - Verified installed CLI status, redacted diagnostics export, draft-only Slack
+    feedback behavior, missing-webhook post guard, and bundled Codex skill
+    guidance against `/Applications/Barn Owl.app/Contents/MacOS/barnowl`.
 
 The local package is intentionally lightweight:
 
