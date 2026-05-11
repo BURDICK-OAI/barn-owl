@@ -222,7 +222,13 @@ struct MenuBarView: View {
             }
 
             if model.status == .recording {
-                Label(model.realtimeStatus, systemImage: "waveform")
+                Label("Realtime preview: \(model.realtimeStatus)", systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Label("High-quality pass: \(model.finalTranscriptionStatus)", systemImage: "text.magnifyingglass")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.62))
                     .frame(maxWidth: .infinity, alignment: .leading)

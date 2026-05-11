@@ -31,7 +31,8 @@ func controlResponseEncodesMachineReadableStatus() throws {
         status: "Recording",
         sessionID: UUID(uuidString: "00000000-0000-0000-0000-00000000C002"),
         title: "Roadmap Review",
-        realtimeStatus: "Realtime transcription streaming."
+        realtimeStatus: "Realtime transcription streaming.",
+        finalTranscriptionStatus: "Processing saved chunks while you record."
     )
 
     let data = try JSONEncoder().encode(response)
@@ -133,6 +134,24 @@ func controlCommandNameIncludesCodexPrimaryCases() {
     #expect(names.contains("context_delete"))
     #expect(names.contains("meeting_delete"))
     #expect(names.contains("meeting_purge_temp_audio"))
+    #expect(names.contains("diagnostics_export"))
+}
+
+@Test
+func diagnosticsExportCommandDecodesOutputPath() throws {
+    let data = Data(
+        """
+        {
+          "command": "diagnostics_export",
+          "outputPath": "/tmp/BarnOwl-diagnostics.md"
+        }
+        """.utf8
+    )
+
+    let command = try JSONDecoder().decode(BarnOwlControlCommand.self, from: data)
+
+    #expect(command.command == .diagnosticsExport)
+    #expect(command.outputPath == "/tmp/BarnOwl-diagnostics.md")
 }
 
 @Test
@@ -255,10 +274,12 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
         readinessState: "ready",
         setupReady: true,
         apiKeyConfigured: true,
+        apiKeyVerified: true,
         notesReady: false,
         transcriptReady: true,
         summaryReady: false,
         markdownPath: "/tmp/meeting.md",
+        diagnosticsPath: "/tmp/BarnOwl-diagnostics.md",
         lastError: "No recorded audio files.",
         nextCommand: "barnowl jobs retry --session \(meetingID.uuidString)"
     )
@@ -268,5 +289,6 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
 
     #expect(decoded == response)
     #expect(decoded.jobs?.first?.status == "failed")
+    #expect(decoded.diagnosticsPath == "/tmp/BarnOwl-diagnostics.md")
     #expect(decoded.nextCommand?.contains("jobs retry") == true)
 }

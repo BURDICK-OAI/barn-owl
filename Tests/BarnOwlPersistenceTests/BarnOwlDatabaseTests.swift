@@ -252,6 +252,7 @@ func barnOwlDatabaseStoresRollingTranscriptionCacheByChunkIdentity() async throw
     ])
 
     #expect(try await cache.markRunning(key: key, audioFile: audioFile, modelIdentifier: "model-a"))
+    #expect(!(try await cache.markRunning(key: key, audioFile: audioFile, modelIdentifier: "model-a")))
     try await cache.markCompleted(key: key, audioFile: audioFile, modelIdentifier: "model-a", response: response)
     #expect(!(try await cache.markRunning(key: key, audioFile: audioFile, modelIdentifier: "model-a")))
 

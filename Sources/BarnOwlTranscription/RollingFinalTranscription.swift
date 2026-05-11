@@ -116,17 +116,23 @@ public struct CachedAudioFileTranscriptionClient: AudioFileTranscriptionClient {
     private let wrapped: any AudioFileTranscriptionClient
     private let cacheStore: any RollingFinalTranscriptionCacheStore
     private let modelIdentifier: String?
+    private let existingRunningWaitTimeout: TimeInterval
+    private let existingRunningPollInterval: TimeInterval
 
     public init(
         sessionID: UUID,
         wrapped: any AudioFileTranscriptionClient,
         cacheStore: any RollingFinalTranscriptionCacheStore,
-        modelIdentifier: String? = nil
+        modelIdentifier: String? = nil,
+        existingRunningWaitTimeout: TimeInterval = 15,
+        existingRunningPollInterval: TimeInterval = 0.15
     ) {
         self.sessionID = sessionID
         self.wrapped = wrapped
         self.cacheStore = cacheStore
         self.modelIdentifier = modelIdentifier
+        self.existingRunningWaitTimeout = max(0, existingRunningWaitTimeout)
+        self.existingRunningPollInterval = max(0.01, existingRunningPollInterval)
     }
 
     public func transcribe(audioFile: RecordedAudioFile) async throws -> AudioFileTranscriptionResponse {
@@ -138,11 +144,17 @@ public struct CachedAudioFileTranscriptionClient: AudioFileTranscriptionClient {
             return cached
         }
 
-        _ = try? await cacheStore.markRunning(
+        let shouldTranscribe = (try? await cacheStore.markRunning(
             key: key,
             audioFile: audioFile,
             modelIdentifier: modelIdentifier
-        )
+        )) ?? true
+
+        if !shouldTranscribe,
+           let cached = try? await waitForCompletedResponse(for: key) {
+            return cached
+        }
+
         do {
             let response = try await wrapped.transcribe(audioFile: audioFile)
             try? await cacheStore.markCompleted(
@@ -161,6 +173,20 @@ public struct CachedAudioFileTranscriptionClient: AudioFileTranscriptionClient {
             )
             throw error
         }
+    }
+
+    private func waitForCompletedResponse(
+        for key: RollingFinalTranscriptionKey
+    ) async throws -> AudioFileTranscriptionResponse? {
+        let deadline = Date().addingTimeInterval(existingRunningWaitTimeout)
+        while Date() < deadline {
+            if let cached = try await cacheStore.completedResponse(for: key, modelIdentifier: modelIdentifier) {
+                return cached
+            }
+            let nanoseconds = UInt64(existingRunningPollInterval * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+        }
+        return try await cacheStore.completedResponse(for: key, modelIdentifier: modelIdentifier)
     }
 }
 

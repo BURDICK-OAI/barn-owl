@@ -273,6 +273,8 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             return await model.controlContextDeleteResponse(itemID: contextItemID)
         case .chat:
             return await model.controlChatResponse(question: command.query ?? command.prompt ?? "")
+        case .diagnosticsExport:
+            return await model.controlExportDeveloperDiagnosticsResponse(outputPath: command.outputPath)
         case .startRecording, .stopRecording, .addContext, .appendContext, .setTitle, .renameMeeting, .askNotes, .openLatestMeeting:
             guard let quickCommand = command.quickCommand else {
                 return model.controlStatusResponse(ok: false, message: "Unsupported quick command.", error: "unsupported_quick_command")

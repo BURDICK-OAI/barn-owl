@@ -356,16 +356,43 @@ struct RecorderWindow: View {
             }
 
             if model.status == .recording {
-                Label(model.realtimeStatus, systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(textAlignment)
-                    .frame(maxWidth: maxStatusWidth, alignment: frameAlignment)
-                    .fixedSize(horizontal: false, vertical: true)
+                pipelineStatusLabel(
+                    "Realtime preview",
+                    status: model.realtimeStatus,
+                    systemImage: "waveform",
+                    textAlignment: textAlignment,
+                    frameAlignment: frameAlignment,
+                    maxStatusWidth: maxStatusWidth
+                )
+
+                pipelineStatusLabel(
+                    "High-quality pass",
+                    status: model.finalTranscriptionStatus,
+                    systemImage: "text.magnifyingglass",
+                    textAlignment: textAlignment,
+                    frameAlignment: frameAlignment,
+                    maxStatusWidth: maxStatusWidth
+                )
             }
 
         }
+    }
+
+    private func pipelineStatusLabel(
+        _ title: String,
+        status: String,
+        systemImage: String,
+        textAlignment: TextAlignment,
+        frameAlignment: Alignment,
+        maxStatusWidth: CGFloat?
+    ) -> some View {
+        Label("\(title): \(status)", systemImage: systemImage)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .multilineTextAlignment(textAlignment)
+            .frame(maxWidth: maxStatusWidth, alignment: frameAlignment)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func noteWorkspace(isCompact: Bool) -> some View {
@@ -1491,7 +1518,12 @@ struct RecorderWindow: View {
                 .foregroundStyle(model.lifecyclePresentation.tint)
 
             if model.status == .recording {
-                Label(model.realtimeStatus, systemImage: "waveform")
+                Label("Realtime preview: \(model.realtimeStatus)", systemImage: "waveform")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Label("High-quality pass: \(model.finalTranscriptionStatus)", systemImage: "text.magnifyingglass")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1934,6 +1966,7 @@ struct RecorderWindow: View {
         let parts = [
             model.status == .recording ? "Recording elapsed: \(model.recordingElapsedText)" : nil,
             model.realtimeStatus.isEmpty ? nil : "Realtime: \(model.realtimeStatus)",
+            model.finalTranscriptionStatus == BarnOwlAppModel.finalTranscriptionIdleStatus ? nil : "High-quality: \(model.finalTranscriptionStatus)",
             model.performanceSummaryText.isEmpty ? nil : "Performance: \(model.performanceSummaryText)",
             model.captureStatus == "Idle." ? nil : "Capture: \(model.captureStatus)"
         ]

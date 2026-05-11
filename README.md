@@ -77,11 +77,12 @@ settings, and Keychain data by default. It clears Barn Owl local app data,
 Keychain state, and macOS permission decisions only when `--reset-state` is
 passed for fresh-onboarding QA.
 
-If a user hits an error, ask them to open Barn Owl Settings and choose
-**Export Developer Diagnostics**. The exported Markdown report is designed for
-Slack or issue feedback: it includes app/setup/update/recent error metadata and
-redacts API keys, private paths, raw audio, transcripts, and diagnostic details
-that may contain meeting content.
+If a user hits an error, ask them to run
+`barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md` or open Barn
+Owl Settings and choose **Export Developer Diagnostics**. The exported Markdown
+report is designed for Slack or issue feedback: it includes app/setup/update/
+recent error metadata and redacts API keys, private paths, raw audio,
+transcripts, and diagnostic details that may contain meeting content.
 
 ## Distribution
 
@@ -140,7 +141,9 @@ The `scripts/barnowl` helper talks to the running app over the local control bri
 scripts/barnowl status
 scripts/barnowl start --title "Design Review"
 scripts/barnowl stop
+scripts/barnowl wait --latest --until complete --timeout 10m
 scripts/barnowl meetings recent --limit 5
+scripts/barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md
 ```
 
 ## Privacy Notes

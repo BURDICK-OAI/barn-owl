@@ -32,6 +32,9 @@ enum BarnOwlErrorFormatter {
         var sanitized = text
         let replacements: [(String, String)] = [
             (#"sk-[A-Za-z0-9_\-]{8,}"#, "[redacted API key]"),
+            (#"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9._~+/\-=]{8,}"#, "$1[redacted bearer token]"),
+            (#"(?i)\b(OPENAI_API_KEY|BARNOWL_API_KEY_TO_INSTALL)\s*=\s*[^\s"']+"#, "$1=[redacted secret]"),
+            (#"(?i)"(api[_-]?key|openai[_-]?api[_-]?key|authorization)"\s*:\s*"[^"]+""#, #""$1":"[redacted secret]""#),
             (#"/Users/[^\n\r\t]+/Library/Application Support/[^\n\r\t]+"#, "[redacted local path]"),
             (#"/Users/[^/\s]+/[^\n\r\t ]*"#, "[redacted local path]"),
             (#"/private/(tmp|var)/[^\n\r\t ]*"#, "[redacted local path]"),

@@ -466,6 +466,7 @@ final class BarnOwlAppModel: ObservableObject {
     @Published var recentSessions: [BarnOwlRecentSession] = []
     @Published var activityItems: [BarnOwlActivityItem] = []
     @Published var captureStatus = "Idle."
+    @Published var finalTranscriptionStatus = "Idle."
     @Published var progressFraction: Double?
     @Published var displayedNote: BarnOwlDisplayedNote?
     @Published var noteDraft = ""
@@ -550,6 +551,7 @@ final class BarnOwlAppModel: ObservableObject {
     private var recordingHealthStartedAt: Date?
     private var didWarnRealtimeNoTranscript = false
     private var didWarnRealtimeFallback = false
+    private var rollingFinalTranscriptionQueuedChunkCount = 0
     private var jobRunnerTask: Task<Void, Never>?
     private var jobRunnerWakeTask: Task<Void, Never>?
     private var updateAvailabilityTimer: AnyCancellable?
@@ -559,6 +561,7 @@ final class BarnOwlAppModel: ObservableObject {
     private static let realtimePreviewPublishInterval: TimeInterval = 0.85
     private static let realtimePersistenceInterval: TimeInterval = 5
     private static let realtimePreviewCharacterLimit = 1_200
+    static let finalTranscriptionIdleStatus = "Idle."
     private static let autoStopSilenceInterval: TimeInterval = 15 * 60
     private static let autoStopSilenceRMSThreshold: Double = 0.01
     private static let periodicUpdateCheckInterval: TimeInterval = 6 * 60 * 60
@@ -819,8 +822,10 @@ final class BarnOwlAppModel: ObservableObject {
                 cacheStore: rollingCache,
                 modelIdentifier: OpenAIModelCatalog.finalDiarization
             )
+            finalTranscriptionStatus = "Processing saved chunks while you record."
         } catch {
             rollingFinalTranscriptionCoordinator = nil
+            finalTranscriptionStatus = "Will run after recording stops."
             recordActivity(
                 level: .warning,
                 category: "transcription",
@@ -839,11 +844,12 @@ final class BarnOwlAppModel: ObservableObject {
             { [weak self] chunk in
                 Task.detached(priority: .userInitiated) {
                     let level = Self.audioActivityLevel(forPCM16Data: chunk.pcm16Data)
+                    let rmsLevel = RMSLevelMeter.rmsLevel(forPCM16Data: chunk.pcm16Data)
                     await MainActor.run {
                         self?.handleRealtimeAudioActivity(
                             level: level,
+                            rmsLevel: rmsLevel,
                             trackKind: chunk.trackKind,
-                            pcm16Data: chunk.pcm16Data,
                             sessionID: session.id
                         )
                     }
@@ -922,7 +928,8 @@ final class BarnOwlAppModel: ObservableObject {
         stopElapsedTimer(reset: false)
         await stopLiveTranscription()
         await drainRollingFinalTranscriptionEnqueues()
-        await rollingFinalTranscriptionCoordinator?.finishAndDrain(timeout: .seconds(20))
+        finalTranscriptionStatus = "Finishing saved chunks."
+        await rollingFinalTranscriptionCoordinator?.finishAndDrain(timeout: .seconds(2))
         rollingFinalTranscriptionCoordinator = nil
         recordPerformance(.phase(.realtimePreview, .finished, at: Self.performanceNow(), model: OpenAIModelCatalog.liveTranscription))
         apply(stateMachine.beginProcessing())
@@ -989,6 +996,7 @@ final class BarnOwlAppModel: ObservableObject {
             progressFraction = nil
             liveTranscriptPreview = "Final processing queued in the background."
             captureStatus = "Final transcript job queued. You can keep using Barn Owl."
+            finalTranscriptionStatus = "Final transcript and notes are running in the background."
             noteActionStatus = "Final processing queued."
             recordActivity(
                 category: "jobs",
@@ -2177,7 +2185,7 @@ final class BarnOwlAppModel: ObservableObject {
             await self.jobRunner.runAvailableJobs(
                 progress: { [weak self] progress in
                     guard let self else { return }
-                    if let sessionID = self.activeSession?.id ?? self.displayedNote?.id {
+                    if let sessionID = progress.sessionID ?? self.activeSession?.id ?? self.displayedNote?.id {
                         self.handleMeetingProcessingProgress(progress, sessionID: sessionID)
                     } else {
                         self.recordActivity(
@@ -2345,6 +2353,7 @@ final class BarnOwlAppModel: ObservableObject {
         transcriptReady: Bool? = nil,
         summaryReady: Bool? = nil,
         markdownPath: String? = nil,
+        diagnosticsPath: String? = nil,
         nextCommand: String? = nil,
         errorCode: String? = nil,
         error: String? = nil
@@ -2366,6 +2375,7 @@ final class BarnOwlAppModel: ObservableObject {
             title: activeSession?.title ?? displayedNote?.title,
             meetingType: Self.markdownMeetingType(in: noteDraft),
             realtimeStatus: Self.sanitizedControlString(realtimeStatus),
+            finalTranscriptionStatus: Self.sanitizedControlString(finalTranscriptionStatus),
             captureStatus: Self.sanitizedControlString(captureStatus),
             liveTranscriptPreview: liveTranscriptPreview,
             contextItemID: contextItemID,
@@ -2386,10 +2396,12 @@ final class BarnOwlAppModel: ObservableObject {
             readinessState: readinessState,
             setupReady: apiKeyVerified && recordingReadinessSummary.state != .blocked,
             apiKeyConfigured: apiKeyConfigured,
+            apiKeyVerified: apiKeyVerified,
             notesReady: notesReady ?? notes.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             transcriptReady: transcriptReady ?? transcript.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             summaryReady: summaryReady ?? summary.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             markdownPath: markdownPath,
+            diagnosticsPath: diagnosticsPath,
             lastError: Self.sanitizedControlString(lastError),
             nextCommand: nextCommand,
             errorCode: errorCode ?? Self.sanitizedControlString(error),
@@ -3090,6 +3102,30 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func controlExportDeveloperDiagnosticsResponse(outputPath: String?) async -> BarnOwlControlResponse {
+        do {
+            let outputURL = Self.developerDiagnosticsExportURL(outputPath: outputPath)
+            let entries = try await diagnosticsStore.recentEntries(limit: 80)
+            let snapshot = BarnOwlDeveloperDiagnosticsExporter.makeSnapshot(
+                readinessLines: BarnOwlSettingsReadinessChecks.lines(),
+                diagnosticsEntries: entries
+            )
+            let report = BarnOwlDeveloperDiagnosticsExporter.makeReport(snapshot)
+            try BarnOwlDeveloperDiagnosticsExporter.export(report, to: outputURL)
+            return controlStatusResponse(
+                message: "Exported redacted developer diagnostics.",
+                diagnosticsPath: outputURL.path(percentEncoded: false),
+                nextCommand: "Share the diagnostics file with the Barn Owl maintainer."
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not export developer diagnostics.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
     func controlAskNotesResponse(question: String, meetingID requestedMeetingID: UUID? = nil) async -> BarnOwlControlResponse {
         let cleanedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedQuestion.isEmpty else {
@@ -3220,6 +3256,16 @@ final class BarnOwlAppModel: ObservableObject {
         return snippet.isEmpty
             ? "I found \(state.title), but it does not have enough notes yet to answer that directly."
             : "\(state.title): \(snippet)"
+    }
+
+    private static func developerDiagnosticsExportURL(outputPath: String?) -> URL {
+        if let outputPath = outputPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !outputPath.isEmpty {
+            return URL(fileURLWithPath: outputPath).standardizedFileURL
+        }
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        return downloads.appending(path: BarnOwlDeveloperDiagnosticsExporter.defaultFileName())
     }
 
     private func controlMarkdown(for meetingID: UUID, database: BarnOwlDatabase) async -> String {
@@ -3451,6 +3497,8 @@ final class BarnOwlAppModel: ObservableObject {
             await coordinator.enqueue(audioFile)
         }
         rollingFinalTranscriptionEnqueueTasks.append(enqueueTask)
+        rollingFinalTranscriptionQueuedChunkCount += 1
+        finalTranscriptionStatus = "Processing saved audio chunks (\(rollingFinalTranscriptionQueuedChunkCount) queued)."
     }
 
     private func drainRollingFinalTranscriptionEnqueues() async {
@@ -3507,6 +3555,7 @@ final class BarnOwlAppModel: ObservableObject {
         persistProcessingStage(message: progress.message, sessionID: sessionID)
         progressFraction = progress.progressFraction
         captureStatus = progress.message
+        finalTranscriptionStatus = progress.message
         if let transcriptPreview = progress.transcriptPreview,
            transcriptPreview.isEmpty == false {
             if !didRecordFirstFinalTranscript {
@@ -3644,6 +3693,7 @@ final class BarnOwlAppModel: ObservableObject {
                 updatePreview: false
             )
             captureStatus = "Saved final transcript, but temporary audio cleanup needs attention."
+            finalTranscriptionStatus = "Final transcript saved; cleanup needs attention."
             progressFraction = 1
             await refreshRecoveryAttentionItems()
             return
@@ -3654,6 +3704,7 @@ final class BarnOwlAppModel: ObservableObject {
         progressFraction = 1
         liveTranscriptPreview = "Saved notes to \(markdownURL.lastPathComponent)."
         captureStatus = "Saved final transcript. Temporary audio deleted."
+        finalTranscriptionStatus = "Final transcript and notes saved."
         recordActivity(
             category: "jobs",
             message: "Final transcript job complete.",
@@ -3696,6 +3747,7 @@ final class BarnOwlAppModel: ObservableObject {
             )
         }
         captureStatus = message
+        finalTranscriptionStatus = message
         await refreshJobSummaries()
         await refreshRecoveryAttentionItems()
         if let sessionID {
@@ -3946,6 +3998,7 @@ final class BarnOwlAppModel: ObservableObject {
         didRecordTranscriptionStart = false
         didWarnRealtimeNoTranscript = false
         didWarnRealtimeFallback = false
+        rollingFinalTranscriptionQueuedChunkCount = 0
         realtimeLiveSegmentSequence = 0
         lastRealtimePersistenceAt = .distantPast
         tempAudioByteCount = 0
@@ -3975,6 +4028,7 @@ final class BarnOwlAppModel: ObservableObject {
         progressFraction = nil
         realtimeDraft = ""
         realtimeStatus = "Realtime transcription idle."
+        finalTranscriptionStatus = Self.finalTranscriptionIdleStatus
         realtimeHealthState = .idle
         liveTranscriptPreview = "Starting a fresh recording..."
         captureStatus = "Starting."
@@ -3983,6 +4037,7 @@ final class BarnOwlAppModel: ObservableObject {
     private func resetMenuCaptureStatusAfterCompletion() {
         liveTranscriptPreview = "Ready."
         captureStatus = "Idle."
+        finalTranscriptionStatus = Self.finalTranscriptionIdleStatus
         progressFraction = nil
         lastError = nil
         realtimeStatus = "Realtime transcription idle."
@@ -4106,8 +4161,8 @@ final class BarnOwlAppModel: ObservableObject {
 
     private func handleRealtimeAudioActivity(
         level: Double,
+        rmsLevel: Double,
         trackKind: AudioTrackKind,
-        pcm16Data: Data,
         sessionID: UUID
     ) {
         guard activeSession?.id == sessionID,
@@ -4116,8 +4171,8 @@ final class BarnOwlAppModel: ObservableObject {
             return
         }
 
-        updateRecordingHealth(trackKind: trackKind, pcm16Data: pcm16Data)
-        if RMSLevelMeter.rmsLevel(forPCM16Data: pcm16Data) > Self.autoStopSilenceRMSThreshold {
+        updateRecordingHealth(trackKind: trackKind, rmsLevel: rmsLevel)
+        if rmsLevel > Self.autoStopSilenceRMSThreshold {
             lastAudibleAudioAt = Date()
         } else {
             checkSilenceAutoStop(sessionID: sessionID)
@@ -4159,7 +4214,7 @@ final class BarnOwlAppModel: ObservableObject {
         publishRecordingReadinessSummary()
     }
 
-    private func updateRecordingHealth(trackKind: AudioTrackKind, pcm16Data: Data) {
+    private func updateRecordingHealth(trackKind: AudioTrackKind, rmsLevel: Double) {
         guard let source = RecordingHealthSourceKind(trackKind: trackKind),
               let startedAt = recordingHealthStartedAt
         else {
@@ -4170,7 +4225,7 @@ final class BarnOwlAppModel: ObservableObject {
         snapshot.isEnabled = true
         snapshot.isCapturing = true
         snapshot.recordRMSLevel(
-            RMSLevelMeter.rmsLevel(forPCM16Data: pcm16Data),
+            rmsLevel,
             at: Date().timeIntervalSince(startedAt)
         )
         recordingHealth.replaceSourceSnapshot(snapshot)

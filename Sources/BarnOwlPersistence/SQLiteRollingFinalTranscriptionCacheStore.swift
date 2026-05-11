@@ -43,7 +43,7 @@ public struct SQLiteRollingFinalTranscriptionCacheStore: RollingFinalTranscripti
             trackID: key.trackID,
             sequenceNumber: key.sequenceNumber
         ),
-            existing.status == .completed,
+            (existing.status == .completed || existing.status == .running),
             modelIdentifier == nil || existing.modelIdentifier == modelIdentifier {
             return false
         }

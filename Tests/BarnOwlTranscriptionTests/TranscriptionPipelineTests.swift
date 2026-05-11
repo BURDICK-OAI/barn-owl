@@ -461,6 +461,52 @@ func cachedTranscriptionClientRetriesFailedCacheResult() async throws {
 }
 
 @Test
+func cachedTranscriptionClientWaitsForRunningCacheResultBeforeDuplicatingWork() async throws {
+    let sessionID = UUID()
+    let key = RollingFinalTranscriptionKey(
+        sessionID: sessionID,
+        trackID: "microphone",
+        sequenceNumber: 0
+    )
+    let audioFile = RecordedAudioFile(
+        url: URL(fileURLWithPath: "/tmp/running.wav"),
+        trackLabel: "Microphone",
+        sequenceNumber: 0,
+        trackID: "microphone"
+    )
+    let response = AudioFileTranscriptionResponse(segments: [
+        AudioFileTranscriptionSegment(text: "Already running.", startTime: 0, endTime: 1)
+    ])
+    let wrapped = CountingAudioFileTranscriptionClient(response: AudioFileTranscriptionResponse(segments: [
+        AudioFileTranscriptionSegment(text: "Duplicate work.", startTime: 0, endTime: 1)
+    ]))
+    let cache = InMemoryRollingCache(statuses: [key: .running])
+    let client = CachedAudioFileTranscriptionClient(
+        sessionID: sessionID,
+        wrapped: wrapped,
+        cacheStore: cache,
+        existingRunningWaitTimeout: 1,
+        existingRunningPollInterval: 0.01
+    )
+
+    let task = Task {
+        try await client.transcribe(audioFile: audioFile)
+    }
+    try await Task.sleep(nanoseconds: 30_000_000)
+    try await cache.markCompleted(
+        key: key,
+        audioFile: audioFile,
+        modelIdentifier: nil,
+        response: response
+    )
+
+    let returned = try await task.value
+
+    #expect(returned == response)
+    #expect(await wrapped.callCount == 0)
+}
+
+@Test
 func rollingCoordinatorEnqueueReturnsWithoutWaitingForSlowTranscription() async throws {
     let sessionID = UUID()
     let audioFile = RecordedAudioFile(
@@ -595,7 +641,7 @@ private actor InMemoryRollingCache: RollingFinalTranscriptionCacheStore {
         modelIdentifier: String?
     ) async throws -> Bool {
         _ = audioFile
-        if statuses[key] == .completed,
+        if (statuses[key] == .completed || statuses[key] == .running),
            modelIdentifier == nil || modelIdentifiers[key] == modelIdentifier {
             return false
         }

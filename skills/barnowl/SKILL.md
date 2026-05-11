@@ -92,6 +92,7 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Chat over meetings: `barnowl chat "What did we decide about Acme?"`
 - Delete meeting: `barnowl meeting delete <meeting-id> --yes`
 - Purge temp audio: `barnowl meeting purge-temp-audio <meeting-id> --yes`
+- Developer diagnostics: `barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md`
 
 All commands return JSON by default. Prefer JSON while deciding what to do next. Use `--format markdown` for final notes, transcripts, summaries, status checklists, and job reports.
 
@@ -138,4 +139,3 @@ barnowl jobs list --session <uuid> --format markdown
 barnowl jobs retry --session <uuid>
 barnowl wait --session <uuid> --until complete --timeout 10m
 ```
-

@@ -24,6 +24,7 @@ struct MeetingProcessingProgress: Sendable {
     var progressFraction: Double?
     var transcriptPreview: String?
     var performanceEvents: [PerformanceMetricEvent]
+    var sessionID: UUID?
 
     init(
         level: DiagnosticsLogLevel = .info,
@@ -32,7 +33,8 @@ struct MeetingProcessingProgress: Sendable {
         details: String? = nil,
         progressFraction: Double? = nil,
         transcriptPreview: String? = nil,
-        performanceEvents: [PerformanceMetricEvent] = []
+        performanceEvents: [PerformanceMetricEvent] = [],
+        sessionID: UUID? = nil
     ) {
         self.level = level
         self.category = category
@@ -41,6 +43,13 @@ struct MeetingProcessingProgress: Sendable {
         self.progressFraction = progressFraction
         self.transcriptPreview = transcriptPreview
         self.performanceEvents = performanceEvents
+        self.sessionID = sessionID
+    }
+
+    func scoped(to sessionID: UUID) -> MeetingProcessingProgress {
+        var copy = self
+        copy.sessionID = sessionID
+        return copy
     }
 }
 
@@ -246,7 +255,16 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         session: RecordingSession,
         progress: MeetingProcessingProgressHandler? = nil
     ) async throws -> URL {
-        await progress?(MeetingProcessingProgress(
+        let scopedProgress: MeetingProcessingProgressHandler?
+        if let progress {
+            scopedProgress = { update in
+                progress(update.scoped(to: session.id))
+            }
+        } else {
+            scopedProgress = nil
+        }
+
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Looking for captured audio...",
             progressFraction: 0.05
         ))
@@ -255,13 +273,13 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         guard !audioFiles.isEmpty else {
             throw BarnOwlMeetingProcessingError.noRecordedAudioFiles(session.id)
         }
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Found \(audioFiles.count) audio chunk(s).",
             details: audioFiles.map { "\($0.trackLabel): \($0.url.lastPathComponent)" }.joined(separator: "\n"),
             progressFraction: 0.1
         ))
 
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Preparing OpenAI clients...",
             progressFraction: 0.15
         ))
@@ -282,14 +300,14 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         }
         let transcriptionClient = ProgressReportingAudioFileTranscriptionClient(
             wrapped: finalTranscriptionClient,
-            progress: progress,
+            progress: scopedProgress,
             totalFileCount: audioFiles.count
         )
         let summaryGenerator = FallbackMeetingSummaryGenerator(
             wrapped: OpenAIMeetingSummaryGeneratorAdapter(
                 client: OpenAIMeetingSummaryClient(configuration: configuration)
             ),
-            progress: progress
+            progress: scopedProgress
         )
         let pipeline = FinalTranscriptionPipeline(
             transcriptionClient: transcriptionClient,
@@ -306,7 +324,7 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             segments: result.segments
         )
         if finalSession.title != session.title {
-            await progress?(MeetingProcessingProgress(
+            await scopedProgress?(MeetingProcessingProgress(
                 message: "Labeled meeting as \(finalSession.title).",
                 progressFraction: 0.87
             ))
@@ -324,12 +342,12 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         } else {
             meetingFacts.title = finalSession.title
         }
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Running final cleanup pass...",
             details: "\(result.segments.count) final speaker turn(s)",
             progressFraction: 0.88
         ))
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Rendering Barn Owl notes...",
             progressFraction: 0.92
         ))
@@ -347,12 +365,12 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             transcriptSegments: result.segments,
             markdown: markdown
         )
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Saving transcript to Barn Owl Library...",
             progressFraction: 0.97
         ))
         let location = try await makeLibraryStore().saveArtifact(artifact)
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Writing note back to local context...",
             progressFraction: 0.985
         ))
@@ -360,9 +378,9 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             .write(ContextArtifact(title: finalSession.title, markdown: markdown))
         await clearRollingTranscriptionCache(
             sessionID: session.id,
-            progress: progress
+            progress: scopedProgress
         )
-        await progress?(MeetingProcessingProgress(
+        await scopedProgress?(MeetingProcessingProgress(
             message: "Saved final transcript.",
             details: location.markdownFileURL.lastPathComponent,
             progressFraction: 1.0

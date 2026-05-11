@@ -249,6 +249,12 @@ def markdown_response(response: dict) -> str:
             if response.get("meetingID"):
                 lines.append(f"- Meeting: `{response['meetingID']}`")
             lines.append(f"- Job state: {response.get('jobState') or 'unknown'}")
+            if response.get("captureStatus"):
+                lines.append(f"- Capture: {response['captureStatus']}")
+            if response.get("realtimeStatus"):
+                lines.append(f"- Realtime preview: {response['realtimeStatus']}")
+            if response.get("finalTranscriptionStatus"):
+                lines.append(f"- High-quality pass: {response['finalTranscriptionStatus']}")
             lines.append(f"- Notes: {'ready' if response.get('notesReady') else 'not ready'}")
             lines.append(f"- Transcript: {'ready' if response.get('transcriptReady') else 'not ready'}")
             lines.append(f"- Summary: {'ready' if response.get('summaryReady') else 'not ready'}")
@@ -263,7 +269,7 @@ def markdown_response(response: dict) -> str:
             ("Bridge", response.get("bridgeStatus") or "unknown"),
             ("App", response.get("appStatus") or "unknown"),
             ("Recording", response.get("recordingStatus") or response.get("status") or "unknown"),
-            ("API key", "configured" if response.get("apiKeyConfigured") else "missing"),
+            ("API key", "verified" if response.get("apiKeyVerified") else ("saved, test needed" if response.get("apiKeyConfigured") else "missing")),
             ("Readiness", response.get("readinessState") or "unknown"),
             ("Jobs", response.get("jobState") or "unknown"),
             ("Notes", "ready" if response.get("notesReady") else "not ready"),
@@ -271,7 +277,7 @@ def markdown_response(response: dict) -> str:
             ("Summary", "ready" if response.get("summaryReady") else "not ready"),
         ]
         for label, value in checks:
-            mark = "x" if value in {"configured", "ready", "complete", "running"} else " "
+            mark = "x" if value in {"configured", "verified", "ready", "complete", "running"} else " "
             lines.append(f"- [{mark}] {label}: {value}")
         if response.get("meetingID"):
             lines.append(f"- Meeting: `{response['meetingID']}`")
@@ -279,6 +285,12 @@ def markdown_response(response: dict) -> str:
             lines.append(f"- Session: `{response['sessionID']}`")
         if response.get("title"):
             lines.append(f"- Title: {response['title']}")
+        if response.get("captureStatus"):
+            lines.append(f"- Capture: {response['captureStatus']}")
+        if response.get("realtimeStatus"):
+            lines.append(f"- Realtime preview: {response['realtimeStatus']}")
+        if response.get("finalTranscriptionStatus"):
+            lines.append(f"- High-quality pass: {response['finalTranscriptionStatus']}")
         if response.get("lastError"):
             lines.append(f"- Last error: {response['lastError']}")
         if response.get("nextCommand"):
@@ -287,6 +299,13 @@ def markdown_response(response: dict) -> str:
         return "\n".join(lines).rstrip()
     if response.get("notes"):
         return response["notes"].rstrip()
+    if response.get("diagnosticsPath"):
+        lines = ["# Developer Diagnostics", ""]
+        lines.append(f"Exported: `{response['diagnosticsPath']}`")
+        if response.get("nextCommand"):
+            lines.append("")
+            lines.append(response["nextCommand"])
+        return "\n".join(lines).rstrip()
     if response.get("transcript"):
         return "# Transcript\n\n" + response["transcript"].rstrip()
     if response.get("summary"):
@@ -455,6 +474,12 @@ def build_parser() -> argparse.ArgumentParser:
         leaf.add_argument("context_id")
         add_format(leaf)
 
+    diagnostics = subparsers.add_parser("diagnostics")
+    diagnostics_subparsers = diagnostics.add_subparsers(dest="diagnostics_command", required=True)
+    diagnostics_export = diagnostics_subparsers.add_parser("export")
+    diagnostics_export.add_argument("--output", help="Path for the redacted Markdown diagnostics report.")
+    add_format(diagnostics_export)
+
     title = subparsers.add_parser("title")
     title_subparsers = title.add_subparsers(dest="title_command", required=True)
     title_set = title_subparsers.add_parser("set")
@@ -605,6 +630,16 @@ def main(argv: list[str]) -> int:
         payload = {
             "command": f"context_{args.context_command}",
             "contextItemID": args.context_id,
+            "format": output_format,
+        }
+    elif args.command == "diagnostics" and args.diagnostics_command == "export":
+        output_path = args.output
+        if output_path is None:
+            timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            output_path = str(Path.cwd() / f"BarnOwl-developer-diagnostics-{timestamp}.md")
+        payload = {
+            "command": "diagnostics_export",
+            "outputPath": output_path,
             "format": output_format,
         }
     elif args.command == "title" and args.title_command == "set":

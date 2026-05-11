@@ -35,6 +35,7 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case contextIgnore = "context_ignore"
     case contextDelete = "context_delete"
     case chat = "chat"
+    case diagnosticsExport = "diagnostics_export"
 }
 
 public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
@@ -55,6 +56,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var jobID: UUID?
     public var contextItemID: UUID?
     public var confirmed: Bool?
+    public var outputPath: String?
 
     public init(
         command: BarnOwlControlCommandName,
@@ -73,7 +75,8 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         latest: Bool? = nil,
         jobID: UUID? = nil,
         contextItemID: UUID? = nil,
-        confirmed: Bool? = nil
+        confirmed: Bool? = nil,
+        outputPath: String? = nil
     ) {
         self.command = command
         self.sessionID = sessionID
@@ -92,6 +95,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.jobID = jobID
         self.contextItemID = contextItemID
         self.confirmed = confirmed
+        self.outputPath = outputPath
     }
 }
 
@@ -314,6 +318,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var title: String?
     public var meetingType: String?
     public var realtimeStatus: String?
+    public var finalTranscriptionStatus: String?
     public var captureStatus: String?
     public var liveTranscriptPreview: String?
     public var contextItemID: UUID?
@@ -334,10 +339,12 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var readinessState: String?
     public var setupReady: Bool?
     public var apiKeyConfigured: Bool?
+    public var apiKeyVerified: Bool?
     public var notesReady: Bool?
     public var transcriptReady: Bool?
     public var summaryReady: Bool?
     public var markdownPath: String?
+    public var diagnosticsPath: String?
     public var lastError: String?
     public var nextCommand: String?
     public var errorCode: String?
@@ -356,6 +363,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         title: String? = nil,
         meetingType: String? = nil,
         realtimeStatus: String? = nil,
+        finalTranscriptionStatus: String? = nil,
         captureStatus: String? = nil,
         liveTranscriptPreview: String? = nil,
         contextItemID: UUID? = nil,
@@ -376,10 +384,12 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         readinessState: String? = nil,
         setupReady: Bool? = nil,
         apiKeyConfigured: Bool? = nil,
+        apiKeyVerified: Bool? = nil,
         notesReady: Bool? = nil,
         transcriptReady: Bool? = nil,
         summaryReady: Bool? = nil,
         markdownPath: String? = nil,
+        diagnosticsPath: String? = nil,
         lastError: String? = nil,
         nextCommand: String? = nil,
         errorCode: String? = nil,
@@ -397,6 +407,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.title = title
         self.meetingType = meetingType
         self.realtimeStatus = realtimeStatus
+        self.finalTranscriptionStatus = finalTranscriptionStatus
         self.captureStatus = captureStatus
         self.liveTranscriptPreview = liveTranscriptPreview
         self.contextItemID = contextItemID
@@ -417,10 +428,12 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.readinessState = readinessState
         self.setupReady = setupReady
         self.apiKeyConfigured = apiKeyConfigured
+        self.apiKeyVerified = apiKeyVerified
         self.notesReady = notesReady
         self.transcriptReady = transcriptReady
         self.summaryReady = summaryReady
         self.markdownPath = markdownPath
+        self.diagnosticsPath = diagnosticsPath
         self.lastError = lastError
         self.nextCommand = nextCommand
         self.errorCode = errorCode
