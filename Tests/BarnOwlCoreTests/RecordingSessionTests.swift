@@ -499,6 +499,49 @@ func controlResponsesRedactUserVisibleErrorFields() async throws {
 }
 
 @Test
+func controlResponseSuggestsSlackFeedbackOnlyForNonOwnerErrors() {
+    #expect(BarnOwlAppModel.shouldSuggestSlackFeedback(
+        ok: false,
+        errorCode: "transcription_failed",
+        error: "Transcription failed.",
+        lastError: nil,
+        jobState: nil,
+        currentUsername: "teammate",
+        ownerUsername: "burdick"
+    ))
+
+    #expect(!BarnOwlAppModel.shouldSuggestSlackFeedback(
+        ok: false,
+        errorCode: "transcription_failed",
+        error: "Transcription failed.",
+        lastError: nil,
+        jobState: nil,
+        currentUsername: "burdick",
+        ownerUsername: "burdick"
+    ))
+
+    #expect(!BarnOwlAppModel.shouldSuggestSlackFeedback(
+        ok: true,
+        errorCode: nil,
+        error: nil,
+        lastError: nil,
+        jobState: "complete",
+        currentUsername: "teammate",
+        ownerUsername: "burdick"
+    ))
+
+    #expect(!BarnOwlAppModel.shouldSuggestSlackFeedback(
+        ok: false,
+        errorCode: "confirmation_required",
+        error: "Pass --yes to confirm.",
+        lastError: nil,
+        jobState: nil,
+        currentUsername: "teammate",
+        ownerUsername: "burdick"
+    ))
+}
+
+@Test
 func controlBridgeTokenStoreCreatesStablePrivateToken() throws {
     let root = FileManager.default.temporaryDirectory
         .appending(path: "BarnOwlControlBridgeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -515,6 +558,42 @@ func controlBridgeTokenStoreCreatesStablePrivateToken() throws {
     #expect(firstToken.count >= 32)
     #expect((attributes[.posixPermissions] as? Int ?? 0) & 0o777 == 0o600)
     #expect((directoryAttributes[.posixPermissions] as? Int ?? 0) & 0o777 == 0o700)
+}
+
+@Test
+func controlBridgeCreatesTokenBeforeFirstPOSTCommand() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try await MainActor.run {
+        try makeQuickCommandTestModel(database: database)
+    }
+    let port = try unusedLocalPort()
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "BarnOwlControlBridgeTokenPreflightTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let tokenURL = root.appending(path: "control-bridge-token", directoryHint: .notDirectory)
+    let tokenStore = BarnOwlControlBridgeTokenStore(tokenFileURL: tokenURL)
+    let bridge = BarnOwlControlBridge(
+        model: model,
+        port: port,
+        tokenStore: tokenStore,
+        openCurrentMeeting: {}
+    )
+    bridge.start()
+    defer { bridge.stop() }
+
+    try await waitForBridge(port: port)
+
+    let token = try String(contentsOf: tokenURL, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let body = #"{"command":"get_status"}"#
+    let authorized = try sendLocalHTTPRequest(
+        port: port,
+        request: postBridgeRequest(body: body, bearerToken: token)
+    )
+
+    #expect(!token.isEmpty)
+    #expect(authorized.contains(#""ok":true"#))
+    #expect(!authorized.contains(#""error":"unauthorized""#))
 }
 
 @Test

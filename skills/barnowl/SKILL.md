@@ -93,8 +93,12 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Delete meeting: `barnowl meeting delete <meeting-id> --yes`
 - Purge temp audio: `barnowl meeting purge-temp-audio <meeting-id> --yes`
 - Developer diagnostics: `barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md`
+- Draft error feedback: `barnowl feedback slack`
+- Post confirmed error feedback: `barnowl feedback slack --yes`
 
 All commands return JSON by default. Prefer JSON while deciding what to do next. Use `--format markdown` for final notes, transcripts, summaries, status checklists, and job reports.
+
+If a CLI response includes `feedbackSuggested: true`, tell the user Barn Owl can draft a redacted Slack feedback report. Run `barnowl feedback slack` to review the draft. Only run `barnowl feedback slack --yes` after the user explicitly confirms posting. The command uses `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL`; do not paste or request Slack tokens in chat.
 
 ## Context Rules
 

@@ -84,6 +84,13 @@ report is designed for Slack or issue feedback: it includes app/setup/update/
 recent error metadata and redacts API keys, private paths, raw audio,
 transcripts, and diagnostic details that may contain meeting content.
 
+For internal feedback, non-owner CLI/Codex users will see a feedback suggestion
+when Barn Owl reports an error. `barnowl feedback slack` prints a redacted Slack
+draft without posting. `barnowl feedback slack --yes` posts only after explicit
+confirmation and requires `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL` to be configured.
+Use `BARNOWL_FEEDBACK_OWNER_USERNAME` to override the default owner username and
+`BARNOWL_SLACK_FEEDBACK_CHANNEL` if the webhook supports channel overrides.
+
 ## Distribution
 
 Generate shareable artifacts from the current source with:
@@ -144,6 +151,8 @@ scripts/barnowl stop
 scripts/barnowl wait --latest --until complete --timeout 10m
 scripts/barnowl meetings recent --limit 5
 scripts/barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md
+scripts/barnowl feedback slack
+scripts/barnowl feedback slack --yes
 ```
 
 ## Privacy Notes

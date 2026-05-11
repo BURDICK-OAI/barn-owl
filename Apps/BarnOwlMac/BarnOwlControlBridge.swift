@@ -46,6 +46,8 @@ final class BarnOwlControlBridge: @unchecked Sendable {
     }
 
     private func run() async {
+        guard preflightAuthorizationToken() else { return }
+
         let server = socket(AF_INET, SOCK_STREAM, 0)
         guard server >= 0 else { return }
         socketFileDescriptor = server
@@ -81,6 +83,18 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             Task.detached(priority: .utility) { [weak self] in
                 await self?.handleClient(client)
             }
+        }
+    }
+
+    private func preflightAuthorizationToken() -> Bool {
+        do {
+            _ = try tokenStore.loadOrCreateToken()
+            return true
+        } catch {
+            Task { @MainActor [weak self] in
+                self?.model?.recordExternalCommand("Control bridge could not create authorization token.")
+            }
+            return false
         }
     }
 

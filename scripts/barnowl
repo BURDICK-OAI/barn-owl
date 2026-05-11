@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -13,6 +14,39 @@ import urllib.request
 DEFAULT_URL = "http://127.0.0.1:8765"
 DEFAULT_APP_PATH = "/Applications/Barn Owl.app"
 DEFAULT_TOKEN_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "control-bridge-token"
+DEFAULT_FEEDBACK_ERROR_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "last-cli-error.json"
+DEFAULT_FEEDBACK_OWNER_USERNAME = "burdick"
+FEEDBACK_WEBHOOK_ENV = "BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL"
+FEEDBACK_CHANNEL_ENV = "BARNOWL_SLACK_FEEDBACK_CHANNEL"
+FEEDBACK_ERROR_PATH_ENV = "BARNOWL_FEEDBACK_ERROR_PATH"
+FEEDBACK_MAX_DIAGNOSTICS_CHARS = 12_000
+NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
+    "confirmation_required",
+    "context_item_not_found",
+    "meeting_not_found",
+    "missing_context",
+    "missing_context_item_id",
+    "missing_job_id",
+    "missing_meeting_id",
+    "missing_meeting_type",
+    "missing_prompt",
+    "missing_query",
+    "missing_question",
+    "missing_slack_webhook",
+    "missing_title",
+    "no_active_recording",
+    "no_context",
+    "no_reportable_error",
+    "owner_feedback_suppressed",
+    "unsupported_quick_command",
+}
+REDACTION_PATTERNS = [
+    (r"sk-(proj-)?[A-Za-z0-9_-]{8,}", "[redacted API key]"),
+    (r"/Users/[^\n\r\t]+/Library/Application Support/[^\n\r\t]+", "[redacted local path]"),
+    (r"/Users/[^/\s]+/[^\n\r\t ]*", "[redacted local path]"),
+    (r"/private/(tmp|var)/[^\n\r\t ]*", "[redacted local path]"),
+    (r"/var/folders/[^\n\r\t ]*", "[redacted local path]"),
+]
 
 
 def command_name(value: str) -> str:
@@ -27,17 +61,15 @@ def unavailable_response(error: Exception) -> dict:
     }
 
 
-def redact_error_text(value: str) -> str:
-    replacements = [
-        (r"sk-(proj-)?[A-Za-z0-9_-]{8,}", "[redacted API key]"),
-        (r"/Users/[^\n\r\t]+/Library/Application Support/[^\n\r\t]+", "[redacted local path]"),
-        (r"/Users/[^/\s]+/[^\n\r\t ]*", "[redacted local path]"),
-        (r"/private/(tmp|var)/[^\n\r\t ]*", "[redacted local path]"),
-        (r"/var/folders/[^\n\r\t ]*", "[redacted local path]"),
-    ]
+def redact_sensitive_text(value: str) -> str:
     sanitized = value
-    for pattern, replacement in replacements:
+    for pattern, replacement in REDACTION_PATTERNS:
         sanitized = re.sub(pattern, replacement, sanitized)
+    return sanitized
+
+
+def redact_error_text(value: str) -> str:
+    sanitized = redact_sensitive_text(value)
     if len(sanitized) > 320:
         sanitized = sanitized[:320] + "..."
     return sanitized
@@ -55,6 +87,51 @@ def sanitize_response_errors(value):
     if isinstance(value, list):
         return [sanitize_response_errors(item) for item in value]
     return value
+
+
+def feedback_error_summary(response: dict) -> dict:
+    allowed_keys = [
+        "ok",
+        "message",
+        "status",
+        "recordingStatus",
+        "readinessState",
+        "jobState",
+        "errorCode",
+        "error",
+        "lastError",
+        "feedbackReason",
+        "nextCommand",
+    ]
+    summary = {key: response.get(key) for key in allowed_keys if response.get(key) is not None}
+    summary["capturedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return sanitize_response_errors(summary)
+
+
+def feedback_error_path() -> Path:
+    return Path(os.environ.get(FEEDBACK_ERROR_PATH_ENV, str(DEFAULT_FEEDBACK_ERROR_PATH))).expanduser()
+
+
+def write_last_feedback_error(response: dict) -> None:
+    if is_feedback_owner() or not response_has_reportable_error(response):
+        return
+    try:
+        path = feedback_error_path()
+        created_parent = not path.parent.exists()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if created_parent:
+            path.parent.chmod(0o700)
+        path.write_text(json.dumps(feedback_error_summary(response), sort_keys=True), encoding="utf-8")
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def read_last_feedback_error():
+    try:
+        return json.loads(feedback_error_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def bridge_headers() -> dict:
@@ -170,6 +247,201 @@ def terminal_failure(response: dict) -> bool:
     )
 
 
+def feedback_owner_username() -> str:
+    return os.environ.get("BARNOWL_FEEDBACK_OWNER_USERNAME", DEFAULT_FEEDBACK_OWNER_USERNAME).strip()
+
+
+def current_username() -> str:
+    return (os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown").strip()
+
+
+def is_feedback_owner(username=None) -> bool:
+    owner = feedback_owner_username().lower()
+    current = (username or current_username()).lower()
+    return bool(owner) and current == owner
+
+
+def response_has_reportable_error(response: dict) -> bool:
+    error_code = str(response.get("errorCode") or "").strip().lower()
+    has_error_code = bool(error_code)
+    has_reportable_error_code = has_error_code and error_code not in NON_REPORTABLE_FEEDBACK_ERROR_CODES
+    return (
+        response.get("feedbackSuggested") is True
+        or response.get("jobState") == "failed"
+        or bool(response.get("lastError"))
+        or (has_reportable_error_code and (bool(response.get("error")) or has_error_code))
+        or (response.get("ok") is False and not has_error_code)
+    )
+
+
+def append_feedback_suggestion(lines: list[str], response: dict) -> None:
+    if response.get("feedbackSuggested") is not True:
+        return
+    command = response.get("feedbackCommand") or "barnowl feedback slack --yes"
+    reason = response.get("feedbackReason") or "This looks like a reportable Barn Owl error."
+    lines.append("")
+    lines.append(f"Feedback: {reason}")
+    lines.append(f"Review and post redacted details with `{command}`.")
+
+
+def default_feedback_diagnostics_path() -> str:
+    timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    return f"/tmp/BarnOwl-feedback-diagnostics-{timestamp}.md"
+
+
+def truncate_feedback_report(report: str) -> str:
+    sanitized = redact_sensitive_text(report)
+    if len(sanitized) <= FEEDBACK_MAX_DIAGNOSTICS_CHARS:
+        return sanitized
+    return sanitized[:FEEDBACK_MAX_DIAGNOSTICS_CHARS] + "\n\n[truncated]"
+
+
+def format_feedback_message(status: dict, diagnostics_report: str, recent_error=None) -> str:
+    user = current_username() or "unknown"
+    host = socket.gethostname() or "unknown"
+    status_line = status.get("status") or status.get("recordingStatus") or "unknown"
+    readiness = status.get("readinessState") or "unknown"
+    job_state = status.get("jobState") or "unknown"
+    recent_error = recent_error or {}
+    error = (
+        recent_error.get("error")
+        or recent_error.get("lastError")
+        or recent_error.get("errorCode")
+        or status.get("error")
+        or status.get("lastError")
+        or status.get("errorCode")
+        or "not reported"
+    )
+    lines = [
+        "Barn Owl feedback report",
+        f"Reporter: {user}",
+        f"Host: {host}",
+        f"Status: {status_line}",
+        f"Readiness: {readiness}",
+        f"Job state: {job_state}",
+        f"Error: {redact_error_text(str(error))}",
+    ]
+    if recent_error:
+        lines.extend([
+            "",
+            "Recent CLI/Codex error:",
+            "```json",
+            json.dumps(recent_error, sort_keys=True, indent=2),
+            "```",
+        ])
+    diagnostics = truncate_feedback_report(diagnostics_report)
+    lines.extend([
+        "",
+        "Redacted diagnostics:",
+        "```",
+        diagnostics,
+        "```",
+    ])
+    return "\n".join(lines)
+
+
+def post_slack_feedback(message: str, webhook_url: str) -> dict:
+    payload = {"text": message}
+    channel = os.environ.get(FEEDBACK_CHANNEL_ENV, "").strip()
+    if channel:
+        payload["channel"] = channel
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        webhook_url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        body = response.read().decode("utf-8")
+        return {
+            "ok": 200 <= response.status < 300,
+            "message": "Slack feedback posted." if 200 <= response.status < 300 else "Slack feedback post failed.",
+            "slackStatus": response.status,
+            "slackResponse": body[:320],
+        }
+
+
+def feedback_slack(args, base_url: str, launch: bool, output_format: str, human: bool) -> int:
+    if is_feedback_owner() and not args.force:
+        return print_response({
+            "ok": False,
+            "message": "Current macOS user is configured as the Barn Owl owner; feedback auto-suggestion is for non-owner users.",
+            "errorCode": "owner_feedback_suppressed",
+            "nextCommand": "Use `barnowl feedback slack --force` to draft anyway or `barnowl feedback slack --yes --force` to post.",
+        }, output_format, human)
+
+    status = get_status(base_url, launch=launch)
+    recent_error = read_last_feedback_error()
+    has_reportable_status = response_has_reportable_error(status)
+    has_recent_error = bool(recent_error) and response_has_reportable_error(recent_error)
+    if not has_reportable_status and not has_recent_error and not args.force:
+        return print_response({
+            "ok": False,
+            "message": "Barn Owl does not currently show a reportable error.",
+            "errorCode": "no_reportable_error",
+            "nextCommand": "Use `barnowl feedback slack --force` to draft a report anyway.",
+        }, output_format, human)
+
+    output_path = args.output or default_feedback_diagnostics_path()
+    diagnostics = post(
+        {
+            "command": "diagnostics_export",
+            "outputPath": output_path,
+            "format": "json",
+        },
+        base_url,
+        launch=launch,
+    )
+    if diagnostics.get("ok") is False:
+        return print_response(diagnostics, output_format, human)
+
+    try:
+        diagnostics_report = Path(output_path).read_text(encoding="utf-8")
+    except OSError as error:
+        return print_response({
+            "ok": False,
+            "message": "Could not read exported Barn Owl diagnostics.",
+            "errorCode": "diagnostics_read_failed",
+            "error": str(error),
+        }, output_format, human)
+
+    message = format_feedback_message(status, diagnostics_report, recent_error=recent_error)
+    if not args.yes:
+        return print_response({
+            "ok": True,
+            "message": "Slack feedback draft ready. Nothing was posted.",
+            "feedbackDraft": message,
+            "feedbackCommand": "barnowl feedback slack --yes",
+            "diagnosticsPath": output_path,
+            "nextCommand": "Review the draft, then run `barnowl feedback slack --yes` to post.",
+        }, output_format, human)
+
+    webhook_url = os.environ.get(FEEDBACK_WEBHOOK_ENV, "").strip()
+    if not webhook_url:
+        return print_response({
+            "ok": False,
+            "message": f"Slack feedback webhook is not configured. Set {FEEDBACK_WEBHOOK_ENV} before posting.",
+            "errorCode": "missing_slack_webhook",
+            "diagnosticsPath": output_path,
+            "nextCommand": "Set the feedback webhook, then rerun `barnowl feedback slack --yes`.",
+        }, output_format, human)
+
+    try:
+        result = post_slack_feedback(message, webhook_url)
+    except Exception as error:
+        return print_response({
+            "ok": False,
+            "message": "Could not post Barn Owl feedback to Slack.",
+            "errorCode": "slack_post_failed",
+            "error": str(error),
+            "diagnosticsPath": output_path,
+        }, output_format, human)
+
+    result["diagnosticsPath"] = output_path
+    return print_response(result, output_format, human)
+
+
 def wait_for_condition(payload: dict, base_url: str, timeout_seconds: float, launch: bool = True) -> dict:
     deadline = time.monotonic() + timeout_seconds
     until = payload.get("until", "complete")
@@ -201,6 +473,13 @@ def wait_for_condition(payload: dict, base_url: str, timeout_seconds: float, lau
 
 
 def markdown_response(response: dict) -> str:
+    if response.get("feedbackDraft"):
+        lines = ["# Barn Owl Feedback Draft", ""]
+        lines.append(response["feedbackDraft"])
+        if response.get("nextCommand"):
+            lines.append("")
+            lines.append(response["nextCommand"])
+        return "\n".join(lines).rstrip()
     if response.get("jobs") is not None:
         lines = ["# Barn Owl Jobs"]
         jobs = response.get("jobs") or []
@@ -224,6 +503,7 @@ def markdown_response(response: dict) -> str:
         if response.get("nextCommand"):
             lines.append("")
             lines.append(f"Next: `{response['nextCommand']}`")
+        append_feedback_suggestion(lines, response)
         return "\n".join(lines).rstrip()
     if (
         response.get("bridgeStatus") or response.get("recordingStatus") or response.get("nextCommand")
@@ -263,6 +543,7 @@ def markdown_response(response: dict) -> str:
             if response.get("nextCommand"):
                 lines.append("")
                 lines.append(f"Next: `{response['nextCommand']}`")
+            append_feedback_suggestion(lines, response)
             return "\n".join(lines).rstrip()
         lines = ["# Barn Owl Status", ""]
         checks = [
@@ -296,6 +577,7 @@ def markdown_response(response: dict) -> str:
         if response.get("nextCommand"):
             lines.append("")
             lines.append(f"Next: `{response['nextCommand']}`")
+        append_feedback_suggestion(lines, response)
         return "\n".join(lines).rstrip()
     if response.get("notes"):
         return response["notes"].rstrip()
@@ -305,6 +587,7 @@ def markdown_response(response: dict) -> str:
         if response.get("nextCommand"):
             lines.append("")
             lines.append(response["nextCommand"])
+        append_feedback_suggestion(lines, response)
         return "\n".join(lines).rstrip()
     if response.get("transcript"):
         return "# Transcript\n\n" + response["transcript"].rstrip()
@@ -356,11 +639,14 @@ def markdown_response(response: dict) -> str:
             lines.append("")
             lines.append(meeting["overview"])
         return "\n".join(lines).rstrip()
-    return response.get("message", "Barn Owl response.")
+    lines = [response.get("message", "Barn Owl response.")]
+    append_feedback_suggestion(lines, response)
+    return "\n".join(lines).rstrip()
 
 
 def print_response(response: dict, output_format: str, human: bool) -> int:
     response = sanitize_response_errors(response)
+    write_last_feedback_error(response)
     if human:
         output_format = "markdown"
     if output_format == "markdown":
@@ -480,6 +766,14 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics_export.add_argument("--output", help="Path for the redacted Markdown diagnostics report.")
     add_format(diagnostics_export)
 
+    feedback = subparsers.add_parser("feedback")
+    feedback_subparsers = feedback.add_subparsers(dest="feedback_command", required=True)
+    feedback_slack_parser = feedback_subparsers.add_parser("slack")
+    feedback_slack_parser.add_argument("--yes", action="store_true", help="Post the redacted feedback draft to Slack.")
+    feedback_slack_parser.add_argument("--force", action="store_true", help="Draft or post even for the owner user or without a current error.")
+    feedback_slack_parser.add_argument("--output", help="Path for the redacted diagnostics report used by the draft.")
+    add_format(feedback_slack_parser)
+
     title = subparsers.add_parser("title")
     title_subparsers = title.add_subparsers(dest="title_command", required=True)
     title_set = title_subparsers.add_parser("set")
@@ -515,6 +809,9 @@ def main(argv: list[str]) -> int:
 
     if args.command == "status":
         return print_response(get_status(args.url, launch=launch), output_format, human)
+
+    if args.command == "feedback" and args.feedback_command == "slack":
+        return feedback_slack(args, args.url, launch, output_format, human)
 
     if args.command == "current":
         payload = {"command": "get_current"}

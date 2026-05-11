@@ -2362,6 +2362,16 @@ final class BarnOwlAppModel: ObservableObject {
         let apiKeyConfigured = BarnOwlAPIKeyStore.hasConfiguredAPIKey()
         let apiKeyVerified = BarnOwlAPIKeyStore.hasVerifiedAPIKey()
         let readinessState = String(describing: recordingReadinessSummary.state)
+        let sanitizedLastError = Self.sanitizedControlString(lastError)
+        let sanitizedError = Self.sanitizedControlString(error)
+        let resolvedErrorCode = errorCode ?? sanitizedError
+        let shouldSuggestFeedback = Self.shouldSuggestSlackFeedback(
+            ok: ok,
+            errorCode: resolvedErrorCode,
+            error: sanitizedError,
+            lastError: sanitizedLastError,
+            jobState: jobState
+        )
         return BarnOwlControlResponse(
             ok: ok,
             message: message,
@@ -2402,11 +2412,58 @@ final class BarnOwlAppModel: ObservableObject {
             summaryReady: summaryReady ?? summary.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             markdownPath: markdownPath,
             diagnosticsPath: diagnosticsPath,
-            lastError: Self.sanitizedControlString(lastError),
+            lastError: sanitizedLastError,
             nextCommand: nextCommand,
-            errorCode: errorCode ?? Self.sanitizedControlString(error),
-            error: Self.sanitizedControlString(error)
+            feedbackSuggested: shouldSuggestFeedback ? true : nil,
+            feedbackCommand: shouldSuggestFeedback ? Self.slackFeedbackCommand : nil,
+            feedbackReason: shouldSuggestFeedback ? "This Barn Owl command hit a reportable error. Review the redacted draft before posting." : nil,
+            errorCode: resolvedErrorCode,
+            error: sanitizedError
         )
+    }
+
+    nonisolated static let defaultFeedbackOwnerUsername = "burdick"
+    nonisolated static let slackFeedbackCommand = "barnowl feedback slack --yes"
+    nonisolated static let nonReportableFeedbackErrorCodes: Set<String> = [
+        "confirmation_required",
+        "context_item_not_found",
+        "meeting_not_found",
+        "missing_context",
+        "missing_context_item_id",
+        "missing_job_id",
+        "missing_meeting_id",
+        "missing_meeting_type",
+        "missing_prompt",
+        "missing_query",
+        "missing_question",
+        "missing_title",
+        "no_active_recording",
+        "no_context",
+        "unsupported_quick_command"
+    ]
+
+    nonisolated static func shouldSuggestSlackFeedback(
+        ok: Bool,
+        errorCode: String?,
+        error: String?,
+        lastError: String?,
+        jobState: String?,
+        currentUsername: String = NSUserName(),
+        ownerUsername: String = ProcessInfo.processInfo.environment["BARNOWL_FEEDBACK_OWNER_USERNAME"] ?? defaultFeedbackOwnerUsername
+    ) -> Bool {
+        let current = currentUsername.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let owner = ownerUsername.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !owner.isEmpty, current == owner {
+            return false
+        }
+
+        let hasFailureState = jobState == "failed"
+        let normalizedErrorCode = errorCode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hasErrorCode = !(normalizedErrorCode?.isEmpty ?? true)
+        let hasReportableErrorCode = normalizedErrorCode.map { !nonReportableFeedbackErrorCodes.contains($0) } ?? false
+        let hasError = !(error?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let hasLastError = !(lastError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        return hasFailureState || hasLastError || ((hasError || hasErrorCode) && hasReportableErrorCode) || (ok == false && !hasErrorCode)
     }
 
     private static func sanitizedControlString(_ value: String?) -> String? {

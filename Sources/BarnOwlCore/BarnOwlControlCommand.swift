@@ -347,6 +347,9 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var diagnosticsPath: String?
     public var lastError: String?
     public var nextCommand: String?
+    public var feedbackSuggested: Bool?
+    public var feedbackCommand: String?
+    public var feedbackReason: String?
     public var errorCode: String?
     public var error: String?
 
@@ -392,6 +395,9 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         diagnosticsPath: String? = nil,
         lastError: String? = nil,
         nextCommand: String? = nil,
+        feedbackSuggested: Bool? = nil,
+        feedbackCommand: String? = nil,
+        feedbackReason: String? = nil,
         errorCode: String? = nil,
         error: String? = nil
     ) {
@@ -436,6 +442,9 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.diagnosticsPath = diagnosticsPath
         self.lastError = lastError
         self.nextCommand = nextCommand
+        self.feedbackSuggested = feedbackSuggested
+        self.feedbackCommand = feedbackCommand
+        self.feedbackReason = feedbackReason
         self.errorCode = errorCode
         self.error = error
     }

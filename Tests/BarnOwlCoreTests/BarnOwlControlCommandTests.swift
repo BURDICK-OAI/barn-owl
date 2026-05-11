@@ -281,7 +281,10 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
         markdownPath: "/tmp/meeting.md",
         diagnosticsPath: "/tmp/BarnOwl-diagnostics.md",
         lastError: "No recorded audio files.",
-        nextCommand: "barnowl jobs retry --session \(meetingID.uuidString)"
+        nextCommand: "barnowl jobs retry --session \(meetingID.uuidString)",
+        feedbackSuggested: true,
+        feedbackCommand: "barnowl feedback slack --yes",
+        feedbackReason: "Review redacted details before posting."
     )
 
     let data = try JSONEncoder().encode(response)
@@ -291,4 +294,6 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
     #expect(decoded.jobs?.first?.status == "failed")
     #expect(decoded.diagnosticsPath == "/tmp/BarnOwl-diagnostics.md")
     #expect(decoded.nextCommand?.contains("jobs retry") == true)
+    #expect(decoded.feedbackSuggested == true)
+    #expect(decoded.feedbackCommand == "barnowl feedback slack --yes")
 }
