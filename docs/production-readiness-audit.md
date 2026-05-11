@@ -43,8 +43,8 @@ Commands run successfully during this pass:
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
     `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`
   - The package flow now invokes `scripts/verify-release.sh` automatically.
-  - Current manifest reports commit
-    `c7da196fb54823d1689d2743dcf2fa3858df8522` with `git_status: clean`.
+  - Before sharing, confirm `dist/BarnOwl-release-manifest.json` reports the
+    intended current commit with `git_status: clean`.
 - `cd dist && shasum -a 256 -c SHA256SUMS`
   - Result: `BarnOwl-source-handoff.zip: OK`, `BarnOwl.app.zip: OK`, and
     `BarnOwl-release-manifest.json: OK`, and `BarnOwl-update-manifest.json: OK`
@@ -76,14 +76,12 @@ Commands run successfully during this pass:
   - Expected failure without manual QA evidence:
     `manual QA evidence is required; pass --manual-qa-evidence PATH`
 - `scripts/collect-manual-qa-evidence.sh`
-  - Latest evidence file:
-    `.build/manual-qa/manual-capture-qa-evidence-20260510-235046.md`
-  - The evidence file records the current `dist/BarnOwl.app.zip` SHA
-    `048654d666147af35ac2b9cc464f8587e2a2f3649c69d4e142e14e9eb86e160b`,
-    installed bundle metadata, installed code-signature/hardened-runtime state,
-    bundled CLI presence, bundled Codex skill presence, temp audio counts, and
-    redacted diagnostics metadata. The manual flow checkboxes are intentionally
-    unchecked until a real capture/TCC pass is performed.
+  - Result: generates `.build/manual-qa/manual-capture-qa-evidence-*.md`.
+  - The evidence file records the current `dist/BarnOwl.app.zip` SHA, installed
+    bundle metadata, installed code-signature/hardened-runtime state, bundled
+    CLI presence, bundled Codex skill presence, temp audio counts, and redacted
+    diagnostics metadata. The manual flow checkboxes are intentionally unchecked
+    until a real capture/TCC pass is performed.
 - `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-*.md`
   - Current expected failure is limited to unchecked manual capture/TCC evidence:
     first-run grant, microphone denied, system-audio denied, previously denied
@@ -95,14 +93,14 @@ Commands run successfully during this pass:
   - Installed version/build: `0.1.0 (7)`
   - Current installed app metadata: bundle id `com.barnowl.mac`, ad-hoc
     signature, hardened runtime, bundled CLI executable, and bundled Codex skill
-    present. The install preserved user data; the previous app was backed up to
-    `/Applications/Barn Owl.app.backup.20260511065039`.
+    present. The install preserves user data by default and backs up the
+    previous app bundle.
 - `/Applications/Barn Owl.app/Contents/MacOS/barnowl feedback slack --force --format json`
   - Result: generated a redacted Slack feedback draft and posted nothing.
   - `barnowl feedback slack --yes` requires
     `BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL`; owner-user suggestions are suppressed
     by default unless `--force` is provided.
-- `scripts/verify-cli-codex-qa.sh --evidence .build/manual-qa/manual-capture-qa-evidence-20260510-235046.md`
+- `scripts/verify-cli-codex-qa.sh --evidence PATH_TO_MANUAL_QA_EVIDENCE`
   - Result: `cli_codex_qa=true`
   - Verified installed CLI status, redacted diagnostics export, draft-only Slack
     feedback behavior, missing-webhook post guard, and bundled Codex skill
