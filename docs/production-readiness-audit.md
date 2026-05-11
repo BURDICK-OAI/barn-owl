@@ -35,26 +35,21 @@ Commands run successfully during this pass:
   - Result: `** TEST SUCCEEDED **`
   - Latest observed result bundle:
     `DerivedData/Logs/Test/Test-BarnOwl-2026.05.10_23-25-41--0700.xcresult`
-  - Verified commit: `f4bcf27`
+  - Verified the Barn Owl test suite after the production-readiness hardening
+    changes. Run again after any source change before release.
 - `scripts/package-all.sh`
   - Result: created `dist/BarnOwl-source-handoff.zip` and
     `dist/BarnOwl.app.zip`, plus `dist/BarnOwl-release-manifest.json` and
     `dist/BarnOwl-update-manifest.json`, and `dist/SHA256SUMS`
   - The package flow now invokes `scripts/verify-release.sh` automatically.
-  - Latest manifest reports commit `f4bcf279262959e96558e5909d474851c05a6d81`
-    with `git_status: clean`.
+  - Before sharing, confirm `dist/BarnOwl-release-manifest.json` reports the
+    intended commit with `git_status: clean`.
 - `cd dist && shasum -a 256 -c SHA256SUMS`
   - Result: `BarnOwl-source-handoff.zip: OK`, `BarnOwl.app.zip: OK`, and
     `BarnOwl-release-manifest.json: OK`, and `BarnOwl-update-manifest.json: OK`
-  - Current artifact SHA-256 values:
-    - `BarnOwl.app.zip`:
-      `4f9596143561db28fa526a8eff0767d2e8209346bdc41d9d89b252d70da0378c`
-    - `BarnOwl-source-handoff.zip`:
-      `1c1d58b24916e5047ce2dc6ae56765256775eb62144a4a0b025b3b6dbf8ec5eb`
-    - `BarnOwl-release-manifest.json`:
-      `d76432cbe6df9956ad500c1b02ca3f530ad4aac1e03ab4041f4313a837475350`
-    - `BarnOwl-update-manifest.json`:
-      `adcc435e7ddfcee0050d21da84054e45990d2bfa0e3d0577fc9ca4ff78d6f0fe`
+  - Current artifact SHA-256 values are intentionally kept in
+    `dist/SHA256SUMS` and the release manifest instead of this tracked doc, so
+    packaging from a clean commit does not create stale audit text.
 - `scripts/verify-dist.sh dist`
   - Result: `dist_check=true`
   - Verified the expected `dist/` file set, source handoff archive,
@@ -80,19 +75,16 @@ Commands run successfully during this pass:
   - Expected failure without manual QA evidence:
     `manual QA evidence is required; pass --manual-qa-evidence PATH`
 - `scripts/collect-manual-qa-evidence.sh`
-  - Result: generated
-    `.build/manual-qa/manual-capture-qa-evidence-20260510-232925.md`
-  - The evidence file is tied to current app SHA
-    `4f9596143561db28fa526a8eff0767d2e8209346bdc41d9d89b252d70da0378c`,
-    but the manual flow checkboxes are intentionally still unchecked.
-- `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-20260510-232925.md`
+  - Result: generates `.build/manual-qa/manual-capture-qa-evidence-*.md`.
+  - The evidence file records the current `dist/BarnOwl.app.zip` SHA. The
+    manual flow checkboxes are intentionally unchecked until a real capture/TCC
+    pass is performed.
+- `RUN_VERIFY=0 scripts/verify-production-readiness.sh --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-*.md`
   - Expected failure until manual QA is performed:
     `no provided manual QA evidence file matches the current app package SHA and shows all required flow checks complete with zero raw audio files`
 - `scripts/install-local-app.sh --yes`
   - Result: installed verified package to `/Applications/Barn Owl.app`
   - Installed version/build: `0.1.0 (7)`
-  - Existing app backup:
-    `/Applications/Barn Owl.app.backup.20260511062932`
   - Installed CLI smoke after explicit app launch returned
     `appStatus: running`, `bridgeStatus: running`, `recordingStatus: idle`, and
     `readinessState: blocked` because no OpenAI API key is configured in the
