@@ -15,7 +15,6 @@ struct SettingsView: View {
     @State private var readinessSnapshot = BarnOwlFirstRunReadiness.placeholderSnapshot
     @State private var readinessChecks: [String] = []
     @State private var readinessActionStatus = ""
-    @State private var updateManifestURL = ""
     @State private var updateSettingsStatus = ""
     @State private var codexBridgeStatus = "checking"
     @State private var codexIntegrationLines: [String] = []
@@ -34,7 +33,6 @@ struct SettingsView: View {
                 onboardingReadinessSection
                 openAISection
                 codexIntegrationSection
-                updaterSection
                 developerDiagnosticsSection
                 readinessSection
             }
@@ -44,8 +42,8 @@ struct SettingsView: View {
         .frame(minWidth: 560, idealWidth: 640, maxWidth: 720)
         .frame(minHeight: 560)
         .onAppear {
+            BarnOwlUpdaterSettings.clearLegacyManifestOverride()
             refreshAPIKeyStatus()
-            refreshUpdaterSettings()
             refreshReadinessChecks()
             Task {
                 await refreshCodexIntegration()
@@ -62,6 +60,10 @@ struct SettingsView: View {
 
             if !readinessActionStatus.isEmpty {
                 settingsStatusMessage(readinessActionStatus)
+            }
+
+            if !updateSettingsStatus.isEmpty {
+                settingsStatusMessage(updateSettingsStatus)
             }
         }
     }
@@ -260,47 +262,6 @@ struct SettingsView: View {
         }
     }
 
-    private var updaterSection: some View {
-        settingsCard {
-            VStack(alignment: .leading, spacing: 12) {
-                settingsSectionHeader(
-                    "Updates",
-                    systemImage: "arrow.down.app",
-                    status: BarnOwlUpdaterSettings.updateChannelLabel,
-                    tint: BarnOwlSettingsTheme.success
-                )
-
-                Text("Barn Owl checks the GitHub update feed on launch, periodically while idle, and when you ask. You can override it with another HTTPS manifest or a local manifest path for testing.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text("Current feed: \(BarnOwlUpdaterSettings.updateChannelLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-
-                TextField("Optional HTTPS update feed or local manifest path", text: $updateManifestURL)
-                    .textFieldStyle(.roundedBorder)
-
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        updaterButtons
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        updaterButtons
-                    }
-                }
-
-                if !updateSettingsStatus.isEmpty {
-                    settingsStatusMessage(updateSettingsStatus)
-                }
-            }
-        }
-    }
-
     private var codexIntegrationSection: some View {
         settingsCard {
             VStack(alignment: .leading, spacing: 12) {
@@ -375,28 +336,6 @@ struct SettingsView: View {
                 }
             }
             .buttonStyle(.borderless)
-        }
-    }
-
-    private var updaterButtons: some View {
-        Group {
-            Button("Save Update Feed") {
-                saveUpdaterSettings()
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button("Use Local Default") {
-                updateManifestURL = ""
-                saveUpdaterSettings()
-            }
-            .buttonStyle(.bordered)
-
-            Button("Check & Install") {
-                Task {
-                    await checkForUpdates()
-                }
-            }
-            .buttonStyle(.bordered)
         }
     }
 
@@ -563,24 +502,9 @@ struct SettingsView: View {
         }
     }
 
-    private func refreshUpdaterSettings() {
-        updateManifestURL = BarnOwlUpdaterSettings.manifestURLString
-    }
-
-    private func saveUpdaterSettings() {
-        BarnOwlUpdaterSettings.manifestURLString = updateManifestURL
-        refreshUpdaterSettings()
-        if updateManifestURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            updateSettingsStatus = "Using local development manifest."
-        } else {
-            updateSettingsStatus = "Saved update manifest URL."
-        }
-        refreshReadinessChecks()
-    }
-
     @MainActor
     private func checkForUpdates() async {
-        updateSettingsStatus = "Checking \(BarnOwlUpdaterSettings.updateChannelLabel.lowercased())..."
+        updateSettingsStatus = "Checking GitHub update feed..."
         do {
             let result = try await BarnOwlUpdater.checkAndInstallLatest()
             switch result {

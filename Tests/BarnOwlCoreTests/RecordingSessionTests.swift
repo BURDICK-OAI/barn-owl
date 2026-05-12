@@ -813,6 +813,24 @@ func updateAvailabilityButtonTitlesMatchMenuBarPolicy() {
 }
 
 @Test
+@MainActor
+func updaterSettingsAlwaysUseCanonicalGitHubFeed() throws {
+    UserDefaults.standard.set(
+        "/Users/tester/Library/Application Support/Barn Owl/update-manifest.json",
+        forKey: BarnOwlUpdaterSettings.manifestURLDefaultsKey
+    )
+    defer {
+        UserDefaults.standard.removeObject(forKey: BarnOwlUpdaterSettings.manifestURLDefaultsKey)
+    }
+
+    let resolvedURL = try BarnOwlUpdaterSettings.resolvedManifestURL()
+
+    #expect(resolvedURL.absoluteString == BarnOwlUpdaterSettings.defaultGitManifestURLString)
+    #expect(BarnOwlUpdaterSettings.resolvedManifestDisplayPath() == BarnOwlUpdaterSettings.defaultGitManifestURLString)
+    #expect(BarnOwlUpdaterSettings.updateChannelLabel == "GitHub update feed")
+}
+
+@Test
 func menuBarSetupIncludesRequiredPermissionChecks() {
     let snapshot = BarnOwlReadinessSnapshot(checks: [
         BarnOwlReadinessCheck(id: .apiKey, title: "API Key", detail: "", systemImage: "key", state: .ready),

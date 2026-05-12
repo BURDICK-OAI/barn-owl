@@ -99,7 +99,7 @@ enum BarnOwlUpdateError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .noManifestConfigured:
-            "No update manifest is configured. Add one in Settings."
+            "The GitHub update feed is not configured."
         case .invalidManifestURL(let value):
             "The update manifest URL is invalid: \(value)"
         case .invalidArchiveURL(let value):
@@ -134,42 +134,18 @@ enum BarnOwlUpdaterSettings {
 
     static var manifestURLString: String {
         get {
-            UserDefaults.standard.string(forKey: manifestURLDefaultsKey) ?? ""
+            defaultGitManifestURLString
         }
         set {
-            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                UserDefaults.standard.removeObject(forKey: manifestURLDefaultsKey)
-            } else {
-                UserDefaults.standard.set(trimmed, forKey: manifestURLDefaultsKey)
-            }
+            UserDefaults.standard.removeObject(forKey: manifestURLDefaultsKey)
         }
     }
 
-    static func defaultManifestURL() throws -> URL {
-        let root = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appendingPathComponent("Barn Owl", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return root.appendingPathComponent("update-manifest.json", isDirectory: false)
+    static func clearLegacyManifestOverride() {
+        UserDefaults.standard.removeObject(forKey: manifestURLDefaultsKey)
     }
 
     static func resolvedManifestURL() throws -> URL {
-        if !manifestURLString.isEmpty {
-            guard let url = BarnOwlUpdater.url(from: manifestURLString) else {
-                throw BarnOwlUpdateError.invalidManifestURL(manifestURLString)
-            }
-            return url
-        }
-
-        let localManifest = try defaultManifestURL()
-        if FileManager.default.fileExists(atPath: localManifest.path(percentEncoded: false)) {
-            return localManifest
-        }
-
         guard let defaultURL = BarnOwlUpdater.url(from: defaultGitManifestURLString) else {
             throw BarnOwlUpdateError.invalidManifestURL(defaultGitManifestURLString)
         }
@@ -177,24 +153,10 @@ enum BarnOwlUpdaterSettings {
     }
 
     static func resolvedManifestDisplayPath() -> String {
-        if !manifestURLString.isEmpty {
-            return manifestURLString
-        }
-        if let localManifest = try? defaultManifestURL(),
-           FileManager.default.fileExists(atPath: localManifest.path(percentEncoded: false)) {
-            return localManifest.path(percentEncoded: false)
-        }
         return defaultGitManifestURLString
     }
 
     static var updateChannelLabel: String {
-        if !manifestURLString.isEmpty {
-            return "Custom update feed"
-        }
-        if let localManifest = try? defaultManifestURL(),
-           FileManager.default.fileExists(atPath: localManifest.path(percentEncoded: false)) {
-            return "Local development manifest"
-        }
         return "GitHub update feed"
     }
 }

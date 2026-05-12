@@ -445,13 +445,13 @@ enum BarnOwlFirstRunReadiness {
             ),
             BarnOwlReadinessCheck(
                 id: .updateChannel,
-                title: "Update Channel",
+                title: "Updates",
                 detail: updateChannelConfigured
-                    ? "An update manifest is configured."
-                    : "No update manifest is configured yet. Recording still works, but updates need Settings.",
+                    ? "Barn Owl checks the canonical GitHub update feed on launch, while idle, and when you ask."
+                    : "Barn Owl could not resolve the GitHub update feed.",
                 systemImage: "arrow.down.app.fill",
                 state: updateChannelConfigured ? .ready : .warning,
-                actionTitle: "Check Updates",
+                actionTitle: "Check & Install",
                 action: .checkUpdates
             )
         ])
