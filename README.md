@@ -2,6 +2,16 @@
 
 BarnOwl is a native macOS app for capturing meetings, transcribing them, and turning the result into local Markdown notes with summaries, decisions, action items, open questions, and diarized transcript sections.
 
+The day-to-day interface is CLI/Codex-first. When a user asks Codex to record a
+meeting, Codex starts BarnOwl immediately through the local control bridge, then
+uses the bundled BarnOwl Codex skill to gather useful context it can access -
+calendar details, Slack threads, local project files, location/workspace clues,
+prior BarnOwl notes, or user-provided chat context - and appends concise,
+source-labeled facts to the active recording. BarnOwl stores that context
+alongside the transcript so final notes and later meeting-memory questions are
+better grounded. The macOS UI remains useful for setup, permissions, API key
+entry, bridge status, manual review, and admin tasks.
+
 ![BarnOwl logo](docs/barn-owl-final-logo.png)
 
 ## Status
@@ -173,10 +183,14 @@ cp .env.example .env.local
 ## Local CLI
 
 The `scripts/barnowl` helper talks to the running app over the local control bridge.
+Codex uses the same bridge: start first, attach summarized context from available
+connectors after recording begins, stop on request, wait for processing, then
+retrieve Markdown notes or query meeting memory.
 
 ```sh
 scripts/barnowl status
 scripts/barnowl start --title "Design Review"
+scripts/barnowl context add --session SESSION_ID --source codex "Relevant context from calendar, Slack, local files, or prior notes."
 scripts/barnowl stop
 scripts/barnowl wait --latest --until complete --timeout 10m
 scripts/barnowl meetings recent --limit 5
