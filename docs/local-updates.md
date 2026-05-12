@@ -1,7 +1,7 @@
 # Barn Owl Updates
 
-Barn Owl uses the same lightweight update shape locally and for internal
-Git-hosted/ad-hoc distribution:
+Barn Owl uses the same lightweight update shape locally and for the canonical
+GitHub Release distribution path:
 
 1. Build a versioned app bundle.
 2. Package bundled assets into the app:
@@ -40,12 +40,12 @@ Then use:
 Barn Owl menu bar > Update
 ```
 
-## Git-Hosted Or Ad-Hoc Update Path
+## GitHub Release Update Path
 
 The app UI stays the same. Only the feed location changes:
 
 - local development: JSON manifest on disk
-- Git-hosted/internal: HTTPS `BarnOwl-update-manifest.json` pointing at
+- canonical internal distribution: HTTPS `BarnOwl-update-manifest.json` pointing at
   `BarnOwl.app.zip`, with a required SHA-256 checksum
 - Ad-hoc sharing: send `BarnOwl.app.zip` and `BarnOwl-update-manifest.json`, or
   install the app zip manually
@@ -57,3 +57,5 @@ manifest is the trust anchor. A future Sparkle path could add Sparkle signing an
 installer flow without changing the user-facing Update button.
 
 The menu bar and Settings should continue to expose one user action: **Update**.
+
+The canonical release flow lives in [`docs/github-release.md`](github-release.md).

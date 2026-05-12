@@ -27,8 +27,9 @@ from the current source.
 
 ## Internal/GitHub Download Checklist
 
-Barn Owl is distributed as a direct-download macOS app package, not through the
-Mac App Store. For an internal GitHub release or similar download page, attach:
+Barn Owl is distributed through GitHub Releases as a direct-download macOS app
+package, not through the Mac App Store. GitHub Releases are the canonical
+download and update path. Attach:
 
 - `BarnOwl.app.zip`
 - `BarnOwl-source-handoff.zip`
@@ -225,7 +226,7 @@ scripts/publish-git-update.sh
 git add Updates/BarnOwl
 git commit
 git push origin main
-gh release create v0.1.0-build.7 dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
 ```
 
 Installed apps default to:
@@ -236,6 +237,9 @@ https://raw.githubusercontent.com/BURDICK-OAI/barn-owl/main/Updates/BarnOwl/Barn
 
 The tracked manifest points at `BarnOwl.app.zip` attached to the matching
 GitHub Release tag; binary zips are not committed to Git history.
+
+For the step-by-step release owner and teammate install flow, see
+[`docs/github-release.md`](github-release.md).
 
 ### Developer ID Package
 

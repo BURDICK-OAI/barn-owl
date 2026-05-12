@@ -118,8 +118,10 @@ Generate shareable artifacts from the current source with:
 scripts/package-all.sh
 ```
 
-BarnOwl is distributed as an internal/direct-download macOS app package, not
-through the Mac App Store.
+BarnOwl is distributed through GitHub Releases as an internal/direct-download
+macOS app package, not through the Mac App Store. GitHub Releases are the
+canonical app download and update path; local manifests are only for development
+and smoke testing.
 
 This writes sanitized outputs under `dist/`:
 
@@ -154,7 +156,7 @@ scripts/publish-git-update.sh
 git add Updates/BarnOwl
 git commit
 git push origin main
-gh release create v0.1.0-build.7 dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
 ```
 
 Barn Owl defaults to this manifest URL for installed apps:
@@ -164,7 +166,9 @@ https://raw.githubusercontent.com/BURDICK-OAI/barn-owl/main/Updates/BarnOwl/Barn
 ```
 
 The tracked manifest points at `BarnOwl.app.zip` attached to the matching
-GitHub Release tag; binary zips are not committed to Git history.
+GitHub Release tag; binary zips are not committed to Git history. See
+[docs/github-release.md](docs/github-release.md) for the exact release and
+teammate install flow.
 
 ## OpenAI API Key
 
