@@ -464,6 +464,39 @@ func realtimeControllerWithServerTurnDetectionDoesNotManuallyCommitAudio() async
     }
 }
 
+@Test
+func realtimeControllerWithServerTurnDetectionCommitsVoicedAudioOnStopWhenServerProducesNoTranscript() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        usesServerTurnDetection: true,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.70
+    ))
+    await controller.stop()
+
+    let commitCount = await client.commitCount
+    await MainActor.run {
+        #expect(commitCount == 1)
+        #expect(sink.updates.isEmpty)
+        #expect(sink.diagnostics.contains {
+            $0.kind == .audioCommit
+                && ($0.message.contains("produced no transcript before stop"))
+        })
+    }
+}
+
 @MainActor
 private final class RealtimeControllerTestSink {
     var updates: [BarnOwlRealtimeTranscriptionUpdate] = []

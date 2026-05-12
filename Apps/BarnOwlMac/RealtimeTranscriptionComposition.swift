@@ -89,6 +89,8 @@ actor BarnOwlRealtimeTranscriptionController {
     static let minimumVoicedDurationForTranscript: TimeInterval = 0.35
     static let minimumVoicedDurationForShortTranscript: TimeInterval = 0.65
     static let serverVADTrailingSilenceDuration: TimeInterval = 2.2
+    static let serverVADFallbackCommitInterval: TimeInterval = 5
+    static let serverVADFallbackMinimumVoicedDuration: TimeInterval = 0.75
     static let staleTranscriptGraceInterval: TimeInterval = 8
     static let routineServerEventTypes: Set<String> = [
         "conversation.item.added",
@@ -126,6 +128,8 @@ actor BarnOwlRealtimeTranscriptionController {
     private var trailingSilenceDuration: TimeInterval = 0
     private var currentTurnVoicedDuration: TimeInterval = 0
     private var lastSpeechTurnVoicedDuration: TimeInterval = 0
+    private var didReceiveRealtimeTranscript = false
+    private var lastTranscriptEventAt = Date.distantPast
     private var ignoredAppendCount = 0
     private var lastIgnoredAppendReportAt = Date.distantPast
 
@@ -186,6 +190,8 @@ actor BarnOwlRealtimeTranscriptionController {
             trailingSilenceDuration = 0
             currentTurnVoicedDuration = 0
             lastSpeechTurnVoicedDuration = 0
+            didReceiveRealtimeTranscript = false
+            lastTranscriptEventAt = .distantPast
             ignoredAppendCount = 0
             lastIgnoredAppendReportAt = .distantPast
             await emit(.connected, "Realtime connected.", details: nil)
@@ -260,6 +266,8 @@ actor BarnOwlRealtimeTranscriptionController {
             }
             if !usesServerTurnDetection {
                 await commitAudioIfReady()
+            } else {
+                await commitServerTurnDetectionFallbackIfReady()
             }
         } catch {
             bufferedByteCount = max(0, bufferedByteCount - chunk.pcm16Data.count)
@@ -286,7 +294,9 @@ actor BarnOwlRealtimeTranscriptionController {
 
         if didReportFirstAudio, !isDegraded {
             await appendTrailingSilence()
-            if !usesServerTurnDetection {
+            if usesServerTurnDetection {
+                await commitServerTurnDetectionFallbackOnStop()
+            } else {
                 await commitAudioIfNeeded(force: true)
             }
             try? await Task.sleep(nanoseconds: usesServerTurnDetection ? 1_500_000_000 : 900_000_000)
@@ -327,6 +337,7 @@ actor BarnOwlRealtimeTranscriptionController {
                     }
                     await emit(.eventReceived, "Realtime transcript delta received.", details: "characters=\(text.count)")
                     await healthHandler(.transcribing)
+                    markRealtimeTranscriptReceived()
                     await updateHandler(BarnOwlRealtimeTranscriptionUpdate(text: text, isFinal: false))
                 case .transcriptCompleted(let text):
                     guard await shouldPublishTranscript(text) else {
@@ -335,6 +346,7 @@ actor BarnOwlRealtimeTranscriptionController {
                     }
                     await emit(.eventReceived, "Realtime transcript completed.", details: "characters=\(text.count)")
                     await healthHandler(.transcribing)
+                    markRealtimeTranscriptReceived()
                     await updateHandler(BarnOwlRealtimeTranscriptionUpdate(text: text, isFinal: true))
                     if usesServerTurnDetection, !isForwardingSpeechTurn {
                         currentTurnVoicedDuration = 0
@@ -392,6 +404,45 @@ actor BarnOwlRealtimeTranscriptionController {
                 return
             }
         }
+    }
+
+    private func commitServerTurnDetectionFallbackIfReady() async {
+        guard usesServerTurnDetection,
+              !didReceiveRealtimeTranscript,
+              Date().timeIntervalSince(lastCommitAt) >= Self.serverVADFallbackCommitInterval,
+              Date().timeIntervalSince(lastTranscriptEventAt) >= Self.serverVADFallbackCommitInterval,
+              max(currentTurnVoicedDuration, lastSpeechTurnVoicedDuration) >= Self.serverVADFallbackMinimumVoicedDuration
+        else {
+            return
+        }
+
+        await emit(
+            .audioCommit,
+            "Realtime server turn detection had no transcript yet; committing voiced audio fallback.",
+            details: "voicedDuration=\(String(format: "%.2f", max(currentTurnVoicedDuration, lastSpeechTurnVoicedDuration))) uncommittedBytes=\(uncommittedByteCount)"
+        )
+        await commitAudioIfNeeded(force: false)
+    }
+
+    private func commitServerTurnDetectionFallbackOnStop() async {
+        guard usesServerTurnDetection,
+              !didReceiveRealtimeTranscript,
+              max(currentTurnVoicedDuration, lastSpeechTurnVoicedDuration) >= Self.minimumVoicedDurationForTranscript
+        else {
+            return
+        }
+
+        await emit(
+            .audioCommit,
+            "Realtime server turn detection produced no transcript before stop; committing voiced audio fallback.",
+            details: "voicedDuration=\(String(format: "%.2f", max(currentTurnVoicedDuration, lastSpeechTurnVoicedDuration))) uncommittedBytes=\(uncommittedByteCount)"
+        )
+        await commitAudioIfNeeded(force: true)
+    }
+
+    private func markRealtimeTranscriptReceived() {
+        didReceiveRealtimeTranscript = true
+        lastTranscriptEventAt = Date()
     }
 
     private func shouldForward(chunk: AudioRealtimePCMChunk, rms: Double) -> Bool {

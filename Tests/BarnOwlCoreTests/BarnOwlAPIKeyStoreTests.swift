@@ -241,10 +241,10 @@ struct BarnOwlAPIKeyStoreTests {
                 BarnOwlAPIKeyStore.clearMemoryCacheForTesting()
 
                 #expect(throws: OpenAIConfigurationError.missingAPIKey) {
-                    try BarnOwlAPIKeyStore.makeConfiguration()
+                    try BarnOwlAPIKeyStore.makeConfiguration(allowKeychainPrompt: true)
                 }
                 #expect(throws: OpenAIConfigurationError.missingAPIKey) {
-                    try BarnOwlAPIKeyStore.makeConfiguration()
+                    try BarnOwlAPIKeyStore.makeConfiguration(allowKeychainPrompt: true)
                 }
 
                 #expect(spy.calls == [false, true])

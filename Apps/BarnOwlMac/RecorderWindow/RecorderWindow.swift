@@ -110,14 +110,10 @@ struct RecorderWindow: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             case .compact:
                 VStack(spacing: 0) {
-                    header(layout: layout)
-                        .padding(14)
-
-                    Divider()
-
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             compactSessionPicker
+                            header(layout: layout)
                             noteWorkspace(layout: layout)
                         }
                         .padding(14)
@@ -175,6 +171,9 @@ struct RecorderWindow: View {
                 }
             }
             .padding(.top, 4)
+
+            primaryRecordingButton
+                .frame(maxWidth: .infinity)
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -299,6 +298,9 @@ struct RecorderWindow: View {
                 .help("Refresh sessions")
             }
 
+            primaryRecordingButton
+                .frame(maxWidth: .infinity)
+
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -360,7 +362,7 @@ struct RecorderWindow: View {
     }
 
     private var needsAttentionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             Label("Needs Attention", systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.red)
@@ -514,17 +516,8 @@ struct RecorderWindow: View {
         maxStatusWidth: CGFloat?
     ) -> some View {
         VStack(alignment: alignment, spacing: 6) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    headerStatusBadge
-                    primaryRecordingButton
-                }
-
-                VStack(alignment: alignment, spacing: 8) {
-                    primaryRecordingButton
-                    headerStatusBadge
-                }
-            }
+            headerStatusBadge
+                .frame(maxWidth: maxStatusWidth, alignment: frameAlignment)
 
             if model.lifecyclePresentation.phase == .recording {
                 Label("Recording \(model.recordingElapsedText)", systemImage: model.lifecyclePresentation.systemImage)
@@ -563,7 +556,7 @@ struct RecorderWindow: View {
             Task { await model.toggleRecording() }
         }
         .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
-        .frame(width: 190)
+        .frame(minWidth: 170)
         .disabled(!model.canUsePrimaryAction)
         .help(recordingActionHelp)
     }
@@ -623,9 +616,9 @@ struct RecorderWindow: View {
             if layout == .compact {
                 VStack(alignment: .leading, spacing: 16) {
                     noteTabs
-                    selectedTabContent(minHeight: 260, maxHeight: nil)
+                    selectedTabContent(minHeight: 220, maxHeight: 360)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             } else {
                 mainEditorColumn
                     .frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
@@ -649,8 +642,13 @@ struct RecorderWindow: View {
         VStack(alignment: .leading, spacing: 14) {
             noteTabs
 
-            selectedTabContent(minHeight: 430, maxHeight: .infinity)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            GeometryReader { proxy in
+                let viewportHeight = max(260, proxy.size.height)
+
+                selectedTabContent(minHeight: 0, maxHeight: viewportHeight)
+                    .frame(width: proxy.size.width, height: viewportHeight, alignment: .topLeading)
+            }
+            .frame(minHeight: 260)
                 .layoutPriority(1)
         }
         .padding(.trailing, 18)
@@ -740,7 +738,7 @@ struct RecorderWindow: View {
     }
 
     private var promptBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     promptField
@@ -1495,7 +1493,11 @@ struct RecorderWindow: View {
         minHeight: CGFloat,
         maxHeight: CGFloat?
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let panelMinHeight = max(120, minHeight)
+        let textViewportMaxHeight = maxHeight.map { max(90, $0 - 34) }
+        let textViewportMinHeight = textViewportMaxHeight.map { min(panelMinHeight, $0) } ?? panelMinHeight
+
+        return VStack(alignment: .leading, spacing: 8) {
             Label(title, systemImage: systemImage)
                 .font(.headline)
 
@@ -1507,7 +1509,7 @@ struct RecorderWindow: View {
                     .padding(12)
                     .textSelection(.enabled)
             }
-            .frame(minHeight: minHeight, maxHeight: maxHeight)
+            .frame(minHeight: textViewportMinHeight, maxHeight: textViewportMaxHeight)
             .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
@@ -1515,6 +1517,7 @@ struct RecorderWindow: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
+        .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .topLeading)
     }
 
     private func externalNotesPanel(minHeight: CGFloat, maxHeight: CGFloat?) -> some View {
@@ -2161,10 +2164,7 @@ struct RecorderWindow: View {
         if model.status == .recording {
             return "Stop Recording"
         }
-        if model.displayedNote != nil, model.canStartRecording {
-            return "Start New Recording"
-        }
-        return model.primaryActionTitle
+        return model.canStartRecording ? "Start New Meeting" : model.primaryActionTitle
     }
 
     private var recordingActionHelp: String {
