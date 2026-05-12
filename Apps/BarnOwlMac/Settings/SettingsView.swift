@@ -815,7 +815,7 @@ struct SettingsView: View {
             result.applyReadinessMarkers()
             readinessActionStatus = result.summary
         } catch {
-            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+            BarnOwlFirstRunReadiness.clearSystemAudioCaptureReadiness()
             readinessActionStatus = "Local capture test failed: \(BarnOwlErrorFormatter.message(for: error))"
         }
     }

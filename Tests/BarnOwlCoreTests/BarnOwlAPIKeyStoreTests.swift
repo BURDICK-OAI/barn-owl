@@ -515,7 +515,7 @@ struct BarnOwlSettingsReadinessChecksTests {
 
     @MainActor
     @Test
-    func priorSuccessfulCaptureTrustsOnlySystemAudioWhenMacOSStatusIsStale() throws {
+    func currentAppSystemAudioEvidenceKeepsSystemAudioReadyWhenMacOSStatusIsStale() throws {
         let snapshot = BarnOwlFirstRunReadiness.currentSnapshot(
             hasConfiguredAPIKey: true,
             hasVerifiedAPIKey: true,
@@ -535,6 +535,30 @@ struct BarnOwlSettingsReadinessChecksTests {
         #expect(systemAudio.action == nil)
         #expect(snapshot.menuBarSetupNeeded)
         #expect(snapshot.overallState == .missing)
+    }
+
+    @MainActor
+    @Test
+    func staleStoredSystemAudioEvidenceDoesNotForceReady() throws {
+        let defaults = try temporaryUserDefaults()
+        defaults.set(true, forKey: BarnOwlFirstRunReadiness.testRecordingSucceededDefaultsKey)
+        defaults.set(true, forKey: BarnOwlFirstRunReadiness.systemAudioCaptureSucceededDefaultsKey)
+
+        #expect(!BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence(userDefaults: defaults))
+
+        let snapshot = BarnOwlFirstRunReadiness.currentSnapshot(
+            hasConfiguredAPIKey: true,
+            hasVerifiedAPIKey: true,
+            testRecordingSucceeded: BarnOwlFirstRunReadiness.hasLocalCaptureTestEvidence(userDefaults: defaults),
+            microphoneCaptureSucceeded: true,
+            systemAudioCaptureSucceeded: BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence(userDefaults: defaults),
+            microphoneDecision: .granted,
+            systemAudioDecision: .notDetermined
+        )
+
+        let systemAudio = try #require(snapshot.checks.first { $0.id == .systemAudio })
+        #expect(systemAudio.state == .missing)
+        #expect(systemAudio.action == .runCaptureTest)
     }
 
     @MainActor
@@ -904,6 +928,13 @@ private func withTemporaryDirectory(prefix: String, _ body: (URL) throws -> Void
     }
     try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
     try body(rootURL)
+}
+
+private func temporaryUserDefaults() throws -> UserDefaults {
+    let suiteName = "BarnOwlTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defaults.removePersistentDomain(forName: suiteName)
+    return defaults
 }
 
 private func writeAPIKey(_ value: String, to fileURL: URL) throws {

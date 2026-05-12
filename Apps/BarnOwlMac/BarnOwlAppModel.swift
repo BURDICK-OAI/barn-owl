@@ -923,6 +923,8 @@ final class BarnOwlAppModel: ObservableObject {
                 liveTranscriptPreview = "Listening. Barn Owl will add transcript text here as chunks are transcribed."
             }
         } catch {
+            BarnOwlFirstRunReadiness.clearSystemAudioCaptureReadiness()
+            publishRecordingReadinessSummary()
             await audioCoordinator.stop()
             self.audioCoordinator = nil
             await drainRollingFinalTranscriptionEnqueues()
@@ -3446,7 +3448,7 @@ final class BarnOwlAppModel: ObservableObject {
                 nextCommand: result.capturedAllRequiredTracks ? "barnowl start" : "Play audio from another app, then rerun `barnowl permissions test`."
             )
         } catch {
-            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+            BarnOwlFirstRunReadiness.clearSystemAudioCaptureReadiness()
             publishRecordingReadinessSummary()
             let message = "Local capture test failed: \(BarnOwlErrorFormatter.message(for: error))"
             captureStatus = message

@@ -337,6 +337,7 @@ enum BarnOwlFirstRunReadiness {
     nonisolated static let testRecordingSucceededDefaultsKey = "BarnOwlReadinessTestRecordingSucceeded"
     nonisolated static let microphoneCaptureSucceededDefaultsKey = "BarnOwlReadinessMicrophoneCaptureSucceeded"
     nonisolated static let systemAudioCaptureSucceededDefaultsKey = "BarnOwlReadinessSystemAudioCaptureSucceeded"
+    private static let captureEvidenceAppIdentityDefaultsKey = "BarnOwlReadinessCaptureEvidenceAppIdentity"
 
     static var placeholderSnapshot: BarnOwlReadinessSnapshot {
         snapshot(
@@ -354,9 +355,9 @@ enum BarnOwlFirstRunReadiness {
     static func currentSnapshot(
         hasConfiguredAPIKey: Bool = BarnOwlAPIKeyStore.hasConfiguredAPIKey(),
         hasVerifiedAPIKey: Bool = BarnOwlAPIKeyStore.hasVerifiedAPIKey(),
-        testRecordingSucceeded: Bool = UserDefaults.standard.bool(forKey: testRecordingSucceededDefaultsKey),
+        testRecordingSucceeded: Bool = hasLocalCaptureTestEvidence(),
         microphoneCaptureSucceeded: Bool = UserDefaults.standard.bool(forKey: microphoneCaptureSucceededDefaultsKey),
-        systemAudioCaptureSucceeded: Bool = UserDefaults.standard.bool(forKey: systemAudioCaptureSucceededDefaultsKey),
+        systemAudioCaptureSucceeded: Bool = hasSystemAudioCaptureEvidence(),
         microphoneDecision: CapturePermissionDecision? = nil,
         systemAudioDecision: CapturePermissionDecision? = nil
     ) -> BarnOwlReadinessSnapshot {
@@ -551,8 +552,14 @@ enum BarnOwlFirstRunReadiness {
     }
 
     static func hasSystemAudioCaptureEvidence(userDefaults: UserDefaults = .standard) -> Bool {
-        userDefaults.bool(forKey: testRecordingSucceededDefaultsKey)
-            || userDefaults.bool(forKey: systemAudioCaptureSucceededDefaultsKey)
+        hasCurrentAppCaptureEvidence(userDefaults: userDefaults)
+            && (userDefaults.bool(forKey: testRecordingSucceededDefaultsKey)
+                || userDefaults.bool(forKey: systemAudioCaptureSucceededDefaultsKey))
+    }
+
+    static func hasLocalCaptureTestEvidence(userDefaults: UserDefaults = .standard) -> Bool {
+        hasCurrentAppCaptureEvidence(userDefaults: userDefaults)
+            && userDefaults.bool(forKey: testRecordingSucceededDefaultsKey)
     }
 
     static func requestSystemAudioDecisionIfNeeded(userDefaults: UserDefaults = .standard) -> CapturePermissionDecision {
@@ -629,7 +636,7 @@ enum BarnOwlFirstRunReadiness {
         let microphoneDecision = currentMicrophoneDecision()
         let systemAudioDecision = effectiveSystemAudioPermissionDecision(
             currentSystemAudioDecision(),
-            captureSucceeded: userDefaults.bool(forKey: systemAudioCaptureSucceededDefaultsKey)
+            captureSucceeded: hasSystemAudioCaptureEvidence(userDefaults: userDefaults)
         )
 
         return RecordingPermissionSet(
@@ -643,14 +650,17 @@ enum BarnOwlFirstRunReadiness {
         case .microphone:
             UserDefaults.standard.set(true, forKey: microphoneCaptureSucceededDefaultsKey)
         case .systemAudio:
+            markCurrentAppCaptureEvidence()
             UserDefaults.standard.set(true, forKey: systemAudioCaptureSucceededDefaultsKey)
         case .mixed:
+            markCurrentAppCaptureEvidence()
             UserDefaults.standard.set(true, forKey: microphoneCaptureSucceededDefaultsKey)
             UserDefaults.standard.set(true, forKey: systemAudioCaptureSucceededDefaultsKey)
         }
     }
 
     static func markLocalCaptureTestSucceeded() {
+        markCurrentAppCaptureEvidence()
         UserDefaults.standard.set(true, forKey: testRecordingSucceededDefaultsKey)
         UserDefaults.standard.set(true, forKey: microphoneCaptureSucceededDefaultsKey)
         UserDefaults.standard.set(true, forKey: systemAudioCaptureSucceededDefaultsKey)
@@ -660,6 +670,30 @@ enum BarnOwlFirstRunReadiness {
         UserDefaults.standard.set(false, forKey: testRecordingSucceededDefaultsKey)
         UserDefaults.standard.set(false, forKey: microphoneCaptureSucceededDefaultsKey)
         UserDefaults.standard.set(false, forKey: systemAudioCaptureSucceededDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: captureEvidenceAppIdentityDefaultsKey)
+    }
+
+    static func clearSystemAudioCaptureReadiness() {
+        UserDefaults.standard.set(false, forKey: testRecordingSucceededDefaultsKey)
+        UserDefaults.standard.set(false, forKey: systemAudioCaptureSucceededDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: captureEvidenceAppIdentityDefaultsKey)
+    }
+
+    private static func markCurrentAppCaptureEvidence(userDefaults: UserDefaults = .standard) {
+        userDefaults.set(currentAppCaptureEvidenceIdentity(), forKey: captureEvidenceAppIdentityDefaultsKey)
+    }
+
+    private static func hasCurrentAppCaptureEvidence(userDefaults: UserDefaults = .standard) -> Bool {
+        userDefaults.string(forKey: captureEvidenceAppIdentityDefaultsKey) == currentAppCaptureEvidenceIdentity()
+    }
+
+    private static func currentAppCaptureEvidenceIdentity() -> String {
+        let bundle = Bundle.main
+        let bundleID = bundle.bundleIdentifier ?? "unknown-bundle"
+        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown-version"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown-build"
+        let bundlePath = bundle.bundleURL.path(percentEncoded: false)
+        return [bundleID, version, build, bundlePath].joined(separator: "|")
     }
 
     private static func effectiveSystemAudioPermissionDecision(
