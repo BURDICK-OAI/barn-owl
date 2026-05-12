@@ -54,7 +54,7 @@ enum BarnOwlUpdateAvailability: Equatable {
     var buttonTitle: String {
         switch self {
         case .unknown:
-            "Check Update"
+            "Update Unavailable"
         case .checking:
             "Checking..."
         case .available:

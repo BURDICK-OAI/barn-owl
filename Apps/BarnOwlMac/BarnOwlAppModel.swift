@@ -1517,6 +1517,106 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func deleteRecentSessions(_ ids: Set<UUID>) async {
+        guard !ids.isEmpty else { return }
+        var deletedCount = 0
+        var lastFailure: String?
+
+        for id in ids {
+            do {
+                let store = try makeLibraryStore()
+                try await store.deleteSession(id: id)
+
+                if displayedNote?.id == id {
+                    displayedNote = nil
+                    noteDraft = ""
+                    noteTitleDraft = ""
+                    notePrompt = ""
+                    contextDraft = ""
+                    calendarContext = nil
+                    calendarContextAccepted = false
+                    calendarContextStatus = "Calendar context idle."
+                    contextInboxItems = []
+                    meetingHistoryItems = []
+                    historyStatus = ""
+                }
+
+                noteSearchResults.removeAll { $0.id == id }
+                await deletePersistedMeeting(id)
+                await BarnOwlAudioCaptureFactory.deleteTemporaryAudio(for: id)
+                deletedCount += 1
+            } catch {
+                lastFailure = BarnOwlErrorFormatter.message(for: error)
+                recordActivity(
+                    level: .error,
+                    category: "library",
+                    message: "Could not delete selected Barn Owl recording.",
+                    details: lastFailure,
+                    sessionID: id,
+                    updatePreview: false
+                )
+            }
+        }
+
+        await refreshRecentSessions()
+        await refreshContextInbox()
+
+        if let lastFailure, deletedCount == 0 {
+            noteActionStatus = "Delete failed: \(lastFailure)"
+        } else if let lastFailure {
+            noteActionStatus = "Deleted \(deletedCount) recording\(deletedCount == 1 ? "" : "s"). Some deletes failed: \(lastFailure)"
+        } else {
+            noteActionStatus = "Deleted \(deletedCount) recording\(deletedCount == 1 ? "" : "s")."
+        }
+    }
+
+    func exportRecentSessions(_ ids: Set<UUID>) async {
+        guard !ids.isEmpty else { return }
+
+        do {
+            let store = try makeLibraryStore()
+            let selected = recentSessions.filter { ids.contains($0.id) }
+            guard !selected.isEmpty else {
+                noteActionStatus = "No selected recordings were found."
+                return
+            }
+
+            let destinationRoot = Self.bulkExportDirectoryURL()
+            try FileManager.default.createDirectory(
+                at: destinationRoot,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+
+            var exportedURLs: [URL] = []
+            for session in selected {
+                let markdown: String
+                if let artifact = try await store.artifact(id: session.id) {
+                    markdown = artifact.markdown
+                } else if FileManager.default.fileExists(atPath: session.markdownURL.path) {
+                    markdown = try String(contentsOf: session.markdownURL, encoding: .utf8)
+                } else {
+                    continue
+                }
+
+                let filename = Self.safeExportFilename(title: session.title, id: session.id)
+                let url = Self.uniqueExportURL(base: destinationRoot.appending(path: filename))
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+                exportedURLs.append(url)
+            }
+
+            if exportedURLs.isEmpty {
+                noteActionStatus = "No Markdown notes were available to export."
+                return
+            }
+
+            NSWorkspace.shared.activateFileViewerSelecting([destinationRoot])
+            noteActionStatus = "Exported \(exportedURLs.count) note\(exportedURLs.count == 1 ? "" : "s")."
+        } catch {
+            noteActionStatus = "Export failed: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
     func appendContextToDisplayedNote() async {
         guard !isContextUpdateInFlight else {
             noteActionStatus = "Reading context..."
@@ -2099,6 +2199,19 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func retryFailedJobs(ids: Set<UUID>) async {
+        do {
+            let database = try makeDatabase()
+            let retriedCount = try await BarnOwlRecoveryCoordinator.retryFailedJobs(database: database, ids: ids)
+            await refreshJobSummaries()
+            await refreshProcessingTimeline()
+            startJobRunner()
+            noteActionStatus = retriedCount == 0 ? "No failed jobs were available to retry." : "Retrying \(retriedCount) failed job(s)."
+        } catch {
+            noteActionStatus = "Could not retry jobs: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
     func retryRecoveryAttentionItem(_ item: BarnOwlRecoveryAttentionItem) async {
         guard let jobID = item.jobID else {
             noteActionStatus = "This item cannot be retried automatically."
@@ -2512,6 +2625,43 @@ final class BarnOwlAppModel: ObservableObject {
     private static func sanitizedControlString(_ value: String?) -> String? {
         guard let value else { return nil }
         return BarnOwlErrorFormatter.sanitizeForUserDisplay(value)
+    }
+
+    private static func bulkExportDirectoryURL(now: Date = Date()) -> URL {
+        let base = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return base.appending(path: "Barn Owl Export \(formatter.string(from: now))", directoryHint: .isDirectory)
+    }
+
+    private static func safeExportFilename(title: String, id: UUID) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+        let scalars = title.unicodeScalars.map { scalar -> Character in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let collapsed = String(scalars)
+            .replacingOccurrences(of: #"-{2,}"#, with: "-", options: .regularExpression)
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " -_"))
+        let basename = collapsed.isEmpty ? "untitled-meeting" : String(collapsed.prefix(80))
+        return "\(basename)-\(id.uuidString.prefix(8)).md"
+    }
+
+    private static func uniqueExportURL(base: URL) -> URL {
+        guard FileManager.default.fileExists(atPath: base.path) else { return base }
+        let directory = base.deletingLastPathComponent()
+        let basename = base.deletingPathExtension().lastPathComponent
+        let pathExtension = base.pathExtension
+        var index = 2
+        while true {
+            let candidate = directory.appending(path: "\(basename)-\(index).\(pathExtension)")
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            index += 1
+        }
     }
 
     func recordExternalCommand(_ message: String) {
@@ -4336,7 +4486,7 @@ final class BarnOwlAppModel: ObservableObject {
         switch event.kind {
         case .connectFailed, .audioAppendFailed, .audioCommitFailed, .trailingSilenceFailed, .eventError, .receiveFailed:
             level = .error
-        case .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .eventUnhandled, .receiveClosed:
+        case .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .eventUnhandled, .eventRecoverableError, .receiveClosed:
             level = .warning
         case .connecting, .connected, .audioAppend, .audioCommit, .trailingSilenceAppend, .eventReceived, .stopped:
             level = .info
@@ -4348,7 +4498,7 @@ final class BarnOwlAppModel: ObservableObject {
             shouldSurfaceInActivity = true
         case .connected, .audioCommit, .eventReceived:
             shouldSurfaceInActivity = true
-        case .connecting, .audioAppend, .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .trailingSilenceAppend, .trailingSilenceFailed, .eventUnhandled, .stopped:
+        case .connecting, .audioAppend, .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .trailingSilenceAppend, .trailingSilenceFailed, .eventUnhandled, .eventRecoverableError, .stopped:
             shouldSurfaceInActivity = false
         }
 

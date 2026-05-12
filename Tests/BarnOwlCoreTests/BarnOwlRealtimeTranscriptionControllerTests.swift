@@ -21,7 +21,7 @@ func realtimeControllerAppendsCommitsAndPublishesTranscriptEvents() async throws
         trackKind: .microphone,
         pcm16Data: makePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
         sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
-        duration: 0.12
+        duration: 0.70
     ))
     await client.push(.transcriptDelta("hel"))
     await client.push(.transcriptCompleted("hello"))
@@ -78,7 +78,98 @@ func realtimeControllerDoesNotCommitTinyBuffers() async throws {
 }
 
 @Test
-func realtimeControllerAppendsSoftSpeech() async throws {
+func realtimeControllerSerializesOverlappingCommits() async throws {
+    let client = FakeRealtimeStreamingClient(commitDelayNanoseconds: 120_000_000)
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await withTaskGroup(of: Void.self) { group in
+        for _ in 0..<6 {
+            group.addTask {
+                await controller.append(AudioRealtimePCMChunk(
+                    trackKind: .microphone,
+                    pcm16Data: makePCM16Data(
+                        sample: 3_000,
+                        byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512
+                    ),
+                    sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+                    duration: 0.70
+                ))
+            }
+        }
+    }
+
+    let commitCountAfterBurst = await client.commitCount
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(
+            sample: 3_000,
+            byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512
+        ),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.70
+    ))
+    await controller.stop()
+
+    let finalCommitCount = await client.commitCount
+    await MainActor.run {
+        #expect(commitCountAfterBurst == 1)
+        #expect(finalCommitCount == 3)
+        #expect(!sink.healthStates.contains(.fallbackActive))
+        #expect(!sink.diagnostics.contains { $0.kind == .audioAppendIgnored })
+        #expect(!sink.diagnostics.contains {
+            $0.kind == .audioCommit && ($0.details?.contains("bytes=0") ?? false)
+        })
+    }
+}
+
+@Test
+func realtimeControllerContinuesAfterEmptyCommitServerError() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.70
+    ))
+    await client.push(.error("Error committing input audio buffer: buffer too small. Expected at least 100ms of audio, but buffer only has 0.00ms of audio."))
+    try await Task.sleep(nanoseconds: 80_000_000)
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.70
+    ))
+    await controller.stop()
+
+    let appendCount = await client.appendCount
+    await MainActor.run {
+        #expect(appendCount >= 2)
+        #expect(!sink.healthStates.contains(.fallbackActive))
+        #expect(sink.diagnostics.contains { $0.kind == .eventRecoverableError })
+        #expect(!sink.diagnostics.contains { $0.kind == .audioAppendIgnored })
+    }
+}
+
+@Test
+func realtimeControllerSkipsLowLevelAmbientNoise() async throws {
     let client = FakeRealtimeStreamingClient()
     let sink = RealtimeControllerTestSink()
     let controller = BarnOwlRealtimeTranscriptionController(
@@ -95,6 +186,35 @@ func realtimeControllerAppendsSoftSpeech() async throws {
         pcm16Data: makePCM16Data(sample: 32, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
         sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
         duration: 0.12
+    ))
+    await controller.stop()
+
+    let appendCount = await client.appendCount
+    await MainActor.run {
+        #expect(appendCount == 0)
+        #expect(!sink.healthStates.contains(.receivingAudio))
+        #expect(sink.diagnostics.contains { $0.kind == .audioSilenceSkipped })
+    }
+}
+
+@Test
+func realtimeControllerAppendsQuietSpeechAboveStartThreshold() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 180, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.70
     ))
     await controller.stop()
 
@@ -279,6 +399,71 @@ func realtimeControllerSkipsSilentAudioAndSuppressesStaleTranscriptEvents() asyn
     }
 }
 
+@Test
+func realtimeControllerSuppressesShortTranscriptFromBriefAudio() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.20
+    ))
+    await client.push(.transcriptCompleted("hello"))
+    try await Task.sleep(nanoseconds: 80_000_000)
+    await controller.stop()
+
+    await MainActor.run {
+        #expect(sink.updates.isEmpty)
+        #expect(sink.diagnostics.contains { $0.kind == .eventSuppressed })
+    }
+}
+
+@Test
+func realtimeControllerWithServerTurnDetectionDoesNotManuallyCommitAudio() async throws {
+    let client = FakeRealtimeStreamingClient()
+    let sink = RealtimeControllerTestSink()
+    let controller = BarnOwlRealtimeTranscriptionController(
+        client: client,
+        manualCommitInterval: 0,
+        usesServerTurnDetection: true,
+        updateHandler: { update in sink.updates.append(update) },
+        healthHandler: { health in sink.healthStates.append(health) },
+        diagnosticsHandler: { event in sink.diagnostics.append(event) }
+    )
+
+    await controller.start()
+    await controller.append(AudioRealtimePCMChunk(
+        trackKind: .microphone,
+        pcm16Data: makePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
+        sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
+        duration: 0.70
+    ))
+    await client.push(.speechStopped)
+    await client.push(.transcriptCompleted("hello world"))
+    try await Task.sleep(nanoseconds: 80_000_000)
+    await controller.stop()
+
+    let appendCount = await client.appendCount
+    let commitCount = await client.commitCount
+    await MainActor.run {
+        #expect(appendCount >= 1)
+        #expect(commitCount == 0)
+        #expect(sink.updates == [
+            BarnOwlRealtimeTranscriptionUpdate(text: "hello world", isFinal: true)
+        ])
+    }
+}
+
 @MainActor
 private final class RealtimeControllerTestSink {
     var updates: [BarnOwlRealtimeTranscriptionUpdate] = []
@@ -292,17 +477,20 @@ private actor FakeRealtimeStreamingClient: BarnOwlRealtimeStreamingClient {
     private let connectError: (any Error)?
     private let appendError: (any Error)?
     private let commitError: (any Error)?
+    private let commitDelayNanoseconds: UInt64
     private var pendingEvents: [OpenAIRealtimeTranscriptionEvent?] = []
     private var receiveContinuations: [CheckedContinuation<OpenAIRealtimeTranscriptionEvent?, any Error>] = []
 
     init(
         connectError: (any Error)? = nil,
         appendError: (any Error)? = nil,
-        commitError: (any Error)? = nil
+        commitError: (any Error)? = nil,
+        commitDelayNanoseconds: UInt64 = 0
     ) {
         self.connectError = connectError
         self.appendError = appendError
         self.commitError = commitError
+        self.commitDelayNanoseconds = commitDelayNanoseconds
     }
 
     func connect() async throws {
@@ -320,6 +508,9 @@ private actor FakeRealtimeStreamingClient: BarnOwlRealtimeStreamingClient {
     }
 
     func commitAudio() async throws {
+        if commitDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: commitDelayNanoseconds)
+        }
         if let commitError {
             throw commitError
         }

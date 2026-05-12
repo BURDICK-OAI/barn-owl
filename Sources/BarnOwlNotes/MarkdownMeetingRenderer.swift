@@ -411,13 +411,9 @@ public struct ExternalParticipantNotesRenderer: Sendable {
         }
 
         var lines: [String] = [
-            "Subject: Follow-up: \(title)",
+            title,
             "",
-            "Hi all,",
-            "",
-            "Thanks for the conversation. Here is a concise recap.",
-            "",
-            "Meeting: \(title)"
+            "Shareable recap"
         ]
 
         if let startedAt {
@@ -430,18 +426,15 @@ public struct ExternalParticipantNotesRenderer: Sendable {
             lines.append("Related: \(related.joined(separator: ", "))")
         }
 
-        Self.appendEmailSection("Summary", summary, to: &lines)
-        Self.appendEmailSection("Decisions", decisions, to: &lines)
-        Self.appendEmailSection("Action items", actionItems, to: &lines)
-        Self.appendEmailSection("Open questions", openQuestions, to: &lines)
-
-        lines.append("")
-        lines.append("Thanks,")
+        Self.appendShareableSection("Summary", summary, to: &lines)
+        Self.appendShareableSection("Decisions", decisions, to: &lines)
+        Self.appendShareableSection("Action items", actionItems, to: &lines)
+        Self.appendShareableSection("Open questions", openQuestions, to: &lines)
 
         return lines.joined(separator: "\n")
     }
 
-    private static func appendEmailSection(_ title: String, _ items: [String], to lines: inout [String]) {
+    private static func appendShareableSection(_ title: String, _ items: [String], to lines: inout [String]) {
         guard !items.isEmpty else { return }
         lines.append("")
         lines.append("\(title):")

@@ -801,6 +801,18 @@ func menuBarPresentationKeepsIdleSetupCompact() {
 }
 
 @Test
+func updateAvailabilityButtonTitlesMatchMenuBarPolicy() {
+    #expect(BarnOwlUpdateAvailability.unknown.buttonTitle == "Update Unavailable")
+    #expect(!BarnOwlUpdateAvailability.unknown.hasInstallableUpdate)
+    #expect(BarnOwlUpdateAvailability.upToDate(version: "0.1.0", build: "8").buttonTitle == "Up to Date")
+    #expect(!BarnOwlUpdateAvailability.upToDate(version: "0.1.0", build: "8").hasInstallableUpdate)
+
+    let available = BarnOwlUpdateAvailability.available(BarnOwlAvailableUpdate(version: "0.1.0", build: "9", notes: nil))
+    #expect(available.buttonTitle == "Update Available")
+    #expect(available.hasInstallableUpdate)
+}
+
+@Test
 func menuBarSetupIncludesRequiredPermissionChecks() {
     let snapshot = BarnOwlReadinessSnapshot(checks: [
         BarnOwlReadinessCheck(id: .apiKey, title: "API Key", detail: "", systemImage: "key", state: .ready),
@@ -1249,7 +1261,7 @@ func realtimeControllerReportsTranscribingForDeltas() async throws {
         trackKind: .microphone,
         pcm16Data: makeRealtimePCM16Data(sample: 3_000, byteCount: OpenAIRealtimeTranscriptionClient.minimumCommitByteCount + 512),
         sampleRate: OpenAIRealtimeTranscriptionClient.defaultSampleRate,
-        duration: 0.12
+        duration: 0.70
     ))
     try await Task.sleep(nanoseconds: 100_000_000)
 

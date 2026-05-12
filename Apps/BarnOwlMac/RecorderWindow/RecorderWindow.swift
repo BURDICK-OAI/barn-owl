@@ -6,10 +6,12 @@ import SwiftUI
 
 private enum RecorderWorkspaceTab: String, CaseIterable {
     case notes = "Notes"
-    case share = "Share"
+    case share = "Shareable"
     case chat = "Chat"
     case transcript = "Transcript"
     case summary = "Summary"
+    case jobs = "Jobs"
+    case related = "Related"
     case insights = "Insights"
     case history = "History"
     case performance = "Performance"
@@ -17,10 +19,12 @@ private enum RecorderWorkspaceTab: String, CaseIterable {
     var systemImage: String {
         switch self {
         case .notes: "doc.text"
-        case .share: "envelope"
+        case .share: "square.and.arrow.up"
         case .chat: "bubble.left.and.bubble.right"
         case .transcript: "quote.bubble"
         case .summary: "text.alignleft"
+        case .jobs: "clock.arrow.circlepath"
+        case .related: "link"
         case .insights: "lightbulb"
         case .history: "clock.arrow.circlepath"
         case .performance: "speedometer"
@@ -28,58 +32,100 @@ private enum RecorderWorkspaceTab: String, CaseIterable {
     }
 }
 
+private enum RecorderUtilityPanel: String, Identifiable {
+    case updateNotes
+    case addContext
+    case contextInbox
+
+    var id: String { rawValue }
+}
+
+private enum RecorderWindowLayout: Equatable {
+    case regular
+    case medium
+    case compact
+
+    init(width: CGFloat) {
+        if width >= 1_120 {
+            self = .regular
+        } else if width >= 760 {
+            self = .medium
+        } else {
+            self = .compact
+        }
+    }
+
+    var sidebarWidth: CGFloat {
+        switch self {
+        case .regular:
+            300
+        case .medium:
+            260
+        case .compact:
+            0
+        }
+    }
+}
+
 struct RecorderWindow: View {
     @ObservedObject var model: BarnOwlAppModel
     @State private var selectedTab: RecorderWorkspaceTab = .notes
+    @State private var selectedSessionIDs = Set<UUID>()
+    @State private var selectedRecoveryAttentionID: UUID?
+    @State private var activeUtilityPanel: RecorderUtilityPanel?
     @State private var sessionPendingDeletion: BarnOwlRecentSession?
+    @State private var sessionIDsPendingBulkDeletion = Set<UUID>()
     @State private var searchTask: Task<Void, Never>?
     @State private var shareNotesCopyStatus = ""
 
     var body: some View {
         GeometryReader { proxy in
-            let isCompact = proxy.size.width < 860
+            let layout = RecorderWindowLayout(width: proxy.size.width)
 
-            if isCompact {
-                VStack(spacing: 0) {
-                    header(isCompact: true)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-
-                    Divider()
-
+            switch layout {
+            case .regular, .medium:
+                HStack(alignment: .top, spacing: 0) {
                     sidebar
-                        .frame(height: min(180, max(132, proxy.size.height * 0.28)))
-                        .background(BarnOwlDesign.warmPanel)
-
-                    Divider()
-
-                    noteWorkspace(isCompact: true)
-                        .padding(16)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                HStack(spacing: 0) {
-                    sidebar
-                        .frame(width: sidebarWidth(for: proxy.size.width))
+                        .frame(width: layout.sidebarWidth)
+                        .frame(maxHeight: .infinity, alignment: .topLeading)
                         .background(.ultraThinMaterial)
+                        .clipped()
 
                     Divider()
 
                     VStack(spacing: 0) {
-                        header(isCompact: proxy.size.width < 1_020)
+                        header(layout: layout)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 16)
 
                         Divider()
 
-                        noteWorkspace(isCompact: proxy.size.width < 1_240)
+                        noteWorkspace(layout: layout)
                             .padding(20)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .clipped()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            case .compact:
+                VStack(spacing: 0) {
+                    header(layout: layout)
+                        .padding(14)
+
+                    Divider()
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            compactSessionPicker
+                            noteWorkspace(layout: layout)
+                        }
+                        .padding(14)
                     }
                 }
             }
         }
-        .frame(minWidth: 460, minHeight: 520)
+        .frame(minWidth: 560, minHeight: 540)
         .background(BarnOwlDesign.windowBackground)
         .alert("Delete Recording?", isPresented: deleteConfirmationPresented) {
             Button("Delete", role: .destructive) {
@@ -93,6 +139,19 @@ struct RecorderWindow: View {
             }
         } message: {
             Text(deleteConfirmationMessage)
+        }
+        .alert("Delete Selected Recordings?", isPresented: bulkDeleteConfirmationPresented) {
+            Button("Delete Selected", role: .destructive) {
+                let ids = sessionIDsPendingBulkDeletion
+                selectedSessionIDs.subtract(ids)
+                Task { await model.deleteRecentSessions(ids) }
+                sessionIDsPendingBulkDeletion = []
+            }
+            Button("Cancel", role: .cancel) {
+                sessionIDsPendingBulkDeletion = []
+            }
+        } message: {
+            Text("This removes \(sessionIDsPendingBulkDeletion.count) selected recording\(sessionIDsPendingBulkDeletion.count == 1 ? "" : "s") and notes from the Barn Owl library.")
         }
     }
 
@@ -148,6 +207,10 @@ struct RecorderWindow: View {
                 )
             }
 
+            if selectedSessionIDs.count > 1 {
+                bulkSessionActionsBar
+            }
+
             if !model.recoveryAttentionItems.isEmpty {
                 needsAttentionSection
             }
@@ -174,7 +237,7 @@ struct RecorderWindow: View {
                 .font(.caption)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: selectedSessionBinding) {
+                List(selection: $selectedSessionIDs) {
                     if !model.noteSearchResults.isEmpty {
                         ForEach(model.noteSearchResults) { result in
                             SearchResultRow(result: result, isSelected: model.displayedNote?.id == result.id)
@@ -198,9 +261,102 @@ struct RecorderWindow: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
+                .onChange(of: selectedSessionIDs) { _, newValue in
+                    handleSessionSelectionChange(newValue)
+                }
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var compactSessionPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                BarnOwlMenuBarIcon(
+                    status: model.status,
+                    firstRecordingPause: 250_000_000 ... 700_000_000,
+                    recordingPause: 25_000_000_000 ... 35_000_000_000
+                )
+                    .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sessions")
+                        .font(.headline.weight(.semibold))
+                    Text(model.lifecyclePresentation.title)
+                        .font(.caption)
+                        .foregroundStyle(model.lifecyclePresentation.tint)
+                }
+
+                Spacer()
+
+                Button {
+                    Task { await model.refreshRecentSessions() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh sessions")
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search notes", text: $model.noteSearchQuery)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        Task { await model.searchNotes() }
+                    }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(BarnOwlDesign.warmStroke)
+            }
+            .onChange(of: model.noteSearchQuery) { _, _ in
+                scheduleSearch()
+            }
+            .onExitCommand {
+                clearSearch()
+            }
+
+            if selectedSessionIDs.count > 1 {
+                bulkSessionActionsBar
+            }
+
+            if displayedSessionCount == 0 {
+                ContentUnavailableView(
+                    "No Notes",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text(emptySearchDescription)
+                )
+                .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(filteredSessions.prefix(12)) { session in
+                            CompactSessionChip(
+                                session: session,
+                                isSelected: model.displayedNote?.id == session.id,
+                                isMultiSelected: selectedSessionIDs.contains(session.id)
+                            ) {
+                                selectedSessionIDs = [session.id]
+                                Task { await model.openRecentSession(session.id) }
+                            }
+                        }
+                    }
+                    .padding(1)
+                }
+            }
+        }
+        .padding(12)
+        .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
     }
 
     private var needsAttentionSection: some View {
@@ -212,6 +368,14 @@ struct RecorderWindow: View {
             ForEach(model.recoveryAttentionItems.prefix(3)) { item in
                 RecoveryAttentionRow(
                     item: item,
+                    isSelected: selectedRecoveryAttentionID == item.id,
+                    select: {
+                        selectedRecoveryAttentionID = item.id
+                        if let meetingID = item.meetingID {
+                            selectedSessionIDs = [meetingID]
+                            Task { await model.openRecentSession(meetingID) }
+                        }
+                    },
                     retry: {
                         Task { await model.retryRecoveryAttentionItem(item) }
                     },
@@ -229,7 +393,43 @@ struct RecorderWindow: View {
         }
     }
 
-    private func header(isCompact: Bool) -> some View {
+    private var bulkSessionActionsBar: some View {
+        HStack(spacing: 8) {
+            Label("\(selectedSessionIDs.count) selected", systemImage: "checkmark.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            bulkSelectionButton("Export Selected", prominence: .secondary) {
+                Task { await model.exportRecentSessions(selectedSessionIDs) }
+            }
+
+            bulkSelectionButton("Delete Selected", prominence: .destructive) {
+                sessionIDsPendingBulkDeletion = selectedSessionIDs
+            }
+        }
+        .padding(8)
+        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
+    }
+
+    private func bulkSelectionButton(
+        _ title: String,
+        prominence: BarnOwlActionButtonProminence,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, role: prominence == .destructive ? .destructive : nil, action: action)
+            .disabled(selectedSessionIDs.count < 2)
+            .buttonStyle(BarnOwlActionButtonStyle(prominence: prominence, size: .small))
+            .frame(width: 108)
+    }
+
+    private func header(layout: RecorderWindowLayout) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
                 headerIdentity
@@ -251,7 +451,7 @@ struct RecorderWindow: View {
                     alignment: .leading,
                     textAlignment: .leading,
                     frameAlignment: .leading,
-                    maxStatusWidth: isCompact ? nil : 420
+                    maxStatusWidth: layout == .compact ? nil : 420
                 )
             }
         }
@@ -293,17 +493,7 @@ struct RecorderWindow: View {
     }
 
     private var renameControls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                renameTextField
-                renameButton
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                renameTextField
-                renameButton
-            }
-        }
+        renameTextField
     }
 
     private var renameTextField: some View {
@@ -317,13 +507,6 @@ struct RecorderWindow: View {
             }
     }
 
-    private var renameButton: some View {
-        Button("Rename") {
-            Task { await model.saveDisplayedMeetingTitle() }
-        }
-        .disabled(model.noteTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
     private func headerControls(
         alignment: HorizontalAlignment,
         textAlignment: TextAlignment,
@@ -331,12 +514,17 @@ struct RecorderWindow: View {
         maxStatusWidth: CGFloat?
     ) -> some View {
         VStack(alignment: alignment, spacing: 6) {
-            Button(model.primaryActionTitle) {
-                Task { await model.toggleRecording() }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    headerStatusBadge
+                    primaryRecordingButton
+                }
+
+                VStack(alignment: alignment, spacing: 8) {
+                    primaryRecordingButton
+                    headerStatusBadge
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(BarnOwlDesign.amber)
-            .disabled(!model.canUsePrimaryAction)
 
             if model.lifecyclePresentation.phase == .recording {
                 Label("Recording \(model.recordingElapsedText)", systemImage: model.lifecyclePresentation.systemImage)
@@ -345,14 +533,6 @@ struct RecorderWindow: View {
                     .lineLimit(1)
                     .multilineTextAlignment(textAlignment)
                     .frame(maxWidth: maxStatusWidth, alignment: frameAlignment)
-            } else if model.status != .idle || model.captureStatus != "Idle." {
-                Label(model.lifecyclePresentation.title, systemImage: model.lifecyclePresentation.systemImage)
-                    .font(.caption)
-                    .foregroundStyle(model.status == .failed ? .red : .secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(textAlignment)
-                    .frame(maxWidth: maxStatusWidth, alignment: frameAlignment)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if model.status == .recording {
@@ -378,6 +558,26 @@ struct RecorderWindow: View {
         }
     }
 
+    private var primaryRecordingButton: some View {
+        Button(recordingActionTitle) {
+            Task { await model.toggleRecording() }
+        }
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
+        .frame(width: 190)
+        .disabled(!model.canUsePrimaryAction)
+        .help(recordingActionHelp)
+    }
+
+    private var headerStatusBadge: some View {
+        Label(headerStatusText, systemImage: model.lifecyclePresentation.systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(headerStatusColor)
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(headerStatusColor.opacity(0.10), in: Capsule())
+    }
+
     private func pipelineStatusLabel(
         _ title: String,
         status: String,
@@ -395,51 +595,41 @@ struct RecorderWindow: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func noteWorkspace(isCompact: Bool) -> some View {
+    private func noteWorkspace(layout: RecorderWindowLayout) -> some View {
         Group {
-            if isCompact {
-                ScrollView {
-                    noteWorkspaceContent(isCompact: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            if layout == .compact {
+                noteWorkspaceContent(layout: layout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                noteWorkspaceContent(isCompact: false)
+                noteWorkspaceContent(layout: layout)
             }
         }
     }
 
-    private func noteWorkspaceContent(isCompact: Bool) -> some View {
+    private func noteWorkspaceContent(layout: RecorderWindowLayout) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             progressSection
 
+            selectedRecoveryAttentionPanel
+
             toolbarButtons
+
+            utilityPanel
 
             if shouldShowPostRecordingContextReview {
                 postRecordingContextReviewPanel
             }
 
-            if isCompact {
+            if layout == .compact {
                 VStack(alignment: .leading, spacing: 16) {
                     noteTabs
-                    selectedTabContent(minHeight: 220, maxHeight: 280)
-                    promptAndContextPanel(width: nil)
+                    selectedTabContent(minHeight: 260, maxHeight: nil)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HStack(spacing: 0) {
-                    mainEditorColumn
-                        .frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
-                        .layoutPriority(1)
-
-                    if shouldShowContextInspector {
-                        Divider()
-                            .padding(.vertical, -20)
-
-                        contextInspector
-                            .frame(width: 300)
-                            .frame(maxHeight: .infinity)
-                    }
-                }
+                mainEditorColumn
+                    .frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -452,6 +642,7 @@ struct RecorderWindow: View {
             }
 
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var mainEditorColumn: some View {
@@ -460,10 +651,10 @@ struct RecorderWindow: View {
 
             selectedTabContent(minHeight: 430, maxHeight: .infinity)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            promptBar
+                .layoutPriority(1)
         }
         .padding(.trailing, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var noteTabs: some View {
@@ -521,6 +712,10 @@ struct RecorderWindow: View {
                 minHeight: minHeight,
                 maxHeight: maxHeight
             )
+        case .jobs:
+            jobsPanel(minHeight: minHeight, maxHeight: maxHeight)
+        case .related:
+            relatedNotesPanel(minHeight: minHeight, maxHeight: maxHeight)
         case .insights:
             readOnlyMarkdownPanel(
                 title: "Insights",
@@ -571,6 +766,7 @@ struct RecorderWindow: View {
                             Task { await model.applyPromptToDisplayedNote() }
                         }
                         .controlSize(.small)
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     }
 
                     if model.noteActionStatus.localizedCaseInsensitiveContains("api key") {
@@ -578,6 +774,7 @@ struct RecorderWindow: View {
                             openSettings()
                         }
                         .controlSize(.small)
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     }
                 }
             } else if let reason = promptDisabledReason {
@@ -609,6 +806,7 @@ struct RecorderWindow: View {
                     }
                     .disabled(model.isHistoryRestoreInFlight)
                     .controlSize(.small)
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                 }
                 Button {
                     Task { await model.refreshMeetingHistory() }
@@ -678,6 +876,7 @@ struct RecorderWindow: View {
                 }
                 .disabled(model.isHistoryRestoreInFlight)
                 .controlSize(.small)
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
             }
 
             if item.beforeTitle != item.afterTitle {
@@ -786,10 +985,11 @@ struct RecorderWindow: View {
                     ProgressView()
                         .controlSize(.small)
                 }
-                Text(model.isNoteUpdateInFlight ? "Updating..." : "Update")
+                Text(model.isNoteUpdateInFlight ? "Updating..." : "Update Notes")
             }
         }
         .disabled(!canRunPromptUpdate)
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
         .help(promptDisabledReason ?? "Update this note")
     }
 
@@ -879,6 +1079,25 @@ struct RecorderWindow: View {
         Task { await model.searchNotes() }
     }
 
+    private func handleSessionSelectionChange(_ selectedIDs: Set<UUID>) {
+        selectedRecoveryAttentionID = nil
+
+        guard selectedIDs.count == 1,
+              let id = selectedIDs.first,
+              model.displayedNote?.id != id
+        else {
+            return
+        }
+
+        Task { await model.openRecentSession(id) }
+    }
+
+    private func toggleUtilityPanel(_ panel: RecorderUtilityPanel) {
+        withAnimation(.easeInOut(duration: 0.16)) {
+            activeUtilityPanel = activeUtilityPanel == panel ? nil : panel
+        }
+    }
+
     private var emptySearchDescription: String {
         if model.isSearchInFlight {
             return "Searching..."
@@ -891,107 +1110,6 @@ struct RecorderWindow: View {
             return "No notes match this search."
         }
         return "Completed transcripts will show up here."
-    }
-
-    private var contextInspector: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                inspectorCard(title: "Jobs", systemImage: "clock.arrow.circlepath") {
-                    jobStatusContent
-                }
-
-                inspectorCard(title: "Context Inbox", systemImage: "tray.full") {
-                    contextInboxContent
-                }
-
-                inspectorCard(title: "Context Review", systemImage: "square.stack.3d.up") {
-                    Text(inferredFactsText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    commandContextEditor(
-                        text: $model.contextDraft,
-                        placeholder: "Add anything Barn Owl should know: people, project, customer, goals, corrections, acronyms, prior context...",
-                        minHeight: 110,
-                        maxHeight: 150
-                    )
-                    HStack(spacing: 8) {
-                        Button {
-                            Task { await model.appendContextToDisplayedNote() }
-                        } label: {
-                            HStack(spacing: 6) {
-                                if model.isContextUpdateInFlight {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                }
-                                Text(model.isContextUpdateInFlight ? "Adding..." : "Add Context")
-                            }
-                        }
-                        .disabled(contextDisabledReason != nil)
-                        .help(contextDisabledReason ?? "Attach context")
-
-                        if !model.contextReviewStatus.isEmpty {
-                            inlineActionStatus(
-                                text: model.contextReviewStatus,
-                                isRunning: model.isContextUpdateInFlight,
-                                isError: model.contextReviewStatus.localizedCaseInsensitiveContains("failed")
-                            )
-                        } else if let reason = contextDisabledReason {
-                            Text(reason)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                inspectorCard(title: "Related Notes", systemImage: "link") {
-                    if filteredSessions.prefix(3).isEmpty {
-                        Text("Search or complete more notes to populate this.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(filteredSessions.prefix(3))) { session in
-                            Button {
-                                Task { await model.openRecentSession(session.id) }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(session.title)
-                                        .font(.caption.weight(.semibold))
-                                        .lineLimit(1)
-                                    Text(session.overview)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                if canShowRetentionActions {
-                    inspectorCard(title: "Retention", systemImage: "externaldrive.badge.minus") {
-                        Text("Final notes are kept in the Barn Owl library. Temporary audio is purged after processing, and can be purged manually here too.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Button("Purge Temporary Audio") {
-                            Task { await model.purgeTemporaryAudioForDisplayedRecording() }
-                        }
-                        .disabled(model.displayedNote == nil && model.activeSession == nil)
-                        Button("Delete Recording", role: .destructive) {
-                            if let session = model.recentSessions.first(where: { $0.id == model.displayedNote?.id }) {
-                                sessionPendingDeletion = session
-                            }
-                        }
-                        .disabled(model.displayedNote == nil)
-                    }
-                }
-
-                statusStrip
-            }
-            .padding(.leading, 18)
-        }
     }
 
     private var postRecordingContextReviewPanel: some View {
@@ -1060,23 +1178,25 @@ struct RecorderWindow: View {
                     Button(model.isContextUpdateInFlight ? "Working..." : "Looks right") {
                         Task { await model.approvePostRecordingContextReview() }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(BarnOwlDesign.amber)
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
                     .disabled(model.isContextUpdateInFlight)
 
                     Button(model.isContextUpdateInFlight ? "Reading..." : "Add context") {
                         Task { await model.addPostRecordingContext() }
                     }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     .disabled(model.isContextUpdateInFlight)
 
                     Button(model.isContextUpdateInFlight ? "Regenerating..." : "Regenerate notes") {
                         Task { await model.regenerateNotesFromPostRecordingContext() }
                     }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     .disabled(model.isContextUpdateInFlight)
 
                     Button("Not now") {
                         Task { await model.processPostRecordingContextWithoutEdits() }
                     }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
                     .disabled(model.isContextUpdateInFlight)
                 }
 
@@ -1084,23 +1204,25 @@ struct RecorderWindow: View {
                     Button(model.isContextUpdateInFlight ? "Working..." : "Looks right") {
                         Task { await model.approvePostRecordingContextReview() }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(BarnOwlDesign.amber)
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
                     .disabled(model.isContextUpdateInFlight)
 
                     Button(model.isContextUpdateInFlight ? "Reading..." : "Add context") {
                         Task { await model.addPostRecordingContext() }
                     }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     .disabled(model.isContextUpdateInFlight)
 
                     Button(model.isContextUpdateInFlight ? "Regenerating..." : "Regenerate notes") {
                         Task { await model.regenerateNotesFromPostRecordingContext() }
                     }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     .disabled(model.isContextUpdateInFlight)
 
                     Button("Not now") {
                         Task { await model.processPostRecordingContextWithoutEdits() }
                     }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
                     .disabled(model.isContextUpdateInFlight)
                 }
             }
@@ -1113,44 +1235,96 @@ struct RecorderWindow: View {
         }
     }
 
-    private var toolbarButtons: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                noteToolbarButton(saveNoteToolbarAction)
-                noteOverflowMenu
-            }
+    @ViewBuilder
+    private var selectedRecoveryAttentionPanel: some View {
+        if let item = selectedRecoveryAttentionItem {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title)
+                            .font(.headline)
+                        Text(item.message)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Button("Close") {
+                        selectedRecoveryAttentionID = nil
+                    }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
+                }
 
-            VStack(alignment: .leading, spacing: 8) {
-                noteToolbarButton(saveNoteToolbarAction)
-                noteOverflowMenu
+                if let details = item.details, !details.isEmpty {
+                    Text(details)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                HStack(spacing: 8) {
+                    if item.canRetry {
+                        Button("Retry") {
+                            Task { await model.retryRecoveryAttentionItem(item) }
+                        }
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
+                    }
+                    Button("Dismiss") {
+                        Task { await model.dismissRecoveryAttentionItem(item) }
+                    }
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
+                }
+            }
+            .padding(12)
+            .background(.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.red.opacity(0.16))
             }
         }
-        .tint(BarnOwlDesign.amber)
     }
 
-    private var noteOverflowMenu: some View {
-        Menu("More") {
-            ForEach(noteToolbarSecondaryActions) { action in
+    private var toolbarButtons: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 176, maximum: 220), spacing: 10)],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            ForEach(noteToolbarActions) { action in
                 noteToolbarButton(action)
+                    .frame(minWidth: 176, maxWidth: .infinity)
             }
         }
-        .disabled(noteToolbarSecondaryActions.allSatisfy(\.isDisabled))
-        .help("Export, reveal, and delete actions")
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private func noteToolbarButton(_ action: NoteToolbarAction) -> some View {
         if let keyboardShortcut = action.keyboardShortcut {
-            Button(action.title, role: action.role) {
+            Button(role: action.role) {
                 action.perform()
+            } label: {
+                Text(action.title)
+                    .frame(maxWidth: .infinity)
             }
             .disabled(action.isDisabled)
             .keyboardShortcut(KeyEquivalent(Character(keyboardShortcut)), modifiers: [.command])
+            .buttonStyle(BarnOwlActionButtonStyle(prominence: action.prominence, size: .standard))
         } else {
-            Button(action.title, role: action.role) {
+            Button(role: action.role) {
                 action.perform()
+            } label: {
+                Text(action.title)
+                    .frame(maxWidth: .infinity)
             }
             .disabled(action.isDisabled)
+            .buttonStyle(BarnOwlActionButtonStyle(prominence: action.prominence, size: .standard))
         }
     }
 
@@ -1163,8 +1337,27 @@ struct RecorderWindow: View {
         )
     }
 
-    private var noteToolbarSecondaryActions: [NoteToolbarAction] {
+    private var noteToolbarActions: [NoteToolbarAction] {
         [
+            saveNoteToolbarAction,
+            NoteToolbarAction(
+                title: "Update Notes with Prompt",
+                isDisabled: model.displayedNote == nil,
+                keyboardShortcut: nil,
+                perform: { toggleUtilityPanel(.updateNotes) }
+            ),
+            NoteToolbarAction(
+                title: "Add Recording Context",
+                isDisabled: model.displayedNote == nil && model.activeSession == nil,
+                keyboardShortcut: nil,
+                perform: { toggleUtilityPanel(.addContext) }
+            ),
+            NoteToolbarAction(
+                title: "Context Inbox",
+                isDisabled: model.displayedNote == nil && model.activeSession == nil && model.contextInboxItems.isEmpty,
+                keyboardShortcut: nil,
+                perform: { toggleUtilityPanel(.contextInbox) }
+            ),
             NoteToolbarAction(
                 title: "Open Markdown in Finder",
                 isDisabled: model.displayedNote == nil,
@@ -1172,16 +1365,11 @@ struct RecorderWindow: View {
                 perform: { Task { await model.openDisplayedMarkdownInFinder() } }
             ),
             NoteToolbarAction(
-                title: "Open Library in Finder",
-                isDisabled: false,
-                keyboardShortcut: nil,
-                perform: { model.openLibraryInFinder() }
-            ),
-            NoteToolbarAction(
-                title: "Delete Recording",
+                title: "Delete Recording and Notes",
                 isDisabled: model.displayedNote == nil,
                 keyboardShortcut: nil,
                 role: .destructive,
+                prominence: .destructive,
                 perform: {
                     if let session = model.recentSessions.first(where: { $0.id == model.displayedNote?.id }) {
                         sessionPendingDeletion = session
@@ -1189,6 +1377,73 @@ struct RecorderWindow: View {
                 }
             )
         ]
+    }
+
+    @ViewBuilder
+    private var utilityPanel: some View {
+        switch activeUtilityPanel {
+        case .updateNotes:
+            promptBar
+        case .addContext:
+            addContextPanel
+        case .contextInbox:
+            contextInboxPanel
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var addContextPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Add Recording Context", systemImage: "plus.bubble")
+                .font(.headline)
+            commandContextEditor(
+                text: $model.contextDraft,
+                placeholder: "Add names, project context, acronyms, meeting type, corrections, or customer details.",
+                minHeight: 80,
+                maxHeight: 130
+            )
+            HStack(spacing: 8) {
+                Button {
+                    Task { await model.appendContextToDisplayedNote() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.isContextUpdateInFlight {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(model.isContextUpdateInFlight ? "Adding..." : "Add Context")
+                    }
+                }
+                .disabled(contextDisabledReason != nil)
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
+                .help(contextDisabledReason ?? "Attach context")
+
+                if !model.contextReviewStatus.isEmpty {
+                    inlineActionStatus(
+                        text: model.contextReviewStatus,
+                        isRunning: model.isContextUpdateInFlight,
+                        isError: model.contextReviewStatus.localizedCaseInsensitiveContains("failed")
+                    )
+                } else if let reason = contextDisabledReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
+    }
+
+    private var contextInboxPanel: some View {
+        inspectorCard(title: "Context Inbox", systemImage: "tray.full") {
+            contextInboxContent
+        }
     }
 
     private func noteEditor(minHeight: CGFloat, maxHeight: CGFloat?) -> some View {
@@ -1211,6 +1466,7 @@ struct RecorderWindow: View {
                 )
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .topLeading)
     }
 
     private func livePreview(minHeight: CGFloat, maxHeight: CGFloat?) -> some View {
@@ -1267,22 +1523,23 @@ struct RecorderWindow: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Label("External Notes", systemImage: "envelope")
+                Label("Shareable Notes", systemImage: "square.and.arrow.up")
                     .font(.headline)
                 Spacer()
-                Button("Copy Email Notes") {
+                Button("Copy Shareable Notes") {
                     copyExternalParticipantNotes()
                 }
                 .disabled(isEmpty)
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
             }
 
-            Text("Email-friendly recap for participants. Barn Owl excludes private local context, diagnostics, file paths, and raw transcript.")
+            Text("Sanitized recap for Slack, email, docs, or customer follow-up. Barn Owl excludes private local context, diagnostics, file paths, and raw transcript.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
-                Text(isEmpty ? "External notes will appear after a transcript or summary is available." : text)
+                Text(isEmpty ? "Shareable notes will appear after a transcript or summary is available." : text)
                     .font(.system(.body, design: .default))
                     .foregroundStyle(isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1302,6 +1559,75 @@ struct RecorderWindow: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(BarnOwlDesign.moss)
             }
+        }
+    }
+
+    private func jobsPanel(minHeight: CGFloat, maxHeight: CGFloat?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Jobs", systemImage: "clock.arrow.circlepath")
+                .font(.headline)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    jobStatusContent
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(minHeight: minHeight, maxHeight: maxHeight)
+            .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(BarnOwlDesign.warmStroke)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private func relatedNotesPanel(minHeight: CGFloat, maxHeight: CGFloat?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Related Notes", systemImage: "link")
+                .font(.headline)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if relatedSessions.isEmpty {
+                        Text("Related notes will appear as Barn Owl captures more meetings.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(relatedSessions) { session in
+                            Button {
+                                selectedSessionIDs = [session.id]
+                                Task { await model.openRecentSession(session.id) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(session.title)
+                                        .font(.callout.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text(session.overview)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(3)
+                                }
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(12)
+            }
+            .frame(minHeight: minHeight, maxHeight: maxHeight)
+            .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(BarnOwlDesign.warmStroke)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
 
@@ -1370,12 +1696,14 @@ struct RecorderWindow: View {
                             Task { await model.sendChatMessage() }
                         }
                         .controlSize(.small)
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     }
                     if model.chatStatus.localizedCaseInsensitiveContains("api key") {
                         Button("Settings") {
                             openSettings()
                         }
                         .controlSize(.small)
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                     }
                 }
             } else if let reason = chatDisabledReason {
@@ -1419,6 +1747,7 @@ struct RecorderWindow: View {
             }
         }
         .disabled(chatDisabledReason != nil)
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
         .help(chatDisabledReason ?? "Ask Barn Owl")
     }
 
@@ -1511,52 +1840,14 @@ struct RecorderWindow: View {
         }
     }
 
-    private var statusStrip: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Label(model.lifecyclePresentation.title, systemImage: model.lifecyclePresentation.systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(model.lifecyclePresentation.tint)
-
-            if model.status == .recording {
-                Label("Realtime preview: \(model.realtimeStatus)", systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Label("High-quality pass: \(model.finalTranscriptionStatus)", systemImage: "text.magnifyingglass")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let latestJob = model.jobSummaries.first {
-                Label(latestJob.displayText, systemImage: "clock.arrow.circlepath")
-                    .font(.caption2)
-                    .foregroundStyle(latestJob.status == .failed ? .red : .secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let activeStep = model.processingTimelineItems.first(where: { $0.status == .running || $0.status == .failed || $0.status == .pending }),
-               !BarnOwlProcessingTimeline.shouldCollapse(model.processingTimelineItems) {
-                Label(activeStep.status == .failed ? "\(activeStep.step.label) failed" : activeStep.step.label, systemImage: activeStep.status == .failed ? "exclamationmark.triangle" : "clock")
-                    .font(.caption2)
-                    .foregroundStyle(activeStep.status == .failed ? .red : .secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(BarnOwlDesign.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-    }
-
     @ViewBuilder
     private var jobStatusContent: some View {
-        if model.jobSummaries.isEmpty {
+        if visibleJobSummaries.isEmpty {
             Text("No background jobs are running.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
-            ForEach(model.jobSummaries.prefix(5)) { job in
+            ForEach(visibleJobSummaries.prefix(8)) { job in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Image(systemName: jobIcon(for: job.status))
@@ -1578,15 +1869,12 @@ struct RecorderWindow: View {
                 }
             }
 
-            Button("Retry Failed Jobs") {
-                Task { await model.retryFailedJobs() }
-            }
-            .disabled(!model.jobSummaries.contains { $0.status == .failed })
-            .help(model.jobSummaries.contains { $0.status == .failed } ? "Retry failed jobs" : "No failed jobs to retry.")
-            if !model.jobSummaries.contains(where: { $0.status == .failed }) {
-                Text("No failed jobs to retry.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            if visibleJobSummaries.contains(where: { $0.status == .failed }) {
+                Button("Retry Failed Jobs") {
+                    Task { await model.retryFailedJobs(ids: visibleFailedJobIDs) }
+                }
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
+                .help("Retry failed jobs")
             }
         }
     }
@@ -1634,6 +1922,7 @@ struct RecorderWindow: View {
                 Task { await model.refreshContextInbox() }
             }
             .controlSize(.small)
+            .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
         }
     }
 
@@ -1644,17 +1933,20 @@ struct RecorderWindow: View {
         }
         .controlSize(.small)
         .disabled(item.state == .accepted)
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
 
         Button("Ignore") {
             Task { await model.setContextInboxItemState(item.id, state: .ignored) }
         }
         .controlSize(.small)
         .disabled(item.state == .ignored)
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
 
         Button("Delete", role: .destructive) {
             Task { await model.deleteContextInboxItem(item.id) }
         }
         .controlSize(.small)
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .destructive))
     }
 
     private func contextStateColor(_ state: BarnOwlExternalContextState) -> Color {
@@ -1674,19 +1966,11 @@ struct RecorderWindow: View {
             && !model.notePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var canShowRetentionActions: Bool {
-        model.displayedNote != nil || model.activeSession != nil
-    }
-
     private var reviewFreeformContextBinding: Binding<String> {
         Binding(
             get: { model.postRecordingContextReview?.freeformContextDraft ?? "" },
             set: { model.postRecordingContextReview?.freeformContextDraft = $0 }
         )
-    }
-
-    private func sidebarWidth(for windowWidth: CGFloat) -> CGFloat {
-        min(250, max(190, windowWidth * 0.23))
     }
 
     private func editor(
@@ -1702,6 +1986,7 @@ struct RecorderWindow: View {
                 .scrollContentBackground(.hidden)
                 .padding(4)
                 .disabled(isDisabled)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if text.wrappedValue.isEmpty {
                 Text(placeholder)
@@ -1751,17 +2036,12 @@ struct RecorderWindow: View {
             }
             .padding(10)
             .background(BarnOwlDesign.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-        } else if BarnOwlProcessingTimeline.shouldCollapse(model.processingTimelineItems) {
-            Label("Processed", systemImage: "checkmark.circle.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(BarnOwlDesign.moss)
-                .padding(10)
-                .background(BarnOwlDesign.moss.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-        } else if !model.processingTimelineItems.isEmpty {
+        } else if !BarnOwlProcessingTimeline.shouldCollapse(model.processingTimelineItems),
+                  !model.processingTimelineItems.isEmpty {
             ProcessingTimelineCard(
                 items: model.processingTimelineItems,
                 isCompact: false,
-                onRetry: { Task { await model.retryFailedJobs() } }
+                onRetry: { Task { await model.retryFailedJobs(ids: visibleFailedJobIDs) } }
             )
         } else if let progress = model.progressFraction, progress < 1 {
             ProgressView(value: progress) {
@@ -1826,6 +2106,9 @@ struct RecorderWindow: View {
         }
 
         var tabs: [RecorderWorkspaceTab] = [.notes, .share, .chat, .transcript, .summary]
+        if !visibleJobSummaries.isEmpty {
+            tabs.append(.jobs)
+        }
         if !model.meetingHistoryItems.isEmpty {
             tabs.append(.history)
         }
@@ -1834,6 +2117,30 @@ struct RecorderWindow: View {
 
     private var currentWorkspaceTab: RecorderWorkspaceTab {
         visibleWorkspaceTabs.contains(selectedTab) ? selectedTab : .notes
+    }
+
+    private var currentMeetingID: UUID? {
+        model.displayedNote?.id ?? model.activeSession?.id
+    }
+
+    private var visibleJobSummaries: [BarnOwlJobSummary] {
+        guard let currentMeetingID else { return [] }
+        return model.jobSummaries.filter { job in
+            job.meetingID == currentMeetingID
+                && (job.status == .pending || job.status == .running || job.status == .failed)
+        }
+    }
+
+    private var visibleFailedJobIDs: Set<UUID> {
+        Set(visibleJobSummaries.filter { $0.status == .failed }.map(\.id))
+    }
+
+    private var relatedSessions: [BarnOwlRecentSession] {
+        let currentID = currentMeetingID
+        return filteredSessions
+            .filter { $0.id != currentID }
+            .prefix(6)
+            .map { $0 }
     }
 
     private var shouldShowPostRecordingContextReview: Bool {
@@ -1848,6 +2155,45 @@ struct RecorderWindow: View {
 
     private var currentTitle: String {
         model.displayedNote?.title ?? model.activeSession?.title ?? "Barn Owl"
+    }
+
+    private var recordingActionTitle: String {
+        if model.status == .recording {
+            return "Stop Recording"
+        }
+        if model.displayedNote != nil, model.canStartRecording {
+            return "Start New Recording"
+        }
+        return model.primaryActionTitle
+    }
+
+    private var recordingActionHelp: String {
+        if model.status == .recording {
+            return "Stop the active Barn Owl recording."
+        }
+        if model.displayedNote != nil {
+            return "Start a new recording. Existing notes are preserved."
+        }
+        return model.canUsePrimaryAction ? "Start recording." : "Recording is unavailable in the current state."
+    }
+
+    private var headerStatusText: String {
+        if BarnOwlProcessingTimeline.shouldCollapse(model.processingTimelineItems), model.displayedNote != nil {
+            return "Processed"
+        }
+        return model.lifecyclePresentation.title
+    }
+
+    private var headerStatusColor: Color {
+        if BarnOwlProcessingTimeline.shouldCollapse(model.processingTimelineItems), model.displayedNote != nil {
+            return BarnOwlDesign.moss
+        }
+        return model.lifecyclePresentation.tint
+    }
+
+    private var selectedRecoveryAttentionItem: BarnOwlRecoveryAttentionItem? {
+        guard let selectedRecoveryAttentionID else { return nil }
+        return model.recoveryAttentionItems.first { $0.id == selectedRecoveryAttentionID }
     }
 
     private var deleteConfirmationPresented: Binding<Bool> {
@@ -1867,6 +2213,17 @@ struct RecorderWindow: View {
         }
 
         return "This removes \"\(session.title)\" from the Barn Owl library, including its Markdown note and local metadata."
+    }
+
+    private var bulkDeleteConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { !sessionIDsPendingBulkDeletion.isEmpty },
+            set: { isPresented in
+                if !isPresented {
+                    sessionIDsPendingBulkDeletion = []
+                }
+            }
+        )
     }
 
     private var currentSubtitle: String {
@@ -2045,7 +2402,7 @@ struct RecorderWindow: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        shareNotesCopyStatus = "Copied email notes"
+        shareNotesCopyStatus = "Copied shareable notes"
     }
 }
 
@@ -2115,7 +2472,119 @@ private struct NoteToolbarAction: Identifiable {
     var isDisabled: Bool
     var keyboardShortcut: String?
     var role: ButtonRole? = nil
+    var prominence: BarnOwlActionButtonProminence = .secondary
     var perform: () -> Void
+}
+
+private enum BarnOwlActionButtonProminence: Equatable {
+    case primary
+    case secondary
+    case quiet
+    case destructive
+}
+
+private enum BarnOwlActionButtonSize {
+    case small
+    case standard
+
+    var font: Font {
+        switch self {
+        case .small:
+            .caption.weight(.semibold)
+        case .standard:
+            .callout.weight(.semibold)
+        }
+    }
+
+    var horizontalPadding: CGFloat {
+        switch self {
+        case .small:
+            9
+        case .standard:
+            12
+        }
+    }
+
+    var verticalPadding: CGFloat {
+        switch self {
+        case .small:
+            5
+        case .standard:
+            8
+        }
+    }
+
+    var minHeight: CGFloat {
+        switch self {
+        case .small:
+            28
+        case .standard:
+            38
+        }
+    }
+}
+
+private struct BarnOwlActionButtonStyle: ButtonStyle {
+    var prominence: BarnOwlActionButtonProminence
+    var size: BarnOwlActionButtonSize = .standard
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(size.font)
+            .lineLimit(2)
+            .minimumScaleFactor(0.88)
+            .padding(.horizontal, size.horizontalPadding)
+            .padding(.vertical, size.verticalPadding)
+            .frame(minHeight: size.minHeight)
+            .foregroundStyle(foreground)
+            .background(background(configuration), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(stroke)
+            }
+            .opacity(configuration.isPressed ? 0.72 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+
+    private var foreground: Color {
+        switch prominence {
+        case .primary:
+            .white
+        case .secondary:
+            BarnOwlDesign.amber
+        case .quiet:
+            .secondary
+        case .destructive:
+            .red
+        }
+    }
+
+    private var stroke: Color {
+        switch prominence {
+        case .primary:
+            BarnOwlDesign.amber.opacity(0.24)
+        case .secondary:
+            BarnOwlDesign.amber.opacity(0.24)
+        case .quiet:
+            BarnOwlDesign.warmStroke
+        case .destructive:
+            Color.red.opacity(0.20)
+        }
+    }
+
+    private func background(_ configuration: Configuration) -> Color {
+        let pressedBoost = configuration.isPressed ? 0.08 : 0
+        switch prominence {
+        case .primary:
+            return BarnOwlDesign.amber.opacity(configuration.isPressed ? 0.82 : 1)
+        case .secondary:
+            return BarnOwlDesign.amber.opacity(0.10 + pressedBoost)
+        case .quiet:
+            return BarnOwlDesign.warmField.opacity(configuration.isPressed ? 1 : 0.70)
+        case .destructive:
+            return Color.red.opacity(0.08 + pressedBoost)
+        }
+    }
 }
 
 private struct CommandTextEditor: View {
@@ -2244,6 +2713,7 @@ private struct ProcessingTimelineCard: View {
                 if items.contains(where: { $0.status == .failed }), let onRetry {
                     Button("Retry") { onRetry() }
                         .controlSize(.small)
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                 }
             }
 
@@ -2326,9 +2796,10 @@ private struct ProcessingTimelineCard: View {
 
 private struct RecoveryAttentionRow: View {
     var item: BarnOwlRecoveryAttentionItem
+    var isSelected: Bool
+    var select: () -> Void
     var retry: () -> Void
     var dismiss: () -> Void
-    @State private var showDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -2352,28 +2823,60 @@ private struct RecoveryAttentionRow: View {
                 if item.canRetry {
                     Button("Retry", action: retry)
                         .controlSize(.small)
+                        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
                 }
                 Button("Dismiss", action: dismiss)
                     .controlSize(.small)
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
                 if item.details?.isEmpty == false {
-                    Button(showDetails ? "Hide Details" : "Details") {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            showDetails.toggle()
-                        }
-                    }
+                    Button("Details", action: select)
                     .controlSize(.small)
+                    .buttonStyle(BarnOwlActionButtonStyle(prominence: isSelected ? .primary : .secondary))
                 }
-            }
-
-            if showDetails, let details = item.details, !details.isEmpty {
-                Text(details)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(8)
-        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 8))
+        .background(isSelected ? Color.red.opacity(0.10) : BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.red.opacity(0.26) : Color.clear)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture(perform: select)
+    }
+}
+
+private struct CompactSessionChip: View {
+    var session: BarnOwlRecentSession
+    var isSelected: Bool
+    var isMultiSelected: Bool
+    var open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: isMultiSelected ? "checkmark.circle.fill" : "doc.text")
+                        .foregroundStyle(isMultiSelected ? BarnOwlDesign.moss : (isSelected ? BarnOwlDesign.amber : .secondary))
+                    Text(session.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+
+                Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 190, alignment: .leading)
+            .padding(10)
+            .background(isSelected ? BarnOwlDesign.amber.opacity(0.12) : BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? BarnOwlDesign.amber.opacity(0.28) : BarnOwlDesign.warmStroke)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 

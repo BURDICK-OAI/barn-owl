@@ -25,6 +25,7 @@ enum BarnOwlRealtimeDiagnosticKind: String, Equatable, Sendable {
     case eventSuppressed
     case eventUnhandled
     case eventError
+    case eventRecoverableError
     case receiveClosed
     case receiveFailed
     case stopped
@@ -83,7 +84,11 @@ actor BarnOwlRealtimeTranscriptionController {
     static let droppedStatusInterval = 25
     static let skippedSilenceStatusInterval = 50
     static let stopSilenceDuration: TimeInterval = 0.65
-    static let speechRMSFloor = 0.0005
+    static let speechStartRMSFloor = 0.0035
+    static let speechContinueRMSFloor = 0.0015
+    static let minimumVoicedDurationForTranscript: TimeInterval = 0.35
+    static let minimumVoicedDurationForShortTranscript: TimeInterval = 0.65
+    static let serverVADTrailingSilenceDuration: TimeInterval = 2.2
     static let staleTranscriptGraceInterval: TimeInterval = 8
     static let routineServerEventTypes: Set<String> = [
         "conversation.item.added",
@@ -98,6 +103,7 @@ actor BarnOwlRealtimeTranscriptionController {
 
     private let client: any BarnOwlRealtimeStreamingClient
     private let manualCommitInterval: TimeInterval
+    private let usesServerTurnDetection: Bool
     private let updateHandler: @MainActor @Sendable (BarnOwlRealtimeTranscriptionUpdate) -> Void
     private let healthHandler: @MainActor @Sendable (BarnOwlRealtimeHealthState) -> Void
     private let diagnosticsHandler: @MainActor @Sendable (BarnOwlRealtimeDiagnosticEvent) -> Void
@@ -108,6 +114,7 @@ actor BarnOwlRealtimeTranscriptionController {
     private var bufferedByteCount = 0
     private var sentByteCount = 0
     private var uncommittedByteCount = 0
+    private var isCommitInFlight = false
     private var appendedChunkCount = 0
     private var committedBufferCount = 0
     private var lastCommitAt = Date.distantPast
@@ -115,6 +122,12 @@ actor BarnOwlRealtimeTranscriptionController {
     private var droppedChunkCount = 0
     private var skippedSilentChunkCount = 0
     private var didReportFirstAudio = false
+    private var isForwardingSpeechTurn = false
+    private var trailingSilenceDuration: TimeInterval = 0
+    private var currentTurnVoicedDuration: TimeInterval = 0
+    private var lastSpeechTurnVoicedDuration: TimeInterval = 0
+    private var ignoredAppendCount = 0
+    private var lastIgnoredAppendReportAt = Date.distantPast
 
     init(
         configuration: OpenAIConfiguration,
@@ -129,6 +142,7 @@ actor BarnOwlRealtimeTranscriptionController {
                 prompt: prompt,
                 transport: URLSessionRealtimeWebSocketTransport()
             ),
+            usesServerTurnDetection: true,
             updateHandler: updateHandler,
             healthHandler: healthHandler,
             diagnosticsHandler: diagnosticsHandler
@@ -138,12 +152,14 @@ actor BarnOwlRealtimeTranscriptionController {
     init(
         client: any BarnOwlRealtimeStreamingClient,
         manualCommitInterval: TimeInterval = 1.2,
+        usesServerTurnDetection: Bool = false,
         updateHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeTranscriptionUpdate) -> Void,
         healthHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeHealthState) -> Void,
         diagnosticsHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeDiagnosticEvent) -> Void = { _ in }
     ) {
         self.client = client
         self.manualCommitInterval = max(0, manualCommitInterval)
+        self.usesServerTurnDetection = usesServerTurnDetection
         self.updateHandler = updateHandler
         self.healthHandler = healthHandler
         self.diagnosticsHandler = diagnosticsHandler
@@ -160,11 +176,18 @@ actor BarnOwlRealtimeTranscriptionController {
             isStopping = false
             isDegraded = false
             uncommittedByteCount = 0
+            isCommitInFlight = false
             appendedChunkCount = 0
             committedBufferCount = 0
             lastCommitAt = Date()
             lastSpeechAudioAt = nil
             skippedSilentChunkCount = 0
+            isForwardingSpeechTurn = false
+            trailingSilenceDuration = 0
+            currentTurnVoicedDuration = 0
+            lastSpeechTurnVoicedDuration = 0
+            ignoredAppendCount = 0
+            lastIgnoredAppendReportAt = .distantPast
             await emit(.connected, "Realtime connected.", details: nil)
             await healthHandler(.connected)
             startReceiving()
@@ -177,11 +200,7 @@ actor BarnOwlRealtimeTranscriptionController {
 
     func append(_ chunk: AudioRealtimePCMChunk) async {
         guard isConnected, !isDegraded else {
-            await emit(
-                .audioAppendIgnored,
-                "Realtime audio append ignored.",
-                details: "connected=\(isConnected) degraded=\(isDegraded) bytes=\(chunk.pcm16Data.count)"
-            )
+            await reportIgnoredAppend(bytes: chunk.pcm16Data.count)
             return
         }
         guard bufferedByteCount < Self.maxBufferedByteCount else {
@@ -197,14 +216,18 @@ actor BarnOwlRealtimeTranscriptionController {
             return
         }
         let rms = RMSLevelMeter.rmsLevel(forPCM16Data: chunk.pcm16Data)
-        guard rms >= Self.speechRMSFloor else {
+        guard shouldForward(chunk: chunk, rms: rms) else {
             await handleSilentChunk(chunk, rms: rms)
             return
         }
 
         bufferedByteCount += chunk.pcm16Data.count
         do {
-            lastSpeechAudioAt = Date()
+            if isVoiced(rms: rms) {
+                lastSpeechAudioAt = Date()
+                currentTurnVoicedDuration += chunk.duration
+                trailingSilenceDuration = 0
+            }
             try await client.appendPCM16Audio(chunk.pcm16Data)
             appendedChunkCount += 1
             sentByteCount += chunk.pcm16Data.count
@@ -235,7 +258,9 @@ actor BarnOwlRealtimeTranscriptionController {
             if skippedSilentChunkCount > 0 {
                 skippedSilentChunkCount = 0
             }
-            await commitAudioIfReady()
+            if !usesServerTurnDetection {
+                await commitAudioIfReady()
+            }
         } catch {
             bufferedByteCount = max(0, bufferedByteCount - chunk.pcm16Data.count)
             isDegraded = true
@@ -261,8 +286,10 @@ actor BarnOwlRealtimeTranscriptionController {
 
         if didReportFirstAudio, !isDegraded {
             await appendTrailingSilence()
-            await commitAudioIfNeeded(force: true)
-            try? await Task.sleep(nanoseconds: 900_000_000)
+            if !usesServerTurnDetection {
+                await commitAudioIfNeeded(force: true)
+            }
+            try? await Task.sleep(nanoseconds: usesServerTurnDetection ? 1_500_000_000 : 900_000_000)
         }
 
         isConnected = false
@@ -309,7 +336,31 @@ actor BarnOwlRealtimeTranscriptionController {
                     await emit(.eventReceived, "Realtime transcript completed.", details: "characters=\(text.count)")
                     await healthHandler(.transcribing)
                     await updateHandler(BarnOwlRealtimeTranscriptionUpdate(text: text, isFinal: true))
+                    if usesServerTurnDetection, !isForwardingSpeechTurn {
+                        currentTurnVoicedDuration = 0
+                        lastSpeechTurnVoicedDuration = 0
+                    }
+                case .speechStarted:
+                    await healthHandler(.receivingAudio)
+                case .speechStopped:
+                    lastSpeechTurnVoicedDuration = max(lastSpeechTurnVoicedDuration, currentTurnVoicedDuration)
+                    isForwardingSpeechTurn = false
+                    trailingSilenceDuration = 0
                 case .error(let message):
+                    if Self.isRecoverableEmptyCommitServerError(message) {
+                        isCommitInFlight = false
+                        uncommittedByteCount = 0
+                        let safeMessage = BarnOwlErrorFormatter.sanitizeForUserDisplay(message)
+                        await emit(
+                            .eventRecoverableError,
+                            "Realtime recovered from an empty audio commit.",
+                            details: safeMessage
+                        )
+                        if didReportFirstAudio {
+                            await healthHandler(.receivingAudio)
+                        }
+                        continue
+                    }
                     isDegraded = true
                     let safeMessage = BarnOwlErrorFormatter.sanitizeForUserDisplay(message)
                     let fallbackDetails = "Realtime preview switched to fallback. Final transcription will still run after recording stops."
@@ -343,6 +394,32 @@ actor BarnOwlRealtimeTranscriptionController {
         }
     }
 
+    private func shouldForward(chunk: AudioRealtimePCMChunk, rms: Double) -> Bool {
+        if rms >= Self.speechStartRMSFloor || (isForwardingSpeechTurn && rms >= Self.speechContinueRMSFloor) {
+            isForwardingSpeechTurn = true
+            return true
+        }
+
+        guard usesServerTurnDetection,
+              isForwardingSpeechTurn,
+              currentTurnVoicedDuration > 0,
+              trailingSilenceDuration < Self.serverVADTrailingSilenceDuration
+        else {
+            return false
+        }
+
+        trailingSilenceDuration += chunk.duration
+        if trailingSilenceDuration >= Self.serverVADTrailingSilenceDuration {
+            isForwardingSpeechTurn = false
+            lastSpeechTurnVoicedDuration = max(lastSpeechTurnVoicedDuration, currentTurnVoicedDuration)
+        }
+        return true
+    }
+
+    private func isVoiced(rms: Double) -> Bool {
+        rms >= Self.speechContinueRMSFloor
+    }
+
     private func handleSilentChunk(_ chunk: AudioRealtimePCMChunk, rms: Double) async {
         skippedSilentChunkCount += 1
         if skippedSilentChunkCount == 1 || skippedSilentChunkCount.isMultiple(of: Self.skippedSilenceStatusInterval) {
@@ -355,26 +432,39 @@ actor BarnOwlRealtimeTranscriptionController {
                     "bytes=\(chunk.pcm16Data.count)",
                     "duration=\(String(format: "%.3f", chunk.duration))",
                     "rms=\(String(format: "%.5f", rms))",
-                    "threshold=\(String(format: "%.5f", Self.speechRMSFloor))",
+                    "startThreshold=\(String(format: "%.5f", Self.speechStartRMSFloor))",
+                    "continueThreshold=\(String(format: "%.5f", Self.speechContinueRMSFloor))",
                     "uncommittedBytes=\(uncommittedByteCount)"
                 ].joined(separator: " ")
             )
         }
-        await commitAudioIfReady()
+        if !usesServerTurnDetection {
+            await commitAudioIfReady()
+        }
     }
 
     private func shouldPublishTranscript(_ text: String) async -> Bool {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             return false
         }
         guard let lastSpeechAudioAt else {
             return false
         }
-        return Date().timeIntervalSince(lastSpeechAudioAt) <= Self.staleTranscriptGraceInterval
+        guard Date().timeIntervalSince(lastSpeechAudioAt) <= Self.staleTranscriptGraceInterval else {
+            return false
+        }
+
+        let voicedDuration = max(currentTurnVoicedDuration, lastSpeechTurnVoicedDuration)
+        let requiredDuration = trimmed.count <= 14
+            ? Self.minimumVoicedDurationForShortTranscript
+            : Self.minimumVoicedDurationForTranscript
+        return voicedDuration >= requiredDuration
     }
 
     private func appendTrailingSilence() async {
         guard isConnected else { return }
+        guard uncommittedByteCount > 0 || currentTurnVoicedDuration > 0 else { return }
         let byteCount = Int(Self.stopSilenceDuration * Double(OpenAIRealtimeTranscriptionClient.defaultSampleRate)) * MemoryLayout<Int16>.size
         guard byteCount > 0 else { return }
 
@@ -406,6 +496,9 @@ actor BarnOwlRealtimeTranscriptionController {
         guard isConnected, !isDegraded else {
             return
         }
+        guard !isCommitInFlight else {
+            return
+        }
         guard uncommittedByteCount >= OpenAIRealtimeTranscriptionClient.minimumCommitByteCount else {
             if force {
                 await emit(
@@ -420,21 +513,54 @@ actor BarnOwlRealtimeTranscriptionController {
             return
         }
 
+        let bytesToCommit = uncommittedByteCount
+        uncommittedByteCount = 0
+        isCommitInFlight = true
+
         do {
             try await client.commitAudio()
+            isCommitInFlight = false
             committedBufferCount += 1
+            lastCommitAt = Date()
             await emit(
                 .audioCommit,
                 "Realtime audio committed.",
-                details: "commit=\(committedBufferCount) bytes=\(uncommittedByteCount) force=\(force)"
+                details: "commit=\(committedBufferCount) bytes=\(bytesToCommit) force=\(force)"
             )
-            uncommittedByteCount = 0
-            lastCommitAt = Date()
         } catch {
+            isCommitInFlight = false
+            uncommittedByteCount += bytesToCommit
             isDegraded = true
             await emit(.audioCommitFailed, "Realtime audio commit failed.", details: BarnOwlErrorFormatter.message(for: error))
             await healthHandler(.fallbackActive)
         }
+    }
+
+    private func reportIgnoredAppend(bytes: Int) async {
+        ignoredAppendCount += 1
+        let now = Date()
+        guard ignoredAppendCount == 1 || now.timeIntervalSince(lastIgnoredAppendReportAt) >= 5 else {
+            return
+        }
+        lastIgnoredAppendReportAt = now
+        await emit(
+            .audioAppendIgnored,
+            "Realtime audio append ignored.",
+            details: "connected=\(isConnected) degraded=\(isDegraded) bytes=\(bytes) ignored=\(ignoredAppendCount)"
+        )
+    }
+
+    private static func isRecoverableEmptyCommitServerError(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        guard normalized.contains("buffer too small"),
+              normalized.contains("input audio buffer")
+        else {
+            return false
+        }
+        return normalized.contains("0.00ms")
+            || normalized.contains("0ms")
+            || normalized.contains("0 ms")
+            || normalized.contains("0.00 ms")
     }
 
     private func emit(

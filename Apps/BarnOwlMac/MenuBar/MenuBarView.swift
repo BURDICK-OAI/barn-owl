@@ -139,17 +139,11 @@ struct MenuBarView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(transcriptPreviewLines.enumerated()), id: \.offset) { index, line in
-                    HStack(alignment: .top, spacing: 8) {
-                        Circle()
-                            .fill(index == 0 && model.status == .recording ? Color.green : BarnOwlDesign.amber)
-                            .frame(width: 6, height: 6)
-                            .padding(.top, 7)
-                        Text(line)
-                            .font(.callout)
-                            .foregroundStyle(.white.opacity(0.84))
-                            .lineLimit(3)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                    Text(line)
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(index == 0 && model.status == .recording ? 0.88 : 0.72))
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -229,11 +223,16 @@ struct MenuBarView: View {
             }
 
             if model.status == .recording {
-                Label("Realtime preview: \(model.realtimeStatus)", systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Circle()
+                        .fill(realtimeHealthTint)
+                        .frame(width: 6, height: 6)
+                    Text("Realtime preview: \(model.realtimeStatus)")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Label("High-quality pass: \(model.finalTranscriptionStatus)", systemImage: "text.magnifyingglass")
                     .font(.caption)
@@ -533,9 +532,9 @@ struct MenuBarView: View {
             return false
         }
         switch model.updateAvailability {
-        case .unknown, .available:
+        case .available:
             return true
-        case .checking, .upToDate, .unavailable:
+        case .unknown, .checking, .upToDate, .unavailable:
             return false
         }
     }
@@ -552,6 +551,17 @@ struct MenuBarView: View {
 
     private var shouldShowActivity: Bool {
         model.status != .idle && !visibleActivityItems.isEmpty
+    }
+
+    private var realtimeHealthTint: Color {
+        switch model.realtimeHealthState {
+        case .connected, .receivingAudio, .transcribing:
+            .green
+        case .degraded, .fallbackActive:
+            BarnOwlDesign.amber
+        case .idle, .connecting, .stopped:
+            .white.opacity(0.42)
+        }
     }
 
     private var shouldShowPrimaryStatusLine: Bool {
@@ -753,11 +763,9 @@ private extension DiagnosticsLogLevel {
     var tint: Color {
         switch self {
         case .info:
-            .blue
-        case .warning:
-            .orange
-        case .error:
-            .red
+            .white.opacity(0.42)
+        case .warning, .error:
+            BarnOwlDesign.amber
         }
     }
 }

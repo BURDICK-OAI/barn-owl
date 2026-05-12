@@ -676,9 +676,9 @@ struct BarnOwlSettingsReadinessChecksTests {
         BarnOwlRealtimeTranscriptionHintsStore.learn(
             meetingFacts: MeetingFacts(
                 title: "Barn Owl Sync",
+                meetingType: "Planning / Review",
                 participants: ["Alice Example", "Bob Example"],
-                projects: ["Codex Bridge"],
-                meetingType: "Planning / Review"
+                projects: ["Codex Bridge"]
             ),
             segments: [
                 TranscriptSegment(

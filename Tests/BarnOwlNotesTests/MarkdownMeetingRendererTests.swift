@@ -275,7 +275,7 @@ func rendererIncludesParticipantsRisksAndReferences() {
 }
 
 @Test
-func externalParticipantNotesAreEmailFriendlyAndShareSafe() {
+func externalParticipantNotesAreGenericAndShareSafe() {
     let renderer = ExternalParticipantNotesRenderer()
     let markdown = """
     # Acme Rollout Planning
@@ -317,8 +317,11 @@ func externalParticipantNotesAreEmailFriendlyAndShareSafe() {
         markdown: markdown
     )
 
-    #expect(text.contains("Subject: Follow-up: Acme Rollout Planning"))
-    #expect(text.contains("Hi all,"))
+    #expect(text.contains("Acme Rollout Planning"))
+    #expect(text.contains("Shareable recap"))
+    #expect(!text.contains("Subject:"))
+    #expect(!text.contains("Hi all,"))
+    #expect(!text.contains("Thanks,"))
     #expect(text.contains("Participants: Dana, Lee"))
     #expect(text.contains("Related: Acme, Rollout"))
     #expect(text.contains("Summary:"))
@@ -361,7 +364,9 @@ func externalParticipantNotesOmitLowValueFactsAndPrivateContext() {
         markdown: markdown
     )
 
-    #expect(text.contains("Subject: Follow-up: Meeting"))
+    #expect(text.contains("Meeting"))
+    #expect(text.contains("Shareable recap"))
+    #expect(!text.contains("Subject:"))
     #expect(text.contains("Speaker A ran a brief diagnostic check."))
     #expect(!text.contains("Participants: A"))
     #expect(!text.contains("Related: total"))

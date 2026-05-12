@@ -46,7 +46,7 @@ if [[ -f "$INSTALLED_APP/Contents/Info.plist" ]]; then
   INSTALLED_BUILD="$(numeric_or_zero "$(read_plist_value "$INSTALLED_APP/Contents/Info.plist" CFBundleVersion)")"
 fi
 
-NEXT_BUILD=$(( BUILT_BUILD > INSTALLED_BUILD ? BUILT_BUILD + 1 : INSTALLED_BUILD + 1 ))
+NEXT_BUILD=$(( BUILT_BUILD > INSTALLED_BUILD ? BUILT_BUILD : INSTALLED_BUILD + 1 ))
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEXT_BUILD" "$INFO_PLIST"
 
 "$ROOT_DIR/scripts/package-barnowl-resources.sh" "$APP_PATH"

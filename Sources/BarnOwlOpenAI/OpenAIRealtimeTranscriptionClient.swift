@@ -3,6 +3,8 @@ import Foundation
 public enum OpenAIRealtimeTranscriptionEvent: Equatable, Sendable {
     case transcriptDelta(String)
     case transcriptCompleted(String)
+    case speechStarted
+    case speechStopped
     case error(String)
     case unhandled(String)
 }
@@ -130,6 +132,12 @@ public struct OpenAIRealtimeTranscriptionClient: Sendable {
             }
             return .transcriptCompleted(transcript)
 
+        case "input_audio_buffer.speech_started":
+            return .speechStarted
+
+        case "input_audio_buffer.speech_stopped":
+            return .speechStopped
+
         default:
             return .unhandled(event.type)
         }
@@ -250,11 +258,14 @@ private struct RealtimeTranscriptionAudio: Encodable {
 private struct RealtimeTranscriptionAudioInput: Encodable {
     var format: RealtimeAudioFormat
     var transcription: RealtimeInputAudioTranscription
+    var turnDetection = RealtimeTurnDetection()
+    var noiseReduction = RealtimeNoiseReduction()
 
     private enum CodingKeys: String, CodingKey {
         case format
         case transcription
         case turnDetection = "turn_detection"
+        case noiseReduction = "noise_reduction"
     }
 
     init(model: String, prompt: String?, sampleRate: Int) {
@@ -266,13 +277,32 @@ private struct RealtimeTranscriptionAudioInput: Encodable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(format, forKey: .format)
         try container.encode(transcription, forKey: .transcription)
-        try container.encodeNil(forKey: .turnDetection)
+        try container.encode(turnDetection, forKey: .turnDetection)
+        try container.encode(noiseReduction, forKey: .noiseReduction)
     }
 }
 
 private struct RealtimeAudioFormat: Encodable {
     var type = "audio/pcm"
     var rate: Int
+}
+
+private struct RealtimeTurnDetection: Encodable {
+    var type = "server_vad"
+    var threshold = 0.65
+    var prefixPaddingMs = 300
+    var silenceDurationMs = 1_800
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case threshold
+        case prefixPaddingMs = "prefix_padding_ms"
+        case silenceDurationMs = "silence_duration_ms"
+    }
+}
+
+private struct RealtimeNoiseReduction: Encodable {
+    var type = "near_field"
 }
 
 private struct RealtimeInputAudioTranscription: Encodable {

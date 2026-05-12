@@ -56,7 +56,13 @@ func sessionUpdateMessageConfiguresRealtimeTranscriptionPCM16() throws {
     #expect(transcription["language"] as? String == "en")
     #expect(transcription["prompt"] == nil)
 
-    #expect(input["turn_detection"] is NSNull)
+    let turnDetection = try #require(input["turn_detection"] as? [String: Any])
+    #expect(turnDetection["type"] as? String == "server_vad")
+    #expect(turnDetection["silence_duration_ms"] as? Int == 1_800)
+    #expect(turnDetection["prefix_padding_ms"] as? Int == 300)
+
+    let noiseReduction = try #require(input["noise_reduction"] as? [String: Any])
+    #expect(noiseReduction["type"] as? String == "near_field")
     #expect(session["include"] == nil)
 }
 
@@ -169,6 +175,23 @@ func parsesRealtimeTranscriptDeltaAndCompletedEvents() throws {
         """.utf8
     ))
     #expect(completed == .transcriptCompleted("hello"))
+}
+
+@Test
+func parsesRealtimeSpeechTurnEvents() throws {
+    let started = try OpenAIRealtimeTranscriptionClient.parseEvent(from: Data(
+        """
+        {"type":"input_audio_buffer.speech_started"}
+        """.utf8
+    ))
+    let stopped = try OpenAIRealtimeTranscriptionClient.parseEvent(from: Data(
+        """
+        {"type":"input_audio_buffer.speech_stopped"}
+        """.utf8
+    ))
+
+    #expect(started == .speechStarted)
+    #expect(stopped == .speechStopped)
 }
 
 @Test
