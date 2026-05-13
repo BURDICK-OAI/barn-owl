@@ -22,6 +22,7 @@ OPENSSL_CONFIG="$WORK_DIR/openssl.cnf"
 KEY_PATH="$WORK_DIR/local-codesign.key"
 CERT_PATH="$WORK_DIR/local-codesign.crt"
 P12_PATH="$WORK_DIR/local-codesign.p12"
+P12_PASSWORD="barnowl-local-codesign-import"
 
 cat >"$OPENSSL_CONFIG" <<EOF
 [ req ]
@@ -56,11 +57,11 @@ openssl pkcs12 \
   -in "$CERT_PATH" \
   -out "$P12_PATH" \
   -name "$IDENTITY_NAME" \
-  -passout pass: >/dev/null 2>&1
+  -passout "pass:$P12_PASSWORD" >/dev/null 2>&1
 
 security import "$P12_PATH" \
   -k "$KEYCHAIN" \
-  -P "" \
+  -P "$P12_PASSWORD" \
   -T /usr/bin/codesign \
   -T /usr/bin/security >/dev/null
 
