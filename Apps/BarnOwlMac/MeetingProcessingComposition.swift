@@ -350,6 +350,9 @@ actor BarnOwlJobRunner {
             try await database.upsertJob(succeeded)
             await onFinalProcessingSucceeded?(session, outputURL)
         } catch {
+            let decodedMeetingID = job.payloadJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode(SummaryProcessingJobPayload.self, from: $0).meetingID }
             let keepQueuedForConnectivity = BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error)
             let willRetry = keepQueuedForConnectivity || job.attemptCount < maxAttempts
             var next = job
@@ -367,6 +370,12 @@ actor BarnOwlJobRunner {
                 : nil
             next.completedAt = willRetry ? nil : Date()
             try? await database.upsertJob(next)
+            await progress?(MeetingProcessingProgress(
+                level: .warning,
+                message: willRetry ? "Summary repair will retry." : "Summary repair failed.",
+                details: BarnOwlErrorFormatter.message(for: error),
+                sessionID: decodedMeetingID
+            ))
             await onFinalProcessingFailed?(nil, error, willRetry)
         }
         await onJobChanged?()
@@ -453,8 +462,11 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
 
         let configuration = try makeOpenAIConfiguration()
         let context = await MeetingContextBuilder.context(for: session, contextRoot: try? BarnOwlMeetingProcessor.defaultContextRoot())
-        let summary = try await OpenAIMeetingSummaryGeneratorAdapter(
-            client: OpenAIMeetingSummaryClient(configuration: configuration)
+        let summary = try await ChunkingMeetingSummaryGenerator(
+            wrapped: OpenAIMeetingSummaryGeneratorAdapter(
+                client: OpenAIMeetingSummaryClient(configuration: configuration)
+            ),
+            progress: progress
         ).generateSummary(session: session, segments: segments, context: context)
         BarnOwlAPIKeyStore.markAPIKeyVerified(configuration.apiKey)
 
@@ -674,8 +686,11 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             totalFileCount: audioFiles.count
         )
         let summaryGenerator = FallbackMeetingSummaryGenerator(
-            wrapped: OpenAIMeetingSummaryGeneratorAdapter(
-                client: OpenAIMeetingSummaryClient(configuration: configuration)
+            wrapped: ChunkingMeetingSummaryGenerator(
+                wrapped: OpenAIMeetingSummaryGeneratorAdapter(
+                    client: OpenAIMeetingSummaryClient(configuration: configuration)
+                ),
+                progress: scopedProgress
             ),
             progress: scopedProgress
         )
@@ -1274,6 +1289,136 @@ private enum MeetingTitleSuggester {
         "funny story",
         "crazy story"
     ]
+}
+
+private struct ChunkingMeetingSummaryGenerator: MeetingSummaryGenerator {
+    private let wrapped: any MeetingSummaryGenerator
+    private let progress: MeetingProcessingProgressHandler?
+    private let maxDirectSegments: Int
+    private let maxDirectCharacters: Int
+    private let maxChunkSegments: Int
+    private let maxChunkCharacters: Int
+
+    init(
+        wrapped: any MeetingSummaryGenerator,
+        progress: MeetingProcessingProgressHandler?,
+        maxDirectSegments: Int = 500,
+        maxDirectCharacters: Int = 80_000,
+        maxChunkSegments: Int = 300,
+        maxChunkCharacters: Int = 45_000
+    ) {
+        self.wrapped = wrapped
+        self.progress = progress
+        self.maxDirectSegments = maxDirectSegments
+        self.maxDirectCharacters = maxDirectCharacters
+        self.maxChunkSegments = maxChunkSegments
+        self.maxChunkCharacters = maxChunkCharacters
+    }
+
+    func generateSummary(
+        session: RecordingSession,
+        segments: [TranscriptSegment],
+        context: [String]
+    ) async throws -> MeetingSummary {
+        let transcriptCharacterCount = segments.reduce(0) { $0 + $1.text.count }
+        guard segments.count > maxDirectSegments || transcriptCharacterCount > maxDirectCharacters else {
+            return try await wrapped.generateSummary(session: session, segments: segments, context: context)
+        }
+
+        let chunks = chunked(segments)
+        await progress?(MeetingProcessingProgress(
+            message: "Summarizing long meeting in \(chunks.count) parts...",
+            details: "\(segments.count) transcript segment(s), \(transcriptCharacterCount) character(s)",
+            progressFraction: 0.78,
+            sessionID: session.id
+        ))
+
+        var chunkSummaries: [MeetingSummary] = []
+        chunkSummaries.reserveCapacity(chunks.count)
+        for (index, chunk) in chunks.enumerated() {
+            let chunkNumber = index + 1
+            await progress?(MeetingProcessingProgress(
+                message: "Summarizing meeting part \(chunkNumber) of \(chunks.count)...",
+                details: "\(chunk.count) transcript segment(s)",
+                progressFraction: 0.78 + (Double(index) / Double(max(chunks.count, 1))) * 0.05,
+                sessionID: session.id
+            ))
+            let chunkContext = context + [
+                "Barn Owl is summarizing transcript part \(chunkNumber) of \(chunks.count). Focus on durable decisions, action items, open questions, customer feedback, and important technical/product details from this chronological slice. The final pass will synthesize all parts."
+            ]
+            let summary = try await wrapped.generateSummary(
+                session: session,
+                segments: chunk,
+                context: chunkContext
+            )
+            chunkSummaries.append(summary)
+        }
+
+        await progress?(MeetingProcessingProgress(
+            message: "Synthesizing meeting summary from \(chunks.count) parts...",
+            progressFraction: 0.84,
+            sessionID: session.id
+        ))
+        let syntheticSegments = zip(chunks.indices, chunkSummaries).map { index, summary in
+            let chunk = chunks[index]
+            return TranscriptSegment(
+                speakerLabel: "Barn Owl Part \(index + 1)",
+                text: Self.chunkSummaryText(summary, index: index, total: chunks.count),
+                startTime: chunk.first?.startTime ?? 0,
+                endTime: chunk.last?.endTime ?? chunk.first?.endTime ?? 0,
+                confidence: nil
+            )
+        }
+        let synthesisContext = context + [
+            "The transcript was too long for one reliable model request, so Barn Owl summarized it in \(chunks.count) chronological parts. Synthesize these part summaries into one accurate meeting summary. Preserve concrete decisions, action items, open questions, customer feedback, names, organizations, and technical details. Do not mention that chunking happened."
+        ]
+        return try await wrapped.generateSummary(
+            session: session,
+            segments: syntheticSegments,
+            context: synthesisContext
+        )
+    }
+
+    private func chunked(_ segments: [TranscriptSegment]) -> [[TranscriptSegment]] {
+        var chunks: [[TranscriptSegment]] = []
+        var current: [TranscriptSegment] = []
+        var currentCharacters = 0
+
+        for segment in segments {
+            let segmentCharacters = segment.text.count
+            let wouldExceedSegments = current.count >= maxChunkSegments
+            let wouldExceedCharacters = currentCharacters + segmentCharacters > maxChunkCharacters
+            if !current.isEmpty && (wouldExceedSegments || wouldExceedCharacters) {
+                chunks.append(current)
+                current = []
+                currentCharacters = 0
+            }
+            current.append(segment)
+            currentCharacters += segmentCharacters
+        }
+
+        if !current.isEmpty {
+            chunks.append(current)
+        }
+        return chunks
+    }
+
+    private static func chunkSummaryText(_ summary: MeetingSummary, index: Int, total: Int) -> String {
+        var lines = [
+            "Part \(index + 1) of \(total)",
+            "Overview: \(summary.overview)"
+        ]
+        if !summary.decisions.isEmpty {
+            lines.append("Decisions: \(summary.decisions.joined(separator: "; "))")
+        }
+        if !summary.actionItems.isEmpty {
+            lines.append("Action items: \(summary.actionItems.joined(separator: "; "))")
+        }
+        if !summary.openQuestions.isEmpty {
+            lines.append("Open questions: \(summary.openQuestions.joined(separator: "; "))")
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 private struct FallbackMeetingSummaryGenerator: MeetingSummaryGenerator {

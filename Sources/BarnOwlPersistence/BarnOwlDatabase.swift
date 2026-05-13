@@ -717,6 +717,7 @@ public actor BarnOwlDatabase {
             guard var job = nextJob else { return }
             job.status = .running
             job.attemptCount += 1
+            job.errorMessage = nil
             job.startedAt = now
             job.updatedAt = now
             try upsertJob(job)

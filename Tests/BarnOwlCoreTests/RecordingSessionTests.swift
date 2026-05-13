@@ -1370,6 +1370,27 @@ func connectivityFailureKeepsFinalProcessingQueuedForOfflineMode() async throws 
 }
 
 @Test
+func claimingPendingJobClearsPreviousRetryError() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let jobID = UUID(uuidString: "00000000-0000-0000-0000-000000000503")!
+    try await database.upsertJob(BarnOwlJobRecord(
+        id: jobID,
+        type: BarnOwlJobType.summaryProcessing,
+        status: .pending,
+        attemptCount: 4,
+        errorMessage: BarnOwlProcessingRetryPolicy.offlineQueuedMessage,
+        scheduledAt: Date(timeIntervalSince1970: 1_800_005_200)
+    ))
+
+    let claimed = try #require(await database.claimNextPendingJob(now: Date(timeIntervalSince1970: 1_800_005_201)))
+
+    #expect(claimed.id == jobID)
+    #expect(claimed.status == .running)
+    #expect(claimed.errorMessage == nil)
+    #expect(claimed.attemptCount == 5)
+}
+
+@Test
 @MainActor
 func staleRunningJobBecomesRetryableOnLaunchRecovery() async throws {
     let database = try BarnOwlDatabase.inMemory()

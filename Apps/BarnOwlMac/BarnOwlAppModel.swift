@@ -4165,7 +4165,9 @@ final class BarnOwlAppModel: ObservableObject {
             BarnOwlAPIKeyStore.invalidateCachedAPIKeyAfterAuthenticationFailure()
         }
         let sessionID = session?.id
-        let message = if willRetry && BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error) {
+        let message = if session == nil && willRetry {
+            "Summary repair will retry. Last attempt did not complete."
+        } else if willRetry && BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error) {
             "Saved locally. Final processing will retry when network is available."
         } else {
             willRetry ? "Final transcript job will retry." : "Final transcript job failed."

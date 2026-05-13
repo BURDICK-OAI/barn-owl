@@ -139,6 +139,7 @@ public struct OpenAIMeetingSummaryClient: MeetingSummaryClient {
 
         var request = URLRequest(url: baseURL.appending(path: "v1/responses"))
         request.httpMethod = "POST"
+        request.timeoutInterval = 240
         request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
