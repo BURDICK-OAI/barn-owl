@@ -317,6 +317,33 @@ scripts/verify-dist.sh --direct-download dist
 When `BARNOWL_NOTARIZE=1` is set, `scripts/package-all.sh` runs this stricter
 direct-download verification automatically after packaging.
 
+### Stable Local Signing Without Developer ID
+
+If a Developer ID certificate is unavailable, do not publish ad-hoc updates.
+Ad-hoc signatures are tied to each build's code hash, which can make macOS treat
+each update as a different app for Screen Recording/System Audio privacy grants.
+
+For a single-user or small internal setup, use one long-lived local code-signing
+certificate and keep using that same identity for every Barn Owl update:
+
+```sh
+scripts/create-local-signing-identity.sh
+```
+
+Then publish an internal GitHub update with that stable identity:
+
+```sh
+BARNOWL_CODESIGN_IDENTITY="Barn Owl Local Code Signing" \
+BARNOWL_ALLOW_LOCAL_SIGNED_UPDATE=1 \
+scripts/publish-git-update.sh
+```
+
+This is not notarization and it does not give Gatekeeper the same direct-download
+trust as Developer ID. It is a pragmatic internal mode whose goal is to avoid
+rotating Barn Owl's code identity on every update. Do not delete, recreate, or
+rename the certificate unless you are prepared for macOS to ask for privacy
+permissions again.
+
 ## Release Notes
 
 Current packages are lightweight internal builds. They are ad-hoc signed,

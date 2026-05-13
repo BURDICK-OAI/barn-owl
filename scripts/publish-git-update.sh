@@ -5,23 +5,33 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-"$ROOT_DIR/dist"}"
 UPDATE_DIR="${UPDATE_DIR:-"$ROOT_DIR/Updates/BarnOwl"}"
 ALLOW_ADHOC_UPDATE="${BARNOWL_ALLOW_ADHOC_UPDATE:-0}"
+ALLOW_LOCAL_SIGNED_UPDATE="${BARNOWL_ALLOW_LOCAL_SIGNED_UPDATE:-0}"
 
 mkdir -p "$UPDATE_DIR"
 
 if [[ "$ALLOW_ADHOC_UPDATE" != "1" ]]; then
-  if [[ "${BARNOWL_CODESIGN_IDENTITY:-}" != Developer\ ID\ Application:* ]]; then
+  if [[ -z "${BARNOWL_CODESIGN_IDENTITY:-}" || "${BARNOWL_CODESIGN_IDENTITY:-}" == "-" ]]; then
     echo "git_update_publish=false" >&2
-    echo "reason=remote update publishing requires BARNOWL_CODESIGN_IDENTITY to be a Developer ID Application identity" >&2
-    echo "hint=set BARNOWL_ALLOW_ADHOC_UPDATE=1 only for local/internal debugging; ad-hoc updates can cause macOS Screen Recording/System Audio permission prompts after every update" >&2
+    echo "reason=remote update publishing requires BARNOWL_CODESIGN_IDENTITY; ad-hoc updates are not stable across macOS privacy grants" >&2
+    echo "hint=use a Developer ID Application identity, or set BARNOWL_ALLOW_LOCAL_SIGNED_UPDATE=1 with a stable local code-signing certificate" >&2
     exit 1
   fi
-  if [[ -z "${BARNOWL_NOTARY_PROFILE:-}" ]]; then
+  if [[ "${BARNOWL_CODESIGN_IDENTITY:-}" == Developer\ ID\ Application:* ]]; then
+    if [[ -z "${BARNOWL_NOTARY_PROFILE:-}" ]]; then
+      echo "git_update_publish=false" >&2
+      echo "reason=Developer ID remote update publishing requires BARNOWL_NOTARY_PROFILE for notarization" >&2
+      echo "hint=Developer ID signed and notarized updates preserve the strongest macOS install/update behavior" >&2
+      exit 1
+    fi
+    BARNOWL_NOTARIZE=1 "$ROOT_DIR/scripts/package-all.sh" >/dev/null
+  elif [[ "$ALLOW_LOCAL_SIGNED_UPDATE" == "1" ]]; then
+    "$ROOT_DIR/scripts/package-all.sh" >/dev/null
+  else
     echo "git_update_publish=false" >&2
-    echo "reason=remote update publishing requires BARNOWL_NOTARY_PROFILE for notarization" >&2
-    echo "hint=Developer ID signed and notarized updates preserve a stable macOS TCC identity across app updates" >&2
+    echo "reason=BARNOWL_CODESIGN_IDENTITY is not a Developer ID identity" >&2
+    echo "hint=set BARNOWL_ALLOW_LOCAL_SIGNED_UPDATE=1 to publish an internal update signed by a stable local certificate; do not rotate that certificate or macOS may ask for privacy permissions again" >&2
     exit 1
   fi
-  BARNOWL_NOTARIZE=1 "$ROOT_DIR/scripts/package-all.sh" >/dev/null
 else
   "$ROOT_DIR/scripts/package-all.sh" >/dev/null
 fi

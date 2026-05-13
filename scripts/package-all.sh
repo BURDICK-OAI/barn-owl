@@ -39,6 +39,8 @@ else
 fi
 if [[ "${BARNOWL_NOTARIZE:-0}" == "1" ]]; then
   SIGNING_MODE="developer_id_notarized"
+elif [[ "${BARNOWL_CODESIGN_IDENTITY:--}" != "-" ]]; then
+  SIGNING_MODE="local_certificate_signed"
 else
   SIGNING_MODE="adhoc_developer_build"
 fi

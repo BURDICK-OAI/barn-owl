@@ -11,15 +11,20 @@ Local update manifests are for development and smoke testing only.
    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Apps/BarnOwlMac/Info.plist
    ```
 
-2. Build and verify the release artifacts:
+2. Build and verify the release artifacts. Developer ID/notarized releases are
+   preferred, but internal updates may use a stable local signing identity when
+   Developer ID is unavailable:
 
    ```sh
+   BARNOWL_CODESIGN_IDENTITY="Barn Owl Local Code Signing" \
    scripts/package-all.sh
    ```
 
 3. Generate the tracked GitHub update manifest:
 
    ```sh
+   BARNOWL_CODESIGN_IDENTITY="Barn Owl Local Code Signing" \
+   BARNOWL_ALLOW_LOCAL_SIGNED_UPDATE=1 \
    scripts/publish-git-update.sh
    ```
 
@@ -90,4 +95,6 @@ binary app zips to Git history.
 
 Future updates should appear through Barn Owl's **Update** button. Updates
 replace the app bundle only; existing recordings, notes, preferences, and API key
-configuration are preserved.
+configuration are preserved. If Developer ID is unavailable, keep using the same
+local signing certificate for every release to avoid unnecessary macOS privacy
+permission churn.
