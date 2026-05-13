@@ -45,6 +45,119 @@ public protocol ContextSink: Sendable {
 
 public protocol ReadWriteContextProvider: ContextProvider, ContextSink {}
 
+public enum CalendarAttendeeNameNormalizer {
+    public static func displayName(
+        name: String?,
+        email: String?
+    ) -> String? {
+        if let cleanedName = clean(name),
+           !looksLikeEmail(cleanedName),
+           !isRoleLike(cleanedName) {
+            return cleanedName
+        }
+
+        if let cleanedName = clean(name),
+           looksLikeEmail(cleanedName),
+           let inferred = inferredName(fromEmail: cleanedName) {
+            return inferred
+        }
+
+        if let inferred = inferredName(fromEmail: email) {
+            return inferred
+        }
+
+        if let cleanedEmail = clean(email),
+           !isRoleLikeEmail(cleanedEmail) {
+            return cleanedEmail
+        }
+
+        return nil
+    }
+
+    public static func displayNames(from attendees: [String]) -> [String] {
+        attendees
+            .compactMap { displayName(name: $0, email: nil) }
+            .removingDuplicates()
+    }
+
+    private static func inferredName(fromEmail email: String?) -> String? {
+        guard let email = clean(email),
+              let localPart = email.split(separator: "@").first.map(String.init)
+        else {
+            return nil
+        }
+
+        let normalizedLocalPart = localPart
+            .replacingOccurrences(of: "+.*$", with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"[_\-\.]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !normalizedLocalPart.isEmpty,
+              !isRoleLike(normalizedLocalPart)
+        else {
+            return nil
+        }
+
+        let parts = normalizedLocalPart
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .filter { $0.count >= 2 }
+
+        guard !parts.isEmpty, parts.count <= 4 else {
+            return nil
+        }
+
+        return parts
+            .map { part in
+                part.prefix(1).uppercased() + part.dropFirst().lowercased()
+            }
+            .joined(separator: " ")
+    }
+
+    private static func clean(_ value: String?) -> String? {
+        let withoutMailto = value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"^mailto:"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let decoded = withoutMailto?.removingPercentEncoding ?? withoutMailto
+        let cleaned = decoded?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let cleaned, !cleaned.isEmpty else {
+            return nil
+        }
+        return cleaned
+    }
+
+    private static func looksLikeEmail(_ value: String) -> Bool {
+        value.contains("@") && value.contains(".")
+    }
+
+    private static func isRoleLikeEmail(_ value: String) -> Bool {
+        guard let localPart = value.split(separator: "@").first.map(String.init) else {
+            return false
+        }
+        return isRoleLike(
+            localPart
+                .replacingOccurrences(of: "+.*$", with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"[_\-\.]+"#, with: " ", options: .regularExpression)
+        )
+    }
+
+    private static func isRoleLike(_ value: String) -> Bool {
+        let normalized = value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let roleNames: Set<String> = [
+            "admin", "all", "calendar", "contact", "events", "hello", "help",
+            "info", "marketing", "meetings", "no reply", "noreply", "notifications",
+            "ops", "press", "recruiting", "sales", "security", "support", "team"
+        ]
+
+        return roleNames.contains(normalized)
+    }
+}
+
 public struct CalendarMeetingContext: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var provider: String
@@ -107,8 +220,9 @@ public struct CalendarMeetingContext: Codable, Equatable, Identifiable, Sendable
             "Calendar match: \(confidenceLabel) (\(matchReason))"
         ]
 
-        if !attendees.isEmpty {
-            lines.append("Calendar attendees: \(attendees.joined(separator: ", "))")
+        let displayAttendees = CalendarAttendeeNameNormalizer.displayNames(from: attendees)
+        if !displayAttendees.isEmpty {
+            lines.append("Calendar attendees: \(displayAttendees.joined(separator: ", "))")
         }
         if let location,
            !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -296,14 +410,21 @@ public actor EventKitCalendarMeetingContextProvider: CalendarMeetingContextProvi
     private func attendees(from event: EKEvent) -> [String] {
         (event.attendees ?? [])
             .compactMap { participant in
+                let participantName = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let url = participant.url
                 if url.scheme?.caseInsensitiveCompare("mailto") == .orderedSame,
                    let email = url.absoluteString.dropFirst("mailto:".count).removingPercentEncoding,
                    !email.isEmpty {
-                    return email
+                    return CalendarAttendeeNameNormalizer.displayName(
+                        name: participantName,
+                        email: email
+                    )
                 }
 
-                return participant.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return CalendarAttendeeNameNormalizer.displayName(
+                    name: participantName,
+                    email: nil
+                )
             }
             .filter { !$0.isEmpty }
             .removingDuplicates()

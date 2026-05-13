@@ -875,9 +875,14 @@ final class BarnOwlAppModel: ObservableObject {
         captureStatus = "Starting \(Self.audioSourceDescription(requestedAudioSources))."
         realtimeStatus = "Starting realtime transcription."
 
+        let realtimePrompt = BarnOwlRealtimeTranscriptionPromptBuilder.prompt(
+            calendarContext: matchedCalendarContext,
+            sessionTitle: session.title
+        )
         let realtimeController: BarnOwlRealtimeTranscriptionController
         realtimeController = BarnOwlRealtimeTranscriptionController(
             configuration: openAIConfiguration,
+            prompt: realtimePrompt,
             updateHandler: { [weak self] update in
                 self?.handleRealtimeTranscriptionUpdate(update, sessionID: session.id)
             },

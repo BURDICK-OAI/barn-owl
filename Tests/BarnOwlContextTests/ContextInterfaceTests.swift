@@ -103,7 +103,7 @@ func calendarMeetingContextProducesPromptReadyContextLines() {
         title: "Customer Roadmap Review",
         startsAt: startsAt,
         endsAt: startsAt.addingTimeInterval(1_800),
-        attendees: ["alex@example.com", "sam@example.com"],
+        attendees: ["alex.nguyen@example.com", "Sam Rivera"],
         notes: "Discuss renewal risk and Q3 launch plan.",
         location: "Google Meet",
         url: URL(string: "https://meet.google.com/abc-defg-hij"),
@@ -116,8 +116,29 @@ func calendarMeetingContextProducesPromptReadyContextLines() {
     #expect(context.isHighConfidence)
     #expect(context.confidenceLabel == "High confidence")
     #expect(lines.contains("Calendar event: Customer Roadmap Review"))
-    #expect(lines.contains("Calendar attendees: alex@example.com, sam@example.com"))
+    #expect(lines.contains("Calendar attendees: Alex Nguyen, Sam Rivera"))
     #expect(lines.contains("Calendar URL: https://meet.google.com/abc-defg-hij"))
+}
+
+@Test
+func calendarAttendeeNameNormalizerPrefersRealNamesAndRejectsRoleAliases() {
+    #expect(CalendarAttendeeNameNormalizer.displayName(
+        name: "Alice Nguyen",
+        email: "alice@example.com"
+    ) == "Alice Nguyen")
+    #expect(CalendarAttendeeNameNormalizer.displayName(
+        name: nil,
+        email: "bob.smith@example.com"
+    ) == "Bob Smith")
+    #expect(CalendarAttendeeNameNormalizer.displayName(
+        name: nil,
+        email: "sales@example.com"
+    ) == nil)
+    #expect(CalendarAttendeeNameNormalizer.displayNames(from: [
+        "alice.nguyen@example.com",
+        "Alice Nguyen",
+        "support@example.com"
+    ]) == ["Alice Nguyen"])
 }
 
 private func makeTempDirectory() throws -> URL {

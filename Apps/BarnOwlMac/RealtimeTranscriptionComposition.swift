@@ -142,7 +142,7 @@ actor BarnOwlRealtimeTranscriptionController {
 
     init(
         configuration: OpenAIConfiguration,
-        prompt: String? = BarnOwlRealtimeTranscriptionHintsStore.currentPrompt(),
+        prompt: String? = nil,
         updateHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeTranscriptionUpdate) -> Void,
         healthHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeHealthState) -> Void,
         diagnosticsHandler: @escaping @MainActor @Sendable (BarnOwlRealtimeDiagnosticEvent) -> Void = { _ in }
