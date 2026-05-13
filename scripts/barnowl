@@ -700,6 +700,9 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--type", dest="meeting_type")
     start.add_argument("--context")
     start.add_argument("--source", default="cli")
+    audio_group = start.add_mutually_exclusive_group()
+    audio_group.add_argument("--with-system-audio", dest="captures_system_audio", action="store_true", default=True)
+    audio_group.add_argument("--mic-only", dest="captures_system_audio", action="store_false")
 
     subparsers.add_parser("stop")
 
@@ -740,6 +743,14 @@ def build_parser() -> argparse.ArgumentParser:
     jobs_dismiss = jobs_subparsers.add_parser("dismiss")
     jobs_dismiss.add_argument("--job", required=True)
     add_format(jobs_dismiss)
+
+    summaries = subparsers.add_parser("summaries")
+    summaries_subparsers = summaries.add_subparsers(dest="summaries_command", required=True)
+    summaries_retry = summaries_subparsers.add_parser("retry")
+    summary_target = summaries_retry.add_mutually_exclusive_group(required=True)
+    summary_target.add_argument("--session")
+    summary_target.add_argument("--all", action="store_true")
+    add_format(summaries_retry)
 
     chat = subparsers.add_parser("chat")
     chat.add_argument("query")
@@ -849,6 +860,7 @@ def main(argv: list[str]) -> int:
             "meetingType": args.meeting_type,
             "context": args.context,
             "source": args.source,
+            "capturesSystemAudio": args.captures_system_audio,
         }
     elif args.command == "stop":
         payload = {"command": "stop_recording"}
@@ -913,6 +925,16 @@ def main(argv: list[str]) -> int:
             }
         else:
             raise AssertionError(f"unhandled jobs command: {args.jobs_command}")
+    elif args.command == "summaries":
+        if args.summaries_command == "retry":
+            payload = {
+                "command": "summaries_retry",
+                "sessionID": args.session,
+                "all": args.all,
+                "format": output_format,
+            }
+        else:
+            raise AssertionError(f"unhandled summaries command: {args.summaries_command}")
     elif args.command == "chat":
         payload = {"command": "chat", "query": args.query, "format": output_format}
     elif args.command == "ask-notes":

@@ -28,6 +28,7 @@ enum BarnOwlRealtimeDiagnosticKind: String, Equatable, Sendable {
     case eventRecoverableError
     case receiveClosed
     case receiveFailed
+    case reconnecting
     case stopped
 }
 
@@ -40,6 +41,7 @@ struct BarnOwlRealtimeDiagnosticEvent: Equatable, Sendable {
 enum BarnOwlRealtimeHealthState: String, Equatable, Sendable {
     case idle
     case connecting
+    case reconnecting
     case connected
     case receivingAudio
     case transcribing
@@ -53,6 +55,8 @@ enum BarnOwlRealtimeHealthState: String, Equatable, Sendable {
             return "Realtime transcription idle."
         case .connecting:
             return "Realtime connecting..."
+        case .reconnecting:
+            return "Realtime reconnecting..."
         case .connected:
             return "Realtime connected. Waiting for audio."
         case .receivingAudio:
@@ -92,6 +96,7 @@ actor BarnOwlRealtimeTranscriptionController {
     static let serverVADFallbackCommitInterval: TimeInterval = 5
     static let serverVADFallbackMinimumVoicedDuration: TimeInterval = 0.75
     static let staleTranscriptGraceInterval: TimeInterval = 8
+    static let reconnectMaximumDelay: TimeInterval = 30
     static let routineServerEventTypes: Set<String> = [
         "conversation.item.added",
         "conversation.item.done",
@@ -110,9 +115,11 @@ actor BarnOwlRealtimeTranscriptionController {
     private let healthHandler: @MainActor @Sendable (BarnOwlRealtimeHealthState) -> Void
     private let diagnosticsHandler: @MainActor @Sendable (BarnOwlRealtimeDiagnosticEvent) -> Void
     private var receiveTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
     private var isConnected = false
     private var isStopping = false
     private var isDegraded = false
+    private var reconnectAttempt = 0
     private var bufferedByteCount = 0
     private var sentByteCount = 0
     private var uncommittedByteCount = 0
@@ -198,9 +205,8 @@ actor BarnOwlRealtimeTranscriptionController {
             await healthHandler(.connected)
             startReceiving()
         } catch {
-            isDegraded = true
             await emit(.connectFailed, "Realtime connection failed.", details: BarnOwlErrorFormatter.message(for: error))
-            await healthHandler(.fallbackActive)
+            await markDisconnectedAndScheduleReconnect(reason: BarnOwlErrorFormatter.message(for: error))
         }
     }
 
@@ -271,18 +277,19 @@ actor BarnOwlRealtimeTranscriptionController {
             }
         } catch {
             bufferedByteCount = max(0, bufferedByteCount - chunk.pcm16Data.count)
-            isDegraded = true
             await emit(
                 .audioAppendFailed,
                 "Realtime audio append failed.",
                 details: "bytes=\(chunk.pcm16Data.count) error=\(BarnOwlErrorFormatter.message(for: error))"
             )
-            await healthHandler(.fallbackActive)
+            await markDisconnectedAndScheduleReconnect(reason: BarnOwlErrorFormatter.message(for: error))
         }
     }
 
     func stop() async {
         isStopping = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
 
         guard isConnected else {
             receiveTask?.cancel()
@@ -322,9 +329,8 @@ actor BarnOwlRealtimeTranscriptionController {
             do {
                 guard let event = try await client.receiveEvent() else {
                     if !isStopping {
-                        isDegraded = true
                         await emit(.receiveClosed, "Realtime receive loop closed.", details: "stopping=false")
-                        await healthHandler(.fallbackActive)
+                        await markDisconnectedAndScheduleReconnect(reason: "receive loop closed")
                     }
                     return
                 }
@@ -373,7 +379,6 @@ actor BarnOwlRealtimeTranscriptionController {
                         }
                         continue
                     }
-                    isDegraded = true
                     let safeMessage = BarnOwlErrorFormatter.sanitizeForUserDisplay(message)
                     let fallbackDetails = "Realtime preview switched to fallback. Final transcription will still run after recording stops."
                     let details = safeMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -384,7 +389,7 @@ actor BarnOwlRealtimeTranscriptionController {
                         "Realtime server returned an error.",
                         details: details
                     )
-                    await healthHandler(.fallbackActive)
+                    await markDisconnectedAndScheduleReconnect(reason: safeMessage)
                     return
                 case .unhandled(let eventType):
                     guard !Self.routineServerEventTypes.contains(eventType) else {
@@ -397,9 +402,8 @@ actor BarnOwlRealtimeTranscriptionController {
                 return
             } catch {
                 if !isStopping {
-                    isDegraded = true
                     await emit(.receiveFailed, "Realtime receive loop failed.", details: BarnOwlErrorFormatter.message(for: error))
-                    await healthHandler(.fallbackActive)
+                    await markDisconnectedAndScheduleReconnect(reason: BarnOwlErrorFormatter.message(for: error))
                 }
                 return
             }
@@ -529,9 +533,8 @@ actor BarnOwlRealtimeTranscriptionController {
             )
         } catch {
             if !isStopping {
-                isDegraded = true
                 await emit(.trailingSilenceFailed, "Realtime trailing silence append failed.", details: BarnOwlErrorFormatter.message(for: error))
-                await healthHandler(.fallbackActive)
+                await markDisconnectedAndScheduleReconnect(reason: BarnOwlErrorFormatter.message(for: error))
             }
         }
     }
@@ -581,9 +584,62 @@ actor BarnOwlRealtimeTranscriptionController {
         } catch {
             isCommitInFlight = false
             uncommittedByteCount += bytesToCommit
-            isDegraded = true
             await emit(.audioCommitFailed, "Realtime audio commit failed.", details: BarnOwlErrorFormatter.message(for: error))
-            await healthHandler(.fallbackActive)
+            await markDisconnectedAndScheduleReconnect(reason: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    private func markDisconnectedAndScheduleReconnect(reason: String) async {
+        guard !isStopping else { return }
+        isConnected = false
+        isDegraded = true
+        uncommittedByteCount = 0
+        isCommitInFlight = false
+        receiveTask?.cancel()
+        receiveTask = nil
+        await client.close()
+        await healthHandler(.reconnecting)
+        scheduleReconnect(reason: reason)
+    }
+
+    private func scheduleReconnect(reason: String) {
+        guard reconnectTask == nil, !isStopping else { return }
+        reconnectAttempt += 1
+        let attempt = reconnectAttempt
+        let delay = min(Self.reconnectMaximumDelay, pow(2.0, Double(min(attempt, 5))))
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if Task.isCancelled { return }
+            await self?.attemptReconnect(attempt: attempt, reason: reason)
+        }
+    }
+
+    private func attemptReconnect(attempt: Int, reason: String) async {
+        reconnectTask = nil
+        guard !isStopping else { return }
+        await emit(
+            .reconnecting,
+            "Realtime reconnecting.",
+            details: "attempt=\(attempt) reason=\(reason)"
+        )
+        await healthHandler(.reconnecting)
+        do {
+            try await client.connect()
+            reconnectAttempt = 0
+            isConnected = true
+            isDegraded = false
+            bufferedByteCount = 0
+            uncommittedByteCount = 0
+            isCommitInFlight = false
+            lastCommitAt = Date()
+            ignoredAppendCount = 0
+            lastIgnoredAppendReportAt = .distantPast
+            await emit(.connected, "Realtime reconnected.", details: "attempt=\(attempt)")
+            await healthHandler(.connected)
+            startReceiving()
+        } catch {
+            await emit(.connectFailed, "Realtime reconnect failed.", details: BarnOwlErrorFormatter.message(for: error))
+            await markDisconnectedAndScheduleReconnect(reason: BarnOwlErrorFormatter.message(for: error))
         }
     }
 

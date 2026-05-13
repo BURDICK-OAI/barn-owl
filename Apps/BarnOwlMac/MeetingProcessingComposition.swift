@@ -14,6 +14,13 @@ protocol MeetingProcessing: Sendable {
     ) async throws -> URL
 }
 
+protocol MeetingSummaryRepairing: Sendable {
+    func repairSummary(
+        meetingID: UUID,
+        progress: MeetingProcessingProgressHandler?
+    ) async throws -> (RecordingSession, URL)
+}
+
 typealias MeetingProcessingProgressHandler = @MainActor @Sendable (MeetingProcessingProgress) -> Void
 
 struct MeetingProcessingProgress: Sendable {
@@ -56,6 +63,8 @@ struct MeetingProcessingProgress: Sendable {
 enum BarnOwlMeetingProcessingError: Error, Equatable {
     case missingApplicationSupportDirectory
     case noRecordedAudioFiles(UUID)
+    case missingMeeting(UUID)
+    case noFinalTranscript(UUID)
 }
 
 enum BarnOwlProcessingRetryPolicy {
@@ -105,6 +114,7 @@ enum BarnOwlProcessingRetryPolicy {
 
 enum BarnOwlJobType {
     static let finalProcessing = "final_processing"
+    static let summaryProcessing = "summary_processing"
     static let noteUpdate = "note_update"
     static let indexing = "indexing"
 }
@@ -113,19 +123,26 @@ struct FinalProcessingJobPayload: Codable, Equatable, Sendable {
     var session: RecordingSession
 }
 
+struct SummaryProcessingJobPayload: Codable, Equatable, Sendable {
+    var meetingID: UUID
+}
+
 actor BarnOwlJobRunner {
     private let makeDatabase: @Sendable () throws -> BarnOwlDatabase
     private let meetingProcessor: any MeetingProcessing
+    private let summaryRepairProcessor: any MeetingSummaryRepairing
     private let maxAttempts: Int
     private var isRunning = false
 
     init(
         makeDatabase: @escaping @Sendable () throws -> BarnOwlDatabase,
         meetingProcessor: any MeetingProcessing,
+        summaryRepairProcessor: any MeetingSummaryRepairing = BarnOwlMeetingSummaryRepairProcessor(),
         maxAttempts: Int = 3
     ) {
         self.makeDatabase = makeDatabase
         self.meetingProcessor = meetingProcessor
+        self.summaryRepairProcessor = summaryRepairProcessor
         self.maxAttempts = max(1, maxAttempts)
     }
 
@@ -146,6 +163,34 @@ actor BarnOwlJobRunner {
         let job = BarnOwlJobRecord(
             meetingID: session.id,
             type: BarnOwlJobType.finalProcessing,
+            status: .pending,
+            priority: priority,
+            payloadJSON: String(decoding: payloadData, as: UTF8.self),
+            createdAt: now,
+            updatedAt: now,
+            scheduledAt: now
+        )
+        try await database.upsertJob(job)
+        return job
+    }
+
+    func enqueueSummaryProcessing(meetingID: UUID, priority: Int = 80) async throws -> BarnOwlJobRecord {
+        let database = try makeDatabase()
+        let existing = try await database.jobs(meetingID: meetingID, limit: 20)
+            .first {
+                $0.type == BarnOwlJobType.summaryProcessing
+                    && ($0.status == .pending || $0.status == .running)
+            }
+        if let existing {
+            return existing
+        }
+
+        let payload = SummaryProcessingJobPayload(meetingID: meetingID)
+        let payloadData = try JSONEncoder().encode(payload)
+        let now = Date()
+        let job = BarnOwlJobRecord(
+            meetingID: meetingID,
+            type: BarnOwlJobType.summaryProcessing,
             status: .pending,
             priority: priority,
             payloadJSON: String(decoding: payloadData, as: UTF8.self),
@@ -202,6 +247,15 @@ actor BarnOwlJobRunner {
         switch job.type {
         case BarnOwlJobType.finalProcessing:
             await runFinalProcessingJob(
+                job,
+                database: database,
+                progress: progress,
+                onJobChanged: onJobChanged,
+                onFinalProcessingSucceeded: onFinalProcessingSucceeded,
+                onFinalProcessingFailed: onFinalProcessingFailed
+            )
+        case BarnOwlJobType.summaryProcessing:
+            await runSummaryProcessingJob(
                 job,
                 database: database,
                 progress: progress,
@@ -269,6 +323,55 @@ actor BarnOwlJobRunner {
         await onJobChanged?()
     }
 
+    private func runSummaryProcessingJob(
+        _ job: BarnOwlJobRecord,
+        database: BarnOwlDatabase,
+        progress: MeetingProcessingProgressHandler?,
+        onJobChanged: (@MainActor @Sendable () async -> Void)?,
+        onFinalProcessingSucceeded: (@MainActor @Sendable (RecordingSession, URL) async -> Void)?,
+        onFinalProcessingFailed: (@MainActor @Sendable (RecordingSession?, Error, Bool) async -> Void)?
+    ) async {
+        do {
+            guard let payloadJSON = job.payloadJSON,
+                  let payloadData = payloadJSON.data(using: .utf8)
+            else {
+                throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Missing summary processing payload."))
+            }
+            let payload = try JSONDecoder().decode(SummaryProcessingJobPayload.self, from: payloadData)
+            let (session, outputURL) = try await summaryRepairProcessor.repairSummary(
+                meetingID: payload.meetingID,
+                progress: progress
+            )
+            var succeeded = job
+            succeeded.status = .succeeded
+            succeeded.errorMessage = nil
+            succeeded.completedAt = Date()
+            succeeded.updatedAt = Date()
+            try await database.upsertJob(succeeded)
+            await onFinalProcessingSucceeded?(session, outputURL)
+        } catch {
+            let keepQueuedForConnectivity = BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error)
+            let willRetry = keepQueuedForConnectivity || job.attemptCount < maxAttempts
+            var next = job
+            next.status = willRetry ? .pending : .failed
+            next.errorMessage = keepQueuedForConnectivity
+                ? BarnOwlProcessingRetryPolicy.offlineQueuedMessage
+                : BarnOwlErrorFormatter.message(for: error)
+            next.updatedAt = Date()
+            next.scheduledAt = willRetry
+                ? Date().addingTimeInterval(
+                    keepQueuedForConnectivity
+                        ? Self.connectivityRetryDelay(afterAttempt: job.attemptCount)
+                        : Self.backoffDelay(afterAttempt: job.attemptCount)
+                )
+                : nil
+            next.completedAt = willRetry ? nil : Date()
+            try? await database.upsertJob(next)
+            await onFinalProcessingFailed?(nil, error, willRetry)
+        }
+        await onJobChanged?()
+    }
+
     private static func backoffDelay(afterAttempt attempt: Int) -> TimeInterval {
         switch attempt {
         case 0, 1:
@@ -289,6 +392,208 @@ actor BarnOwlJobRunner {
         default:
             300
         }
+    }
+}
+
+struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
+    private let makeDatabase: @Sendable () throws -> BarnOwlDatabase
+    private let makeLibraryStore: @Sendable () throws -> FilesystemLocalLibraryStore
+    private let makeOpenAIConfiguration: @Sendable () throws -> OpenAIConfiguration
+
+    init(
+        makeDatabase: @escaping @Sendable () throws -> BarnOwlDatabase = {
+            try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+        },
+        makeLibraryStore: @escaping @Sendable () throws -> FilesystemLocalLibraryStore = {
+            FilesystemLocalLibraryStore(rootDirectory: try BarnOwlMeetingProcessor.defaultLibraryRoot())
+        },
+        makeOpenAIConfiguration: @escaping @Sendable () throws -> OpenAIConfiguration = {
+            try BarnOwlAPIKeyStore.makeConfiguration()
+        }
+    ) {
+        self.makeDatabase = makeDatabase
+        self.makeLibraryStore = makeLibraryStore
+        self.makeOpenAIConfiguration = makeOpenAIConfiguration
+    }
+
+    func repairSummary(
+        meetingID: UUID,
+        progress: MeetingProcessingProgressHandler? = nil
+    ) async throws -> (RecordingSession, URL) {
+        let database = try makeDatabase()
+        guard let meeting = try await database.meeting(id: meetingID) else {
+            throw BarnOwlMeetingProcessingError.missingMeeting(meetingID)
+        }
+
+        let sessionRecords = try await database.recordingSessions(meetingID: meetingID)
+        let primarySession = sessionRecords.first
+        let session = RecordingSession(
+            id: primarySession?.id ?? meeting.id,
+            title: meeting.title,
+            startedAt: primarySession?.startedAt ?? meeting.startedAt ?? meeting.createdAt,
+            endedAt: primarySession?.endedAt ?? meeting.endedAt,
+            audioSources: Self.audioSources(from: primarySession?.audioSourcesJSON)
+        )
+
+        let segmentRecords = try await database.transcriptSegments(
+            meetingID: meetingID,
+            variant: .final
+        )
+        let segments = segmentRecords.map(Self.transcriptSegment(from:))
+        guard !segments.isEmpty else {
+            throw BarnOwlMeetingProcessingError.noFinalTranscript(meetingID)
+        }
+
+        await progress?(MeetingProcessingProgress(
+            message: "Regenerating meeting summary...",
+            details: "\(segments.count) final transcript segment(s)",
+            progressFraction: 0.72,
+            sessionID: meetingID
+        ))
+
+        let configuration = try makeOpenAIConfiguration()
+        let context = await MeetingContextBuilder.context(for: session, contextRoot: try? BarnOwlMeetingProcessor.defaultContextRoot())
+        let summary = try await OpenAIMeetingSummaryGeneratorAdapter(
+            client: OpenAIMeetingSummaryClient(configuration: configuration)
+        ).generateSummary(session: session, segments: segments, context: context)
+        BarnOwlAPIKeyStore.markAPIKeyVerified(configuration.apiKey)
+
+        var finalSession = session
+        finalSession.title = MeetingTitleSuggester.title(
+            currentTitle: meeting.title,
+            summary: summary,
+            segments: segments,
+            context: context
+        )
+        let transcriptForFacts = segments
+            .map { "\($0.speakerLabel): \($0.text)" }
+            .joined(separator: "\n")
+        var meetingFacts = MeetingFactsExtractor().extract(
+            transcript: transcriptForFacts,
+            freeformContext: MeetingContextBuilder.factsContext(from: context),
+            currentTitle: finalSession.title
+        )
+        if let factTitle = MeetingFacts.clean(meetingFacts.title) {
+            finalSession.title = factTitle
+        } else {
+            meetingFacts.title = finalSession.title
+        }
+
+        let markdown = MarkdownMeetingRenderer().render(
+            session: finalSession,
+            segments: segments,
+            summary: summary,
+            context: MeetingContextBuilder.noteContext(from: context),
+            meetingFacts: meetingFacts
+        )
+        let artifact = LocalMeetingArtifact(
+            session: finalSession,
+            summary: summary,
+            transcriptSegments: segments,
+            markdown: markdown
+        )
+
+        await progress?(MeetingProcessingProgress(
+            message: "Saving repaired summary and notes...",
+            progressFraction: 0.92,
+            sessionID: meetingID
+        ))
+
+        let location = try await makeLibraryStore().saveArtifact(artifact)
+        try? await LocalMarkdownContextProvider(rootDirectory: try BarnOwlMeetingProcessor.defaultContextRoot())
+            .write(ContextArtifact(title: finalSession.title, markdown: markdown))
+
+        let now = Date()
+        var updatedMeeting = meeting
+        updatedMeeting.title = finalSession.title
+        updatedMeeting.startedAt = updatedMeeting.startedAt ?? finalSession.startedAt
+        updatedMeeting.endedAt = updatedMeeting.endedAt ?? finalSession.endedAt
+        updatedMeeting.updatedAt = now
+        updatedMeeting.metadataJSON = Self.meetingMetadataJSON(audioSources: finalSession.audioSources, meetingFacts: meetingFacts)
+        try await database.upsertMeeting(updatedMeeting)
+        try await database.replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+            meetingID: meetingID,
+            kind: "markdown",
+            content: markdown,
+            createdAt: now,
+            updatedAt: now,
+            metadataJSON: #"{"source":"summary-repair"}"#
+        ))
+        try await database.replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+            meetingID: meetingID,
+            kind: "summary",
+            content: summary.overview,
+            contentType: "text/plain",
+            createdAt: now,
+            updatedAt: now,
+            metadataJSON: #"{"source":"summary-repair"}"#
+        ))
+        try await database.replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+            meetingID: meetingID,
+            kind: "context_used",
+            content: MeetingContextBuilder.noteContext(from: context).joined(separator: "\n"),
+            contentType: "text/plain",
+            createdAt: now,
+            updatedAt: now,
+            metadataJSON: #"{"source":"summary-repair"}"#
+        ))
+        if let factsJSON = meetingFacts.encodedJSONString() {
+            try await database.replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+                meetingID: meetingID,
+                kind: "meeting_facts",
+                content: factsJSON,
+                contentType: "application/json",
+                createdAt: now,
+                updatedAt: now,
+                metadataJSON: #"{"source":"summary-repair"}"#
+            ))
+        }
+
+        await progress?(MeetingProcessingProgress(
+            message: "Repaired meeting summary.",
+            progressFraction: 1.0,
+            sessionID: meetingID
+        ))
+        return (finalSession, location.markdownFileURL)
+    }
+
+    private static func transcriptSegment(from record: BarnOwlTranscriptSegmentRecord) -> TranscriptSegment {
+        TranscriptSegment(
+            id: record.id,
+            speakerLabel: record.speakerLabel ?? "Speaker",
+            text: record.text,
+            startTime: record.startTime,
+            endTime: record.endTime,
+            confidence: record.confidence
+        )
+    }
+
+    private static func audioSources(from json: String?) -> AudioSourceConfiguration {
+        guard let data = json?.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return .defaultMeetingCapture
+        }
+        return AudioSourceConfiguration(
+            capturesMicrophone: object["microphone"] as? Bool ?? true,
+            capturesSystemAudio: object["systemAudio"] as? Bool ?? object["system"] as? Bool ?? true
+        )
+    }
+
+    private static func meetingMetadataJSON(
+        audioSources: AudioSourceConfiguration,
+        meetingFacts: MeetingFacts
+    ) -> String {
+        var object: [String: Any] = [
+            "microphone": audioSources.capturesMicrophone,
+            "systemAudio": audioSources.capturesSystemAudio
+        ]
+        if let factsData = try? JSONEncoder().encode(meetingFacts),
+           let factsObject = try? JSONSerialization.jsonObject(with: factsData) {
+            object["meetingFacts"] = factsObject
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -387,7 +692,8 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         finalSession.title = MeetingTitleSuggester.title(
             currentTitle: session.title,
             summary: result.summary,
-            segments: result.segments
+            segments: result.segments,
+            context: context
         )
         if finalSession.title != session.title {
             await scopedProgress?(MeetingProcessingProgress(
@@ -618,16 +924,46 @@ private enum MeetingTitleSuggester {
     static func title(
         currentTitle: String,
         summary: MeetingSummary,
-        segments: [TranscriptSegment]
+        segments: [TranscriptSegment],
+        context: [String] = []
     ) -> String {
+        let contextText = context.joined(separator: "\n")
+        let transcriptText = segments
+            .map(\.text)
+            .joined(separator: "\n")
+        let organization = primaryOrganization(contextText: contextText, transcriptText: transcriptText)
+
+        if let contextTitle = contextualTitle(from: contextText),
+           !isGeneric(contextTitle),
+           !isLikelyTranscriptAside(contextTitle) {
+            return contextualized(
+                contextTitle,
+                organization: organization,
+                contextText: contextText,
+                transcriptText: transcriptText
+            )
+        }
+
         if let suggested = normalized(summary.suggestedTitle),
-           !isGeneric(suggested) {
-            return suggested
+           !isGeneric(suggested),
+           !isLikelyTranscriptAside(suggested) {
+            return contextualized(
+                suggested,
+                organization: organization,
+                contextText: contextText,
+                transcriptText: transcriptText
+            )
         }
 
         if let current = normalized(currentTitle),
-           !isGeneric(current) {
-            return current
+           !isGeneric(current),
+           !isLikelyTranscriptAside(current) {
+            return contextualized(
+                current,
+                organization: organization,
+                contextText: contextText,
+                transcriptText: transcriptText
+            )
         }
 
         let candidates = [
@@ -639,12 +975,136 @@ private enum MeetingTitleSuggester {
 
         for candidate in candidates {
             if let title = titleFromSentence(candidate),
-               !isGeneric(title) {
-                return title
+               !isGeneric(title),
+               !isLikelyTranscriptAside(title) {
+                return contextualized(
+                    title,
+                    organization: organization,
+                    contextText: contextText,
+                    transcriptText: transcriptText
+                )
             }
         }
 
         return "Meeting Notes"
+    }
+
+    private static func contextualTitle(from contextText: String) -> String? {
+        firstMatch(in: contextText, patterns: [
+            #"(?im)^Meeting title:\s*(.+)$"#,
+            #"(?im)^Calendar event:\s*(.+)$"#,
+            #"(?im)^Title:\s*(.+)$"#
+        ])
+    }
+
+    private static func contextualized(
+        _ title: String,
+        organization: String?,
+        contextText: String,
+        transcriptText: String
+    ) -> String {
+        guard let cleanTitle = normalized(title) else { return "Meeting Notes" }
+        let formattedTitle = titleCasedTopic(cleanTitle)
+        guard let organization = normalized(organization),
+              !organization.isEmpty
+        else {
+            return formattedTitle
+        }
+
+        let lowerTitle = formattedTitle.lowercased()
+        let lowerOrganization = organization.lowercased()
+        if lowerTitle.hasPrefix("\(lowerOrganization):") || lowerTitle.hasPrefix("\(lowerOrganization) ") {
+            return formattedTitle
+        }
+        guard shouldPrefixWithOrganization(
+            formattedTitle,
+            organization: organization,
+            contextText: contextText,
+            transcriptText: transcriptText
+        ) else {
+            return formattedTitle
+        }
+        return "\(organization): \(formattedTitle)"
+    }
+
+    private static func shouldPrefixWithOrganization(
+        _ title: String,
+        organization: String,
+        contextText: String,
+        transcriptText: String
+    ) -> Bool {
+        let lowerTitle = title.lowercased()
+        let lowerOrganization = organization.lowercased()
+        guard !lowerTitle.contains(lowerOrganization) else { return false }
+        guard !isGeneric(title) else { return false }
+        guard !looksLikeInternalTitle(lowerTitle) else { return false }
+
+        let combined = [contextText, transcriptText]
+            .joined(separator: "\n")
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+        guard customerOrExternalSignals.contains(where: { combined.contains($0) })
+                || lowerTitle.contains("feedback")
+                || lowerTitle.contains("partnership")
+                || lowerTitle.contains("on-site")
+                || lowerTitle.contains("onsite")
+                || lowerTitle.contains("executive")
+                || lowerTitle.contains("ceo")
+                || lowerTitle.contains("cio")
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func looksLikeInternalTitle(_ lowerTitle: String) -> Bool {
+        internalTitleSignals.contains { lowerTitle.contains($0) }
+    }
+
+    private static func primaryOrganization(contextText: String, transcriptText: String) -> String? {
+        let combined = [contextText, transcriptText]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n")
+        let lowercased = combined.lowercased()
+        for (needle, name) in knownOrganizationSignals {
+            if lowercased.contains(needle) {
+                return name
+            }
+        }
+        return mostFrequentKnownOrganization(in: combined)
+    }
+
+    private static func mostFrequentKnownOrganization(in text: String) -> String? {
+        let lowercased = text.lowercased()
+        return knownOrganizationNames
+            .map { name in
+                let count = lowercased.components(separatedBy: name.lowercased()).count - 1
+                return (name: name, count: count)
+            }
+            .filter { $0.count > 0 }
+            .sorted {
+                if $0.count == $1.count {
+                    return $0.name < $1.name
+                }
+                return $0.count > $1.count
+            }
+            .first?
+            .name
+    }
+
+    private static func firstMatch(in text: String, patterns: [String]) -> String? {
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(text.startIndex ..< text.endIndex, in: text)
+            guard let match = regex.firstMatch(in: text, range: range),
+                  match.numberOfRanges > 1,
+                  let matchRange = Range(match.range(at: 1), in: text)
+            else { continue }
+            if let cleaned = normalized(String(text[matchRange])) {
+                return cleaned
+            }
+        }
+        return nil
     }
 
     private static func titleFromSentence(_ text: String) -> String? {
@@ -668,6 +1128,28 @@ private enum MeetingTitleSuggester {
         return normalized(title)
     }
 
+    private static func titleCasedTopic(_ title: String) -> String {
+        title
+            .split(separator: " ")
+            .map { word -> String in
+                let raw = String(word)
+                let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                let suffix = raw.hasSuffix(":") ? ":" : ""
+                if let special = specialTitleWords[trimmed.lowercased()] {
+                    return special + suffix
+                }
+                if trimmed.count > 1,
+                   trimmed.unicodeScalars.allSatisfy({ CharacterSet.uppercaseLetters.contains($0) || CharacterSet.decimalDigits.contains($0) }) {
+                    return raw
+                }
+                if smallTitleWords.contains(trimmed.lowercased()) {
+                    return trimmed.lowercased() + suffix
+                }
+                return trimmed.prefix(1).uppercased() + trimmed.dropFirst() + suffix
+            }
+            .joined(separator: " ")
+    }
+
     private static func normalized(_ title: String?) -> String? {
         let cleaned = title?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -686,6 +1168,14 @@ private enum MeetingTitleSuggester {
             || normalizedTitle.hasPrefix("untitled")
     }
 
+    private static func isLikelyTranscriptAside(_ title: String) -> Bool {
+        let normalizedTitle = title
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcriptAsideTitleSignals.contains { normalizedTitle.contains($0) }
+    }
+
     private static let genericTitles: Set<String> = [
         "meeting",
         "meeting notes",
@@ -702,6 +1192,87 @@ private enum MeetingTitleSuggester {
         "you", "i", "it", "is", "are", "was", "were", "be", "being", "been",
         "should", "would", "could", "will", "can", "team", "speaker", "discussed",
         "reviewed", "agreed"
+    ]
+
+    private static let knownOrganizationSignals: [(String, String)] = [
+        ("modernatx", "Moderna"),
+        ("moderna", "Moderna"),
+        ("takeda", "Takeda")
+    ]
+
+    private static let customerOrExternalSignals: Set<String> = [
+        "account",
+        "customer",
+        "client",
+        "prospect",
+        "external",
+        "exec sponsor",
+        "executive sponsor",
+        "onsite",
+        "on-site",
+        "qbr",
+        "ebr",
+        "partnership",
+        "feedback session"
+    ]
+
+    private static let internalTitleSignals: Set<String> = [
+        "1:1",
+        "one-on-one",
+        "one on one",
+        "staff",
+        "team sync",
+        "standup",
+        "retro",
+        "retrospective",
+        "planning",
+        "roadmap",
+        "incident",
+        "interview",
+        "candidate",
+        "hiring",
+        "design review",
+        "project review"
+    ]
+
+    private static let knownOrganizationNames: [String] = [
+        "Moderna",
+        "Takeda",
+        "Pfizer",
+        "Roche",
+        "Genentech",
+        "Novartis",
+        "Sanofi",
+        "GSK",
+        "AstraZeneca",
+        "Eli Lilly",
+        "Merck",
+        "Veeva"
+    ]
+
+    private static let specialTitleWords: [String: String] = [
+        "ai": "AI",
+        "api": "API",
+        "ceo": "CEO",
+        "cio": "CIO",
+        "cios": "CIOs",
+        "cto": "CTO",
+        "dlp": "DLP",
+        "gpt": "GPT",
+        "rosalind": "Rosalind",
+        "moderna": "Moderna",
+        "takeda": "Takeda"
+    ]
+
+    private static let smallTitleWords: Set<String> = [
+        "and", "or", "of", "for", "to", "with", "in", "on"
+    ]
+
+    private static let transcriptAsideTitleSignals: Set<String> = [
+        "mafia",
+        "inside joke",
+        "funny story",
+        "crazy story"
     ]
 }
 
@@ -757,6 +1328,22 @@ private struct FallbackMeetingSummaryGenerator: MeetingSummaryGenerator {
             return summary
         } catch {
             let details = BarnOwlErrorFormatter.message(for: error)
+            if BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error) {
+                await progress?(MeetingProcessingProgress(
+                    level: .warning,
+                    message: "Summary generation hit a network error; leaving job queued for retry.",
+                    details: details,
+                    performanceEvents: [
+                        .phase(
+                            .modelRequest,
+                            .finished,
+                            at: MeetingProcessingPerformanceClock.now(),
+                            model: OpenAIModelCatalog.summaryAndActions
+                        )
+                    ]
+                ))
+                throw error
+            }
             await progress?(MeetingProcessingProgress(
                 level: .warning,
                 message: "Summary failed; saving transcript with fallback notes.",

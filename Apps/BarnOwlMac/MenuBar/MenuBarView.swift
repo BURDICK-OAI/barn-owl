@@ -58,6 +58,8 @@ struct MenuBarView: View {
                 actionButtons
                     .tint(BarnOwlDesign.amber)
 
+                audioSourceToggle
+
                 if BarnOwlMenuBarPresentation.shouldShowSessionsCard(
                     quickAccessCount: model.quickAccessSessions.count,
                     status: model.status,
@@ -474,6 +476,85 @@ struct MenuBarView: View {
         .disabled(!model.canUsePrimaryAction)
     }
 
+    private var audioSourceToggle: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(BarnOwlDesign.amberLight)
+                    .frame(width: 18)
+                Text("Audio Source")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                Spacer()
+                Text(model.selectedAudioSources.capturesSystemAudio ? "System on" : "Mic only")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(model.selectedAudioSources.capturesSystemAudio ? .black.opacity(0.78) : .white.opacity(0.58))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        model.selectedAudioSources.capturesSystemAudio
+                            ? BarnOwlDesign.amberLight.opacity(model.status == .recording ? 0.45 : 0.92)
+                            : .white.opacity(0.09),
+                        in: Capsule()
+                    )
+            }
+
+            HStack(spacing: 6) {
+                audioSourceOption(
+                    title: "Mic Only",
+                    systemImage: "mic",
+                    isSelected: !model.selectedAudioSources.capturesSystemAudio,
+                    capturesSystemAudio: false
+                )
+                audioSourceOption(
+                    title: "Mic + System",
+                    systemImage: "speaker.wave.2",
+                    isSelected: model.selectedAudioSources.capturesSystemAudio,
+                    capturesSystemAudio: true
+                )
+            }
+        }
+        .padding(11)
+        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(model.selectedAudioSources.capturesSystemAudio ? BarnOwlDesign.amber.opacity(0.22) : BarnOwlDesign.darkStroke)
+        }
+    }
+
+    private func audioSourceOption(
+        title: String,
+        systemImage: String,
+        isSelected: Bool,
+        capturesSystemAudio: Bool
+    ) -> some View {
+        Button {
+            model.setSystemAudioCaptureEnabled(capturesSystemAudio)
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 8)
+                .foregroundStyle(isSelected ? .black.opacity(0.82) : .white.opacity(0.68))
+                .background(
+                    isSelected
+                        ? BarnOwlDesign.amber.opacity(model.status == .recording ? 0.40 : 0.95)
+                        : .black.opacity(0.20),
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .stroke(isSelected ? BarnOwlDesign.amberLight.opacity(0.34) : .white.opacity(0.07))
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(model.status == .recording)
+        .help(model.status == .recording ? "Audio source can be changed before the next recording." : "Use \(title.lowercased()) for the next recording.")
+    }
+
     private var openAppButton: some View {
         Button {
             openRecorder?()
@@ -559,7 +640,7 @@ struct MenuBarView: View {
             .green
         case .degraded, .fallbackActive:
             BarnOwlDesign.amber
-        case .idle, .connecting, .stopped:
+        case .idle, .connecting, .reconnecting, .stopped:
             .white.opacity(0.42)
         }
     }

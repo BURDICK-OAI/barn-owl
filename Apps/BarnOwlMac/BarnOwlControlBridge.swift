@@ -218,6 +218,11 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 return model.controlStatusResponse(ok: false, message: "jobs_dismiss requires jobID.", error: "missing_job_id")
             }
             return await model.controlJobsDismissResponse(jobID: jobID)
+        case .summariesRetry:
+            return await model.controlSummariesRetryResponse(
+                meetingID: command.meetingID ?? command.sessionID,
+                all: command.all == true
+            )
         case .meetingsRecent:
             return await model.controlRecentMeetingsResponse(limit: command.limit ?? 10)
         case .meetingsSearch:

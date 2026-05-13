@@ -116,7 +116,9 @@ public struct OpenAIMeetingSummaryClient: MeetingSummaryClient {
                 [
                     "role": "system",
                     "content": """
-                    You create accurate Barn Owl meeting notes from diarized transcripts. Preserve uncertainty, do not invent facts, and return empty arrays when the transcript does not support a section. Also propose a concise, specific meeting title based only on the transcript and context.
+                    You create accurate Barn Owl meeting notes from diarized transcripts. Preserve uncertainty, do not invent facts, and return empty arrays when the transcript does not support a section.
+
+                    For suggestedTitle, create a contextual meeting title from both context and transcript. Choose the title shape that matches the meeting: use "Customer: Topic" only for customer/account/external meetings, for example "Moderna: CEO and CIOs Meeting" or "Takeda: Rosalind Feedback Session"; use forms like "Name / Name 1:1", "Team: Topic", "Project: Planning", "Candidate: Interview", "Roadmap Review", or "Incident Review" for internal, 1:1, recruiting, planning, review, or operational meetings. Treat calendar event title, attendees, and user-provided context as strong signals; use the transcript to refine the topic. Do not use jokes, metaphors, quoted phrases, or internal names mentioned in the transcript as the title unless context explicitly says that is the meeting title.
                     """
                 ],
                 [
@@ -152,7 +154,7 @@ public struct OpenAIMeetingSummaryClient: MeetingSummaryClient {
             "properties": [
                 "suggestedTitle": [
                     "type": "string",
-                    "description": "A concise 3-8 word meeting title. Avoid generic titles like Untitled Meeting, Sync, or Call."
+                    "description": "A concise contextual title using the right shape for the meeting type: Customer: Topic for external account meetings, Name / Name 1:1 for one-on-ones, Team: Topic or Project: Topic for internal meetings, and similarly specific forms for recruiting, reviews, planning, and incidents. Avoid generic titles and transcript jokes/asides."
                 ],
                 "overview": [
                     "type": "string"

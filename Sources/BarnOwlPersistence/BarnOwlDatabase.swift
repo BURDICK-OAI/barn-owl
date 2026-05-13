@@ -46,6 +46,7 @@ public actor BarnOwlDatabase {
         }
 
         self.database = SQLiteDatabaseHandle(database)
+        sqlite3_busy_timeout(database, 5_000)
         try Self.migrateToLatestSchema(database: database)
         try Self.protectPrivateFile(at: url)
     }
@@ -66,6 +67,7 @@ public actor BarnOwlDatabase {
         }
 
         self.database = SQLiteDatabaseHandle(database)
+        sqlite3_busy_timeout(database, 5_000)
         try Self.migrateToLatestSchema(database: database)
     }
 

@@ -187,7 +187,7 @@ public struct MeetingFactsExtractor: Sendable {
         var facts = existingFacts ?? MeetingFacts()
         var sources = facts.sources
 
-        if let title = explicitTitle(in: freeformContext) ?? explicitTitle(in: transcript) {
+        if let title = explicitTitle(in: freeformContext) {
             facts.title = title
             facts.confidence.title = 0.95
             sources["title"] = "user_context"

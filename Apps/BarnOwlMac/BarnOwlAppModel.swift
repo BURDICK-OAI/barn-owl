@@ -496,6 +496,7 @@ final class BarnOwlAppModel: ObservableObject {
     @Published var recordingElapsedText = "00:00"
     @Published var waveformLevels: [Double] = Array(repeating: 0.18, count: 24)
     @Published var audioActivityLevel: Double = 0
+    @Published var selectedAudioSources = AudioSourceConfiguration.defaultMeetingCapture
     @Published var chatDraft = ""
     @Published var chatMessages: [BarnOwlChatMessage] = [
         BarnOwlChatMessage(role: .assistant, text: "Ask about this meeting, recent meetings, decisions, follow-ups, or local context.")
@@ -557,6 +558,9 @@ final class BarnOwlAppModel: ObservableObject {
     private var completionReadyResetTask: Task<Void, Never>?
     private var updateAvailabilityTimer: AnyCancellable?
     private var lastAudibleAudioAt: Date?
+    private var lastCapturedChunkAtByTrack: [AudioTrackKind: Date] = [:]
+    private var lastCaptureRestartAt = Date.distantPast
+    private var sleepWakeObservers: [NSObjectProtocol] = []
     private var didAutoStopForSilence = false
     private static let waveformPublishInterval: TimeInterval = 0.10
     private static let realtimePreviewPublishInterval: TimeInterval = 0.85
@@ -566,7 +570,10 @@ final class BarnOwlAppModel: ObservableObject {
     private static let completionReadyResetDelayNanoseconds: UInt64 = 2_000_000_000
     private static let autoStopSilenceInterval: TimeInterval = 15 * 60
     private static let autoStopSilenceRMSThreshold: Double = 0.01
+    private static let captureWatchdogGraceInterval: TimeInterval = 95
+    private static let captureRestartCooldown: TimeInterval = 45
     private static let periodicUpdateCheckInterval: TimeInterval = 6 * 60 * 60
+    private static let summaryFallbackMarker = "Summary generation failed"
 
     init(
         makeAudioCoordinator: @escaping @Sendable (
@@ -594,6 +601,7 @@ final class BarnOwlAppModel: ObservableObject {
         self.diagnosticsStore = diagnosticsStore
         self.jobRunner = BarnOwlJobRunner(makeDatabase: makeDatabase, meetingProcessor: meetingProcessor)
         configurePeriodicUpdateChecks()
+        installSleepWakeObservers()
         Task.detached(priority: .utility) {
             await self.performLaunchRecovery()
             await self.refreshRecentSessions()
@@ -680,6 +688,15 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func setSystemAudioCaptureEnabled(_ enabled: Bool) {
+        guard status != .recording else {
+            captureStatus = "System audio can be changed before the next recording."
+            return
+        }
+        selectedAudioSources.capturesSystemAudio = enabled
+        publishRecordingReadinessSummary()
+    }
+
     func checkForUpdatesAndInstallLatest() async {
         guard !isUpdateInFlight else { return }
         if case .unknown = updateAvailability {
@@ -741,8 +758,32 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
-    func startRecording() async {
+    private func installSleepWakeObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        let sleepObserver = center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemWillSleep()
+            }
+        }
+        let wakeObserver = center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.handleSystemDidWake()
+            }
+        }
+        sleepWakeObservers = [sleepObserver, wakeObserver]
+    }
+
+    func startRecording(audioSources: AudioSourceConfiguration? = nil) async {
         guard canStartRecording else { return }
+        let requestedAudioSources = audioSources ?? selectedAudioSources
         resetSessionSurface()
         recordPerformance(.phase(.capture, .started, at: Self.performanceNow()))
         recordPerformance(.milestone(.captureStarted, at: Self.performanceNow()))
@@ -782,21 +823,25 @@ final class BarnOwlAppModel: ObservableObject {
             return
         }
 
-        let hasSystemAudioEvidence = BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence()
-        captureStatus = hasSystemAudioEvidence
-            ? "Checking system audio readiness."
-            : "Requesting system audio permission."
-        let systemAudioDecision = BarnOwlFirstRunReadiness.requestSystemAudioDecisionIfNeeded()
-        if systemAudioDecision != .granted {
-            recordActivity(
-                level: .warning,
-                category: "capture",
-                message: "System audio permission is not confirmed yet.",
-                details: hasSystemAudioEvidence
-                    ? "Barn Owl has prior system-audio capture evidence and will verify capture during recording."
-                    : "Barn Owl will attempt capture so macOS can show the required permission prompt if needed.",
-                updatePreview: false
-            )
+        if requestedAudioSources.capturesSystemAudio {
+            let hasSystemAudioEvidence = BarnOwlFirstRunReadiness.hasSystemAudioCaptureEvidence()
+            captureStatus = hasSystemAudioEvidence
+                ? "Checking system audio readiness."
+                : "Requesting system audio permission."
+            let systemAudioDecision = BarnOwlFirstRunReadiness.requestSystemAudioDecisionIfNeeded()
+            if systemAudioDecision != .granted {
+                recordActivity(
+                    level: .warning,
+                    category: "capture",
+                    message: "System audio permission is not confirmed yet.",
+                    details: hasSystemAudioEvidence
+                        ? "Barn Owl has prior system-audio capture evidence and will verify capture during recording."
+                        : "Barn Owl will attempt capture so macOS can show the required permission prompt if needed.",
+                    updatePreview: false
+                )
+            }
+        } else {
+            captureStatus = "System audio disabled for this recording."
         }
 
         let matchedCalendarContext = await resolveCalendarContext(around: startedAt)
@@ -806,7 +851,7 @@ final class BarnOwlAppModel: ObservableObject {
         let session = RecordingSession(
             title: sessionTitle,
             startedAt: startedAt,
-            audioSources: .defaultMeetingCapture
+            audioSources: requestedAudioSources
         )
         lastAudibleAudioAt = startedAt
         didAutoStopForSilence = false
@@ -824,8 +869,10 @@ final class BarnOwlAppModel: ObservableObject {
         apply(startResult)
         guard case .accepted = startResult else { return }
         await persistSessionState(session, status: .pending)
-        liveTranscriptPreview = "Checking mic and system audio..."
-        captureStatus = "Starting microphone and system audio."
+        liveTranscriptPreview = requestedAudioSources.capturesSystemAudio
+            ? "Checking mic and system audio..."
+            : "Checking microphone audio..."
+        captureStatus = "Starting \(Self.audioSourceDescription(requestedAudioSources))."
         realtimeStatus = "Starting realtime transcription."
 
         let realtimeController: BarnOwlRealtimeTranscriptionController
@@ -899,7 +946,7 @@ final class BarnOwlAppModel: ObservableObject {
             await persistSessionState(session, status: .recording)
             startElapsedTimer(for: session)
             progressFraction = nil
-            captureStatus = "Recording mic + system audio. Temporary WAV chunks are being saved for processing."
+            captureStatus = "Recording \(Self.audioSourceDescription(session.audioSources)). Temporary WAV chunks are being saved for processing."
             if let matchedCalendarContext {
                 let contextMessage = matchedCalendarContext.isHighConfidence
                     ? "Using calendar context: \(matchedCalendarContext.title)."
@@ -916,7 +963,7 @@ final class BarnOwlAppModel: ObservableObject {
             recordActivity(
                 category: "capture",
                 message: "Recording started.",
-                details: "Capturing microphone and system audio.",
+                details: "Capturing \(Self.audioSourceDescription(session.audioSources)).",
                 sessionID: session.id
             )
             if Self.isLiveTranscriptPlaceholder(liveTranscriptPreview) {
@@ -2681,7 +2728,10 @@ final class BarnOwlAppModel: ObservableObject {
         case .startRecording:
             let wasAlreadyRecording = status == .recording
             if canStartRecording {
-                await startRecording()
+                let audioSources = command.capturesSystemAudio.map {
+                    AudioSourceConfiguration(capturesMicrophone: true, capturesSystemAudio: $0)
+                }
+                await startRecording(audioSources: audioSources)
             }
             let meetingID = activeSession?.id ?? command.meetingID
             if let title = command.title?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -3020,6 +3070,51 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func controlSummariesRetryResponse(meetingID: UUID? = nil, all: Bool = false) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let targetMeetingIDs: [UUID]
+            if let meetingID {
+                targetMeetingIDs = [meetingID]
+            } else if all {
+                let states = try await database.meetingStates(limit: 500)
+                targetMeetingIDs = states
+                    .filter { state in
+                        state.summary?.overview.contains(Self.summaryFallbackMarker) == true
+                            || state.generatedNotes.contains(Self.summaryFallbackMarker)
+                    }
+                    .map(\.id)
+            } else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "summaries_retry requires a meeting ID or --all.",
+                    error: "missing_meeting_id"
+                )
+            }
+
+            var queuedCount = 0
+            for targetMeetingID in targetMeetingIDs {
+                _ = try await jobRunner.enqueueSummaryProcessing(meetingID: targetMeetingID)
+                queuedCount += 1
+            }
+            await refreshJobSummaries()
+            if let meetingID {
+                await refreshProcessingTimeline(meetingID: meetingID)
+            }
+            startJobRunner()
+            let jobs = try await database.jobs(meetingID: meetingID, limit: 100).map(controlJob(from:))
+            return controlStatusResponse(
+                message: queuedCount == 0 ? "No fallback summaries found to retry." : "Queued \(queuedCount) summary repair job(s).",
+                jobs: jobs,
+                activeMeetingID: meetingID,
+                jobState: await controlJobState(for: meetingID),
+                nextCommand: meetingID.map { "barnowl wait --session \($0.uuidString) --until complete --timeout 10m" }
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not queue summary repair.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
     func controlJobsDismissResponse(jobID: UUID) async -> BarnOwlControlResponse {
         do {
             let database = try makeDatabase()
@@ -3134,10 +3229,10 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     func controlPurgeTemporaryAudioResponse(meetingID: UUID) async -> BarnOwlControlResponse {
-        await BarnOwlAudioCaptureFactory.deleteTemporaryAudio(for: meetingID)
-        if activeSession?.id == meetingID {
-            tempAudioByteCount = 0
+        guard activeSession?.id != meetingID else {
+            return controlStatusResponse(ok: false, message: "Stop the active recording before purging its temporary audio.", error: "active_recording")
         }
+        await BarnOwlAudioCaptureFactory.deleteTemporaryAudio(for: meetingID)
         recordActivity(
             category: "retention",
             message: "Purged temporary audio.",
@@ -3809,6 +3904,9 @@ final class BarnOwlAppModel: ObservableObject {
             tempAudioByteCount += Int64(byteCount)
             recordPerformance(.tempAudioBytes(tempAudioByteCount, at: Self.performanceNow()))
         }
+        if progress.sequenceNumber != nil {
+            lastCapturedChunkAtByTrack[progress.trackKind] = Date()
+        }
         let details = [
             String(format: "%.1f seconds", progress.duration),
             progress.byteCount.map { "\($0) bytes" }
@@ -4350,6 +4448,8 @@ final class BarnOwlAppModel: ObservableObject {
         lastRealtimePersistenceAt = .distantPast
         tempAudioByteCount = 0
         lastAudibleAudioAt = nil
+        lastCapturedChunkAtByTrack.removeAll()
+        lastCaptureRestartAt = .distantPast
         didAutoStopForSilence = false
         recordingHealth = .idle
         recordingHealthStartedAt = nil
@@ -4392,6 +4492,8 @@ final class BarnOwlAppModel: ObservableObject {
         pendingAudioActivityLevels = []
         audioActivityLevel = 0
         lastAudibleAudioAt = nil
+        lastCapturedChunkAtByTrack.removeAll()
+        lastCaptureRestartAt = .distantPast
         didAutoStopForSilence = false
         recordingHealth = .idle
         recordingHealthStartedAt = nil
@@ -4463,7 +4565,7 @@ final class BarnOwlAppModel: ObservableObject {
         updateRealtimeStatusIfNeeded(healthState.displayText)
         persistRealtimeState(
             sessionID: sessionID,
-            force: healthState == .fallbackActive || healthState == .degraded || healthState == .stopped
+            force: healthState == .fallbackActive || healthState == .degraded || healthState == .reconnecting || healthState == .stopped
         )
         if (healthState == .fallbackActive || healthState == .degraded) && !didWarnRealtimeFallback {
             didWarnRealtimeFallback = true
@@ -4490,7 +4592,7 @@ final class BarnOwlAppModel: ObservableObject {
             level = .error
         case .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .eventUnhandled, .eventRecoverableError, .receiveClosed:
             level = .warning
-        case .connecting, .connected, .audioAppend, .audioCommit, .trailingSilenceAppend, .eventReceived, .stopped:
+        case .connecting, .connected, .reconnecting, .audioAppend, .audioCommit, .trailingSilenceAppend, .eventReceived, .stopped:
             level = .info
         }
 
@@ -4500,7 +4602,7 @@ final class BarnOwlAppModel: ObservableObject {
             shouldSurfaceInActivity = true
         case .connected, .audioCommit, .eventReceived:
             shouldSurfaceInActivity = true
-        case .connecting, .audioAppend, .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .trailingSilenceAppend, .trailingSilenceFailed, .eventUnhandled, .eventRecoverableError, .stopped:
+        case .connecting, .reconnecting, .audioAppend, .audioAppendIgnored, .audioDropped, .audioCommitSkipped, .audioSilenceSkipped, .eventSuppressed, .trailingSilenceAppend, .trailingSilenceFailed, .eventUnhandled, .eventRecoverableError, .stopped:
             shouldSurfaceInActivity = false
         }
 
@@ -4640,8 +4742,9 @@ final class BarnOwlAppModel: ObservableObject {
         let permissions: RecordingPermissionSet = status == .recording
             ? .grantedForDefaultMeetingCapture
             : BarnOwlFirstRunReadiness.currentRecordingPermissionSet()
+        let configuration = activeSession?.audioSources ?? selectedAudioSources
         let summary = recordingHealth.readinessSummary(
-            configuration: .defaultMeetingCapture,
+            configuration: configuration,
             permissions: permissions,
             now: now
         )
@@ -4835,6 +4938,7 @@ final class BarnOwlAppModel: ObservableObject {
                 self?.updateElapsedText(startedAt: session.startedAt)
                 self?.checkRealtimeHealth(sessionID: session.id, startedAt: session.startedAt)
                 self?.checkSilenceAutoStop(sessionID: session.id)
+                self?.checkCaptureWatchdog(sessionID: session.id)
             }
     }
 
@@ -4895,6 +4999,100 @@ final class BarnOwlAppModel: ObservableObject {
             updatePreview: false
         )
         Task { await self.stopRecording() }
+    }
+
+    private func checkCaptureWatchdog(sessionID: UUID, now: Date = Date()) {
+        guard activeSession?.id == sessionID,
+              status == .recording,
+              didRecordFirstAudioChunk,
+              now.timeIntervalSince(lastCaptureRestartAt) >= Self.captureRestartCooldown
+        else {
+            return
+        }
+
+        let expectedTracks = activeSession?.audioSources.expectedCaptureTracks ?? []
+        let staleTracks = expectedTracks.filter { track in
+            guard let lastCapturedAt = lastCapturedChunkAtByTrack[track] else { return false }
+            return now.timeIntervalSince(lastCapturedAt) >= Self.captureWatchdogGraceInterval
+        }
+        guard !staleTracks.isEmpty else { return }
+
+        lastCaptureRestartAt = now
+        let names = staleTracks.map(\.displayName).joined(separator: ", ")
+        captureStatus = "Restarting capture after stalled \(names) audio."
+        recordActivity(
+            level: .warning,
+            category: "capture",
+            message: "Capture watchdog restarting audio capture.",
+            details: "No saved chunk for \(names) in \(Int(Self.captureWatchdogGraceInterval)) seconds.",
+            sessionID: sessionID,
+            updatePreview: false
+        )
+        Task { await self.restartActiveAudioCapture(reason: "capture watchdog") }
+    }
+
+    private func handleSystemWillSleep() {
+        guard status == .recording,
+              let session = activeSession
+        else { return }
+        captureStatus = "Mac is sleeping; recording will resume capture on wake."
+        recordActivity(
+            level: .warning,
+            category: "capture",
+            message: "System sleep detected during recording.",
+            details: "Barn Owl will restart audio capture when macOS wakes.",
+            sessionID: session.id,
+            updatePreview: false
+        )
+    }
+
+    private func handleSystemDidWake() async {
+        guard status == .recording,
+              let session = activeSession
+        else {
+            startJobRunner()
+            return
+        }
+        captureStatus = "Mac woke; restarting audio capture."
+        recordActivity(
+            level: .warning,
+            category: "capture",
+            message: "System wake detected during recording.",
+            details: "Restarting existing capture pipeline and waking pending jobs.",
+            sessionID: session.id,
+            updatePreview: false
+        )
+        await restartActiveAudioCapture(reason: "system wake")
+        startJobRunner()
+    }
+
+    private func restartActiveAudioCapture(reason: String) async {
+        guard status == .recording,
+              let session = activeSession,
+              let audioCoordinator
+        else { return }
+
+        lastCaptureRestartAt = Date()
+        await audioCoordinator.stop()
+        do {
+            try await audioCoordinator.start(configuration: session.audioSources)
+            lastCapturedChunkAtByTrack.removeAll()
+            captureStatus = "Recording \(Self.audioSourceDescription(session.audioSources)). Capture resumed after \(reason)."
+            recordActivity(
+                category: "capture",
+                message: "Audio capture restarted.",
+                details: "Reason: \(reason).",
+                sessionID: session.id,
+                updatePreview: false
+            )
+        } catch {
+            recordRecordingHealthError(
+                trackKind: .mixed,
+                message: BarnOwlErrorFormatter.message(for: error),
+                sessionID: session.id
+            )
+            captureStatus = "Recording, but audio capture restart failed."
+        }
     }
 
     nonisolated static func shouldAutoStopForSilence(
@@ -5582,6 +5780,19 @@ final class BarnOwlAppModel: ObservableObject {
         #"{"microphone":\#(configuration.capturesMicrophone),"systemAudio":\#(configuration.capturesSystemAudio)}"#
     }
 
+    private nonisolated static func audioSourceDescription(_ configuration: AudioSourceConfiguration) -> String {
+        switch (configuration.capturesMicrophone, configuration.capturesSystemAudio) {
+        case (true, true):
+            "microphone + system audio"
+        case (true, false):
+            "microphone only"
+        case (false, true):
+            "system audio only"
+        case (false, false):
+            "no audio sources"
+        }
+    }
+
     private nonisolated static func meetingMetadataJSON(audioSources: AudioSourceConfiguration, markdown: String) -> String {
         var object: [String: Any] = [
             "microphone": audioSources.capturesMicrophone,
@@ -5805,6 +6016,19 @@ private extension AudioTrackKind {
         case .mixed:
             "mixed audio"
         }
+    }
+}
+
+private extension AudioSourceConfiguration {
+    var expectedCaptureTracks: [AudioTrackKind] {
+        var tracks: [AudioTrackKind] = []
+        if capturesMicrophone {
+            tracks.append(.microphone)
+        }
+        if capturesSystemAudio {
+            tracks.append(.systemAudio)
+        }
+        return tracks
     }
 }
 

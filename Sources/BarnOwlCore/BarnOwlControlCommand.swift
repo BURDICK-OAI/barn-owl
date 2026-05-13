@@ -30,6 +30,7 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case jobsList = "jobs_list"
     case jobsRetry = "jobs_retry"
     case jobsDismiss = "jobs_dismiss"
+    case summariesRetry = "summaries_retry"
     case contextList = "context_list"
     case contextAccept = "context_accept"
     case contextIgnore = "context_ignore"
@@ -59,6 +60,8 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var contextItemID: UUID?
     public var confirmed: Bool?
     public var outputPath: String?
+    public var all: Bool?
+    public var capturesSystemAudio: Bool?
 
     public init(
         command: BarnOwlControlCommandName,
@@ -78,7 +81,9 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         jobID: UUID? = nil,
         contextItemID: UUID? = nil,
         confirmed: Bool? = nil,
-        outputPath: String? = nil
+        outputPath: String? = nil,
+        all: Bool? = nil,
+        capturesSystemAudio: Bool? = nil
     ) {
         self.command = command
         self.sessionID = sessionID
@@ -98,6 +103,8 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.contextItemID = contextItemID
         self.confirmed = confirmed
         self.outputPath = outputPath
+        self.all = all
+        self.capturesSystemAudio = capturesSystemAudio
     }
 }
 
@@ -118,6 +125,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
     public var context: String?
     public var question: String?
     public var source: String?
+    public var capturesSystemAudio: Bool?
 
     public init(
         name: BarnOwlQuickCommandName,
@@ -126,7 +134,8 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
         meetingType: String? = nil,
         context: String? = nil,
         question: String? = nil,
-        source: String? = nil
+        source: String? = nil,
+        capturesSystemAudio: Bool? = nil
     ) {
         self.name = name
         self.meetingID = meetingID
@@ -135,6 +144,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
         self.context = context
         self.question = question
         self.source = source
+        self.capturesSystemAudio = capturesSystemAudio
     }
 }
 
@@ -170,7 +180,8 @@ public extension BarnOwlControlCommand {
                 title: title,
                 meetingType: meetingType,
                 context: context,
-                source: source
+                source: source,
+                capturesSystemAudio: capturesSystemAudio
             )
         case .stopRecording:
             BarnOwlQuickCommand(name: .stopRecording, meetingID: meetingID ?? sessionID)
