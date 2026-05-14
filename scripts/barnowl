@@ -700,9 +700,10 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--type", dest="meeting_type")
     start.add_argument("--context")
     start.add_argument("--source", default="cli")
-    audio_group = start.add_mutually_exclusive_group()
-    audio_group.add_argument("--with-system-audio", dest="captures_system_audio", action="store_true", default=True)
-    audio_group.add_argument("--mic-only", dest="captures_system_audio", action="store_false")
+    start.add_argument("--with-mic", dest="captures_microphone", action="store_true", default=True)
+    start.add_argument("--no-mic", dest="captures_microphone", action="store_false")
+    start.add_argument("--with-system-audio", dest="captures_system_audio", action="store_true", default=True)
+    start.add_argument("--no-system-audio", "--mic-only", dest="captures_system_audio", action="store_false")
 
     subparsers.add_parser("stop")
 
@@ -854,12 +855,15 @@ def main(argv: list[str]) -> int:
             human,
         )
     elif args.command == "start":
+        if not args.captures_microphone and not args.captures_system_audio:
+            raise SystemExit("barnowl start requires at least one audio source. Use --with-mic or --with-system-audio.")
         payload = {
             "command": "start_recording",
             "title": args.title,
             "meetingType": args.meeting_type,
             "context": args.context,
             "source": args.source,
+            "capturesMicrophone": args.captures_microphone,
             "capturesSystemAudio": args.captures_system_audio,
         }
     elif args.command == "stop":

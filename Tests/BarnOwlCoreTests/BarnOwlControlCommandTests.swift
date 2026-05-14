@@ -198,7 +198,9 @@ func quickCommandStartPreservesTitleContextAndMeetingType() {
         title: "Roadmap",
         meetingType: "Planning / Review",
         context: "Discuss V1 command layer.",
-        source: "codex"
+        source: "codex",
+        capturesMicrophone: false,
+        capturesSystemAudio: true
     )
 
     let quickCommand = command.quickCommand
@@ -208,6 +210,29 @@ func quickCommandStartPreservesTitleContextAndMeetingType() {
     #expect(quickCommand?.meetingType == "Planning / Review")
     #expect(quickCommand?.context == "Discuss V1 command layer.")
     #expect(quickCommand?.source == "codex")
+    #expect(quickCommand?.capturesMicrophone == false)
+    #expect(quickCommand?.capturesSystemAudio == true)
+}
+
+@Test
+func startCommandDecodesIndependentAudioSources() throws {
+    let data = Data(
+        """
+        {
+          "command": "start_recording",
+          "capturesMicrophone": false,
+          "capturesSystemAudio": true
+        }
+        """.utf8
+    )
+
+    let command = try JSONDecoder().decode(BarnOwlControlCommand.self, from: data)
+    let quickCommand = try #require(command.quickCommand)
+
+    #expect(command.capturesMicrophone == false)
+    #expect(command.capturesSystemAudio == true)
+    #expect(quickCommand.capturesMicrophone == false)
+    #expect(quickCommand.capturesSystemAudio == true)
 }
 
 @Test

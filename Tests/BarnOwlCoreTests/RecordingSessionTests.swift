@@ -14,6 +14,8 @@ func defaultCaptureIncludesMicAndSystemAudio() {
 
     #expect(configuration.capturesMicrophone)
     #expect(configuration.capturesSystemAudio)
+    #expect(configuration.hasEnabledSource)
+    #expect(!AudioSourceConfiguration(capturesMicrophone: false, capturesSystemAudio: false).hasEnabledSource)
 }
 
 @Test

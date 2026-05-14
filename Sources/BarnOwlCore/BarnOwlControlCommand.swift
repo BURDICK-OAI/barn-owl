@@ -61,6 +61,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var confirmed: Bool?
     public var outputPath: String?
     public var all: Bool?
+    public var capturesMicrophone: Bool?
     public var capturesSystemAudio: Bool?
 
     public init(
@@ -83,6 +84,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         confirmed: Bool? = nil,
         outputPath: String? = nil,
         all: Bool? = nil,
+        capturesMicrophone: Bool? = nil,
         capturesSystemAudio: Bool? = nil
     ) {
         self.command = command
@@ -104,6 +106,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.confirmed = confirmed
         self.outputPath = outputPath
         self.all = all
+        self.capturesMicrophone = capturesMicrophone
         self.capturesSystemAudio = capturesSystemAudio
     }
 }
@@ -125,6 +128,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
     public var context: String?
     public var question: String?
     public var source: String?
+    public var capturesMicrophone: Bool?
     public var capturesSystemAudio: Bool?
 
     public init(
@@ -135,6 +139,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
         context: String? = nil,
         question: String? = nil,
         source: String? = nil,
+        capturesMicrophone: Bool? = nil,
         capturesSystemAudio: Bool? = nil
     ) {
         self.name = name
@@ -144,6 +149,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
         self.context = context
         self.question = question
         self.source = source
+        self.capturesMicrophone = capturesMicrophone
         self.capturesSystemAudio = capturesSystemAudio
     }
 }
@@ -181,6 +187,7 @@ public extension BarnOwlControlCommand {
                 meetingType: meetingType,
                 context: context,
                 source: source,
+                capturesMicrophone: capturesMicrophone,
                 capturesSystemAudio: capturesSystemAudio
             )
         case .stopRecording:

@@ -106,6 +106,10 @@ public struct AudioSourceConfiguration: Codable, Equatable, Sendable {
         self.capturesSystemAudio = capturesSystemAudio
     }
 
+    public var hasEnabledSource: Bool {
+        capturesMicrophone || capturesSystemAudio
+    }
+
     public static let defaultMeetingCapture = AudioSourceConfiguration(
         capturesMicrophone: true,
         capturesSystemAudio: true

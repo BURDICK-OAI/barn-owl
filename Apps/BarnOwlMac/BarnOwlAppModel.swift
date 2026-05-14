@@ -614,11 +614,11 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     var canStartRecording: Bool {
-        stateMachine.state.canStartRecording
+        stateMachine.state.canStartRecording && selectedAudioSources.hasEnabledSource
     }
 
     var canUsePrimaryAction: Bool {
-        stateMachine.state.canStartRecording || stateMachine.state.canStopRecording
+        stateMachine.state.canStopRecording || canStartRecording
     }
 
     var primaryActionTitle: String {
@@ -686,6 +686,15 @@ final class BarnOwlAppModel: ObservableObject {
         } else {
             await startRecording()
         }
+    }
+
+    func setMicrophoneCaptureEnabled(_ enabled: Bool) {
+        guard status != .recording else {
+            captureStatus = "Microphone capture can be changed before the next recording."
+            return
+        }
+        selectedAudioSources.capturesMicrophone = enabled
+        publishRecordingReadinessSummary()
     }
 
     func setSystemAudioCaptureEnabled(_ enabled: Bool) {
@@ -782,8 +791,12 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     func startRecording(audioSources: AudioSourceConfiguration? = nil) async {
-        guard canStartRecording else { return }
         let requestedAudioSources = audioSources ?? selectedAudioSources
+        guard stateMachine.state.canStartRecording else { return }
+        guard requestedAudioSources.hasEnabledSource else {
+            captureStatus = "Turn on Mic or System before recording."
+            return
+        }
         resetSessionSurface()
         recordPerformance(.phase(.capture, .started, at: Self.performanceNow()))
         recordPerformance(.milestone(.captureStarted, at: Self.performanceNow()))
@@ -808,19 +821,23 @@ final class BarnOwlAppModel: ObservableObject {
             return
         }
         let startedAt = Date()
-        captureStatus = "Requesting microphone permission."
-        let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
-        guard microphoneDecision == .granted else {
-            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
-            publishRecordingReadinessSummary()
-            let message = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
-            fail(
-                reason: .permissionDenied,
-                message: message,
-                sessionID: nil,
-                preview: "Recording could not start."
-            )
-            return
+        if requestedAudioSources.capturesMicrophone {
+            captureStatus = "Requesting microphone permission."
+            let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
+            guard microphoneDecision == .granted else {
+                BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+                publishRecordingReadinessSummary()
+                let message = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
+                fail(
+                    reason: .permissionDenied,
+                    message: message,
+                    sessionID: nil,
+                    preview: "Recording could not start."
+                )
+                return
+            }
+        } else {
+            captureStatus = "Microphone disabled for this recording."
         }
 
         if requestedAudioSources.capturesSystemAudio {
@@ -869,9 +886,7 @@ final class BarnOwlAppModel: ObservableObject {
         apply(startResult)
         guard case .accepted = startResult else { return }
         await persistSessionState(session, status: .pending)
-        liveTranscriptPreview = requestedAudioSources.capturesSystemAudio
-            ? "Checking mic and system audio..."
-            : "Checking microphone audio..."
+        liveTranscriptPreview = "Checking \(Self.audioSourceDescription(requestedAudioSources))..."
         captureStatus = "Starting \(Self.audioSourceDescription(requestedAudioSources))."
         realtimeStatus = "Starting realtime transcription."
 
@@ -2732,9 +2747,15 @@ final class BarnOwlAppModel: ObservableObject {
         switch command.name {
         case .startRecording:
             let wasAlreadyRecording = status == .recording
-            if canStartRecording {
-                let audioSources = command.capturesSystemAudio.map {
-                    AudioSourceConfiguration(capturesMicrophone: true, capturesSystemAudio: $0)
+            if stateMachine.state.canStartRecording {
+                let audioSources: AudioSourceConfiguration?
+                if command.capturesMicrophone != nil || command.capturesSystemAudio != nil {
+                    audioSources = AudioSourceConfiguration(
+                        capturesMicrophone: command.capturesMicrophone ?? selectedAudioSources.capturesMicrophone,
+                        capturesSystemAudio: command.capturesSystemAudio ?? selectedAudioSources.capturesSystemAudio
+                    )
+                } else {
+                    audioSources = nil
                 }
                 await startRecording(audioSources: audioSources)
             }
