@@ -613,8 +613,8 @@ struct MenuBarView: View {
             return "Checking..."
         case .available:
             return "Update Available"
-        case .upToDate:
-            return "Up to date"
+        case .upToDate(let version, let build):
+            return "Up to date \(version) (\(build))"
         case .unavailable:
             return "Update unavailable"
         }
