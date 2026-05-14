@@ -86,4 +86,8 @@ fi
 rm -f "$OUTPUT_PATH"
 /usr/bin/ditto -c -k --keepParent "$STAGED_APP" "$OUTPUT_PATH"
 
+if [[ "${BARNOWL_KEEP_PACKAGE_APP:-0}" != "1" ]]; then
+  rm -rf "$STAGED_APP" "$BUILT_APP"
+fi
+
 echo "$OUTPUT_PATH"

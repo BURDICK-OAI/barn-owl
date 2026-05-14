@@ -115,6 +115,7 @@ DEST_PARENT="$(/usr/bin/dirname "$DESTINATION")"
 DEST_NAME="$(/usr/bin/basename "$DESTINATION")"
 BACKUP_ROOT="${BARNOWL_INSTALL_BACKUP_DIR:-"${HOME:?HOME is required}/Library/Application Support/Barn Owl/App Backups"}"
 BACKUP_PATH="$BACKUP_ROOT/$DEST_NAME.backup.$(/bin/date -u '+%Y%m%d%H%M%S')"
+BACKUP_ARCHIVE="$BACKUP_PATH.zip"
 
 move_legacy_application_backups() {
   [[ "$DEST_PARENT" == "/Applications" ]] || return 0
@@ -156,6 +157,14 @@ fi
 
 /usr/bin/codesign --verify --deep --strict "$DESTINATION" >&2
 
+if [[ -e "$BACKUP_PATH" ]]; then
+  if /usr/bin/ditto -c -k --keepParent "$BACKUP_PATH" "$BACKUP_ARCHIVE"; then
+    /bin/rm -rf "$BACKUP_PATH"
+  else
+    BACKUP_ARCHIVE="$BACKUP_PATH"
+  fi
+fi
+
 if [[ "$LAUNCH_APP" -eq 1 ]]; then
   /usr/bin/open "$DESTINATION"
 fi
@@ -164,6 +173,6 @@ echo "install=true"
 echo "destination=$DESTINATION"
 echo "version=$VERSION"
 echo "build=$BUILD"
-if [[ -e "$BACKUP_PATH" ]]; then
-  echo "backup=$BACKUP_PATH"
+if [[ -e "$BACKUP_ARCHIVE" ]]; then
+  echo "backup=$BACKUP_ARCHIVE"
 fi
