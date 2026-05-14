@@ -175,6 +175,8 @@ struct RecorderWindow: View {
             primaryRecordingButton
                 .frame(maxWidth: .infinity)
 
+            recordingSourceToggles
+
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -300,6 +302,8 @@ struct RecorderWindow: View {
 
             primaryRecordingButton
                 .frame(maxWidth: .infinity)
+
+            recordingSourceToggles
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -559,6 +563,67 @@ struct RecorderWindow: View {
         .frame(minWidth: 170)
         .disabled(!model.canUsePrimaryAction)
         .help(recordingActionHelp)
+    }
+
+    private var recordingSourceToggles: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                recordingSourceToggle(
+                    title: "Mic",
+                    systemImage: "mic",
+                    isOn: model.selectedAudioSources.capturesMicrophone
+                ) {
+                    model.setMicrophoneCaptureEnabled(!model.selectedAudioSources.capturesMicrophone)
+                }
+
+                recordingSourceToggle(
+                    title: "System",
+                    systemImage: "speaker.wave.2",
+                    isOn: model.selectedAudioSources.capturesSystemAudio
+                ) {
+                    model.setSystemAudioCaptureEnabled(!model.selectedAudioSources.capturesSystemAudio)
+                }
+            }
+
+            if !model.selectedAudioSources.hasEnabledSource {
+                Label("Turn on Mic or System to record.", systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func recordingSourceToggle(
+        title: String,
+        systemImage: String,
+        isOn: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 10)
+                .foregroundStyle(isOn ? .black.opacity(0.82) : .secondary)
+                .background(
+                    isOn
+                        ? BarnOwlDesign.amber.opacity(model.status == .recording ? 0.40 : 0.95)
+                        : BarnOwlDesign.warmField,
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .stroke(isOn ? BarnOwlDesign.amberLight.opacity(0.36) : BarnOwlDesign.warmStroke)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(model.status == .recording)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .help(model.status == .recording ? "Audio source can be changed before the next recording." : "Turn \(title.lowercased()) \(isOn ? "off" : "on") for the next recording.")
     }
 
     private var headerStatusBadge: some View {
@@ -2170,6 +2235,9 @@ struct RecorderWindow: View {
     private var recordingActionHelp: String {
         if model.status == .recording {
             return "Stop the active Barn Owl recording."
+        }
+        if !model.selectedAudioSources.hasEnabledSource {
+            return "Turn on Mic or System before recording."
         }
         if model.displayedNote != nil {
             return "Start a new recording. Existing notes are preserved."
