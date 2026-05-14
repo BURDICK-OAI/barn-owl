@@ -2,22 +2,22 @@
   "app_name": "Barn Owl",
   "bundle_id": "com.barnowl.mac",
   "version": "0.1.0",
-  "build": "16",
-  "packaged_at": "2026-05-13T23:38:14Z",
+  "build": "17",
+  "packaged_at": "2026-05-14T01:08:25Z",
   "git_available": true,
-  "git_commit": "594e5c3aec8cc3434314372ec8e273f06026a332",
+  "git_commit": "c8c7188cec19c7f0a59b08865b6f9076816ef2a3",
   "git_status": "clean",
   "signing_mode": "local_certificate_signed",
   "artifacts": [
     {
       "path": "BarnOwl-source-handoff.zip",
       "kind": "source_handoff",
-      "sha256": "38046018f70beecf74158fd9ab69fd95363c5571dab76532c7480825f200a3d9"
+      "sha256": "7bf87596ca6a1edcd4bef8aaca96454dd80da945b2dffd25068cf3594ce2e152"
     },
     {
       "path": "BarnOwl.app.zip",
       "kind": "mac_app_zip",
-      "sha256": "c2ce27cc680e4dfba550e35185b6a102925f493c9d975728c47f8d6b674c7482"
+      "sha256": "51aacbe9ccb95b3315434feca99732e81c150e43ba15a1f6509834dc3d4aafa2"
     }
   ]
 }
