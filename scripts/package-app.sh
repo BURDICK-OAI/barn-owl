@@ -62,15 +62,30 @@ done < <(find "$STAGED_APP" -type f -perm -111 -print0)
 
 "$ROOT_DIR/scripts/package-barnowl-resources.sh" "$STAGED_APP" >&2
 
+codesign_timestamp_args=()
+if [[ "$BARNOWL_NOTARIZE" == "1" || "$BARNOWL_CODESIGN_IDENTITY" == Developer\ ID\ Application:* ]]; then
+  codesign_timestamp_args+=(--timestamp)
+else
+  codesign_timestamp_args+=(--timestamp=none)
+fi
+
+# Re-sign nested frameworks before the outer app. Xcode builds the release app
+# with local ad-hoc signatures first, so signed update packages need fresh nested
+# signatures that match the final app signing mode.
+while IFS= read -r -d '' framework; do
+  codesign \
+    --force \
+    --options runtime \
+    --sign "$BARNOWL_CODESIGN_IDENTITY" \
+    "${codesign_timestamp_args[@]}" \
+    "$framework" >&2
+done < <(find "$STAGED_APP/Contents/Frameworks" -mindepth 1 -maxdepth 1 -type d -name '*.framework' -print0)
+
 codesign_args=(--force --deep --options runtime --sign "$BARNOWL_CODESIGN_IDENTITY")
 if [[ -f "$ROOT_DIR/Apps/BarnOwlMac/BarnOwl.entitlements" ]]; then
   codesign_args+=(--entitlements "$ROOT_DIR/Apps/BarnOwlMac/BarnOwl.entitlements")
 fi
-if [[ "$BARNOWL_CODESIGN_IDENTITY" == "-" ]]; then
-  codesign_args+=(--timestamp=none)
-else
-  codesign_args+=(--timestamp)
-fi
+codesign_args+=("${codesign_timestamp_args[@]}")
 codesign "${codesign_args[@]}" "$STAGED_APP" >&2
 
 if [[ "$BARNOWL_NOTARIZE" == "1" ]]; then
