@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
-  "build": "17",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.17/BarnOwl.app.zip",
-  "sha256": "51aacbe9ccb95b3315434feca99732e81c150e43ba15a1f6509834dc3d4aafa2",
-  "notes": "Barn Owl 0.1.0 (17)"
+  "build": "18",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.18/BarnOwl.app.zip",
+  "sha256": "70f89046a847a8bd6ea3c115ccf367e77f3fb9f97ed5c420c6fcd8dcb7d46988",
+  "notes": "Introduced Context Library management in Settings with search, type filters, entry creation, editing, and deletion. Clarified post-meeting review so high-confidence machine context is accepted automatically while medium- and low-confidence suggestions stay review-gated. Extended the Barn Owl CLI and Codex guidance with Context Library commands and review-aware workflows."
 }
