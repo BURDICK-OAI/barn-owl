@@ -21,7 +21,7 @@ rsync -a \
   --exclude '.env.*' \
   --exclude '.tools/' \
   --exclude '.build/' \
-  --exclude 'DerivedData/' \
+  --exclude 'DerivedData*/' \
   --exclude 'build/' \
   --exclude 'dist/' \
   --exclude 'BarnOwl-source-handoff.zip' \

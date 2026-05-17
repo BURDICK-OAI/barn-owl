@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
-  "build": "20",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.20/BarnOwl.app.zip",
-  "sha256": "1c690cadae3849717488f360cffa94cc11b92cc73c16f3d337f909030bea6504",
-  "notes": "Added structured meeting fact imports so trusted Codex context can populate titles, participants, customer accounts, projects, glossary terms, and goals without losing review gating. Expanded the Context Library with entry lookup, confirmation, aliases, evidence, meeting links, and reconcile flows that propagate durable mappings across related meetings. Introduced recurring knowledge discovery, brief/enrichment commands, and automatic resolver-backed reconciliation for repeated high-confidence concepts."
+  "build": "21",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.21/BarnOwl.app.zip",
+  "sha256": "feecc63be77b1ce32403ea58af7e29eedb2394f8e3d17d4eb2c19fc84d39def2",
+  "notes": "Added the autonomous enrichment source registry with configurable adapters, presets, source health, and authority controls. Expanded Barn Owl settings, CLI commands, persistence, and downstream enrichment flows so teams can manage production knowledge sources directly. Hardened the internal release packager so nested frameworks are signed consistently and generated DerivedData folders stay out of source handoff archives."
 }
