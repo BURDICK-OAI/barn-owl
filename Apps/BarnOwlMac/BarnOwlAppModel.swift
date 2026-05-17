@@ -724,9 +724,7 @@ final class BarnOwlAppModel: ObservableObject {
 
     func checkForUpdatesAndInstallLatest() async {
         guard !isUpdateInFlight else { return }
-        if case .unknown = updateAvailability {
-            await refreshUpdateAvailability()
-        }
+        await refreshUpdateAvailability()
         guard updateAvailability.hasInstallableUpdate else {
             updateStatus = updateAvailability.statusText
             return

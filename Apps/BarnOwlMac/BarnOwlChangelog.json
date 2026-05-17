@@ -1,6 +1,16 @@
 [
   {
     "version": "0.1.0",
+    "build": "19",
+    "date": "2026-05-17",
+    "title": "Reliable update refresh",
+    "highlights": [
+      "Made explicit Barn Owl update checks refresh the live feed before deciding no newer build exists.",
+      "Prevents stale cached up-to-date state from hiding a newly published release."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "18",
     "date": "2026-05-17",
     "title": "Context Library and review clarity",
