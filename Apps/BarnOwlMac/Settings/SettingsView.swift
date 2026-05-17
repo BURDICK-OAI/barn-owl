@@ -24,6 +24,13 @@ struct SettingsView: View {
     @State private var showReadinessDiagnostics = false
     @State private var developerDiagnosticsStatus = ""
     @State private var isExportingDeveloperDiagnostics = false
+    @State private var enrichmentSources: [BarnOwlEnrichmentSourceRecord] = []
+    @State private var enrichmentSourceUsefulnessByID: [String: BarnOwlEnrichmentSourceUsefulnessRecord] = [:]
+    @State private var recentEnrichmentConceptHistories: [BarnOwlControlEnrichmentConceptHistory] = []
+    @State private var enrichmentAuthorityProfiles: [BarnOwlEnrichmentAuthorityProfileRecord] = []
+    @State private var enrichmentPolicyPacks: [BarnOwlEnrichmentPolicyPackRecord] = []
+    @State private var enrichmentSourcesStatus = ""
+    @State private var isRefreshingEnrichmentSources = false
 
     var body: some View {
         ScrollView {
@@ -33,6 +40,7 @@ struct SettingsView: View {
                 onboardingReadinessSection
                 openAISection
                 codexIntegrationSection
+                enrichmentSourcesSection
                 developerDiagnosticsSection
                 readinessSection
             }
@@ -47,6 +55,7 @@ struct SettingsView: View {
             refreshReadinessChecks()
             Task {
                 await refreshCodexIntegration()
+                await refreshEnrichmentSources()
             }
         }
     }
@@ -311,6 +320,238 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var enrichmentSourcesSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    settingsSectionHeader("Enrichment Sources", systemImage: "books.vertical")
+                    Spacer()
+                    Button(isRefreshingEnrichmentSources ? "Refreshing..." : "Refresh") {
+                        Task {
+                            await refreshEnrichmentSources()
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(isRefreshingEnrichmentSources)
+                }
+
+                Text("These sources belong to this macOS user. Barn Owl can use them for autonomous knowledge enrichment; custom private sources such as Collin OS only appear when configured for that user.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Connector-backed presets")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(BarnOwlAppModel.enrichmentSourcePresets) { preset in
+                        HStack(alignment: .center, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(preset.displayName)
+                                    .font(.caption.weight(.semibold))
+                                Text("\(preset.scopeLabel) · \(preset.connectorReference ?? "built-in")")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer(minLength: 8)
+                            Button(enrichmentSources.contains(where: { $0.id == preset.id }) ? "Configured" : "Add") {
+                                Task {
+                                    await setupEnrichmentSourcePreset(preset)
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(enrichmentSources.contains(where: { $0.id == preset.id }))
+                        }
+                    }
+                }
+                .padding(10)
+                .background(.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                if enrichmentSources.isEmpty {
+                    settingsStatusMessage("No enrichment sources are configured yet.")
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(enrichmentSources) { source in
+                            enrichmentSourceRow(source)
+                        }
+                    }
+                }
+
+                if !enrichmentPolicyPacks.isEmpty {
+                    Divider()
+                    Text("Automation policy")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(enrichmentPolicyPacks) { pack in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(pack.displayName)
+                                    .font(.caption.weight(.semibold))
+                                if pack.active {
+                                    BarnOwlSettingsStatusPill(
+                                        title: "Active",
+                                        systemImage: nil,
+                                        tint: BarnOwlSettingsTheme.success
+                                    )
+                                } else {
+                                    Button("Activate") {
+                                        Task {
+                                            await activateEnrichmentPolicyPack(pack.id)
+                                        }
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            Text(pack.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Automatic promotion threshold: \(pack.minimumSupportingEvidenceCount) evidence item\(pack.minimumSupportingEvidenceCount == 1 ? "" : "s"). Conflict-memory threshold: \(pack.minimumIndependentSourceCountAfterConflictMemory) independent source\(pack.minimumIndependentSourceCountAfterConflictMemory == 1 ? "" : "s").")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                if !enrichmentAuthorityProfiles.isEmpty {
+                    Divider()
+                    Text("Authority profiles")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(enrichmentAuthorityProfiles) { profile in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(profile.displayName)
+                                    .font(.caption.weight(.semibold))
+                                if profile.builtIn {
+                                    BarnOwlSettingsStatusPill(
+                                        title: "Preset",
+                                        systemImage: nil,
+                                        tint: .secondary
+                                    )
+                                }
+                            }
+                            Text(profile.description)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if !profile.strongestEntityKinds.isEmpty {
+                                Text("Strongest for: \(profile.strongestEntityKinds.joined(separator: ", ")). Weight \(profile.defaultWeight.formatted(.number.precision(.fractionLength(2)))).")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                if !recentEnrichmentConceptHistories.isEmpty {
+                    Divider()
+                    Text("Recent concept memory")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(recentEnrichmentConceptHistories) { history in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(history.conceptKey)
+                                    .font(.caption.weight(.semibold))
+                                if history.requiresConflictMemoryHold {
+                                    BarnOwlSettingsStatusPill(
+                                        title: "Higher bar active",
+                                        systemImage: nil,
+                                        tint: .orange
+                                    )
+                                }
+                            }
+                            Text("\(history.supportedCandidateJobs) supported, \(history.conflictingJobs) conflicted, \(history.negativeEvidenceItems) negative evidence item\(history.negativeEvidenceItems == 1 ? "" : "s").")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                if !enrichmentSourcesStatus.isEmpty {
+                    settingsStatusMessage(enrichmentSourcesStatus)
+                }
+            }
+        }
+    }
+
+    private func enrichmentSourceRow(_ source: BarnOwlEnrichmentSourceRecord) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(source.displayName)
+                        .font(.callout.weight(.semibold))
+                    Text(source.id)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    Toggle(
+                        source.enabled ? "Enabled" : "Disabled",
+                        isOn: Binding(
+                            get: { source.enabled },
+                            set: { enabled in
+                                Task {
+                                    await setEnrichmentSourceEnabled(sourceID: source.id, enabled: enabled)
+                                }
+                            }
+                        )
+                    )
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    BarnOwlSettingsStatusPill(
+                        title: source.healthStatus.displayName,
+                        systemImage: nil,
+                        tint: enrichmentSourceTint(source.healthStatus)
+                    )
+                }
+            }
+
+            HStack(spacing: 8) {
+                BarnOwlSettingsStatusPill(
+                    title: source.scope.displayName,
+                    systemImage: nil,
+                    tint: .secondary
+                )
+                Text(source.authorityProfile)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !source.bestUsedFor.isEmpty {
+                Text("Best for: \(source.bestUsedFor.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            let checkedAt = source.lastCheckedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Not checked yet"
+            Text("Auth: \(source.authState.rawValue.replacingOccurrences(of: "_", with: " ")) · Last checked: \(checkedAt)")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let usefulness = enrichmentSourceUsefulnessByID[source.id] {
+                Text("Usefulness: \(usefulness.attempts) run\(usefulness.attempts == 1 ? "" : "s"), \(usefulness.supportedJobs) supported, \(usefulness.heldJobs) held, \(usefulness.conflictingJobs) conflicted, \(usefulness.acceptedEvidenceItems)/\(usefulness.evidenceItems) evidence items accepted.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var codexIntegrationButtons: some View {
@@ -600,6 +841,140 @@ struct SettingsView: View {
     private func refreshCodexIntegration() async {
         codexBridgeStatus = await BarnOwlCodexIntegration.bridgeStatus()
         codexIntegrationLines = BarnOwlCodexIntegration.snapshot(bridgeStatus: codexBridgeStatus).lines
+    }
+
+    @MainActor
+    private func refreshEnrichmentSources() async {
+        guard !isRefreshingEnrichmentSources else { return }
+        isRefreshingEnrichmentSources = true
+        defer { isRefreshingEnrichmentSources = false }
+
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
+            try await database.seedDefaultEnrichmentSources(ownerID: ownerID)
+            enrichmentSources = try await database.enrichmentSources(ownerID: ownerID)
+            enrichmentSourceUsefulnessByID = Dictionary(
+                uniqueKeysWithValues: try await database.enrichmentSourceUsefulness(ownerID: ownerID)
+                    .map { ($0.sourceID, $0) }
+            )
+            enrichmentAuthorityProfiles = try await database.enrichmentAuthorityProfiles(ownerID: ownerID)
+            enrichmentPolicyPacks = try await database.enrichmentPolicyPacks(ownerID: ownerID)
+            let recentJobs = try await database.enrichmentJobs(ownerID: ownerID, limit: 12)
+            var conceptHistories: [BarnOwlControlEnrichmentConceptHistory] = []
+            var seenConcepts: Set<String> = []
+            for job in recentJobs {
+                let normalizedConcept = job.conceptKey.lowercased()
+                guard !seenConcepts.contains(normalizedConcept) else { continue }
+                seenConcepts.insert(normalizedConcept)
+                let jobsForConcept = try await database.enrichmentJobs(
+                    ownerID: ownerID,
+                    conceptKey: job.conceptKey,
+                    limit: 50
+                )
+                var negativeEvidenceItems = 0
+                for conceptJob in jobsForConcept {
+                    negativeEvidenceItems += try await database.enrichmentJobEvidence(jobID: conceptJob.id)
+                        .compactMap(\.evidence)
+                        .filter(\.negativeEvidence)
+                        .count
+                }
+                let supportedJobs = jobsForConcept.filter { $0.status == .supportedCandidate }.count
+                let conflictingJobs = jobsForConcept.filter { $0.status == .heldConflictingEvidence }.count
+                conceptHistories.append(BarnOwlControlEnrichmentConceptHistory(
+                    conceptKey: job.conceptKey,
+                    supportedCandidateJobs: supportedJobs,
+                    conflictingJobs: conflictingJobs,
+                    negativeEvidenceItems: negativeEvidenceItems,
+                    requiresConflictMemoryHold: conflictingJobs > 0 || negativeEvidenceItems > 0
+                ))
+            }
+            recentEnrichmentConceptHistories = conceptHistories
+            enrichmentSourcesStatus = enrichmentSources.isEmpty
+                ? "No enrichment sources are configured for this user."
+                : "Loaded \(enrichmentSources.count) enrichment source\(enrichmentSources.count == 1 ? "" : "s") for this user."
+        } catch {
+            enrichmentSourcesStatus = "Could not load enrichment sources: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    @MainActor
+    private func setEnrichmentSourceEnabled(sourceID: String, enabled: Bool) async {
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
+            guard try await database.setEnrichmentSourceEnabled(ownerID: ownerID, id: sourceID, enabled: enabled) != nil else {
+                enrichmentSourcesStatus = "Could not find enrichment source \(sourceID)."
+                return
+            }
+            await refreshEnrichmentSources()
+            enrichmentSourcesStatus = enabled ? "Enabled \(sourceID)." : "Disabled \(sourceID)."
+        } catch {
+            enrichmentSourcesStatus = "Could not update enrichment source: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    @MainActor
+    private func activateEnrichmentPolicyPack(_ policyPackID: String) async {
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
+            guard var pack = try await database.enrichmentPolicyPack(ownerID: ownerID, id: policyPackID) else {
+                enrichmentSourcesStatus = "Could not find enrichment policy pack \(policyPackID)."
+                return
+            }
+            pack.active = true
+            pack.updatedAt = Date()
+            try await database.upsertEnrichmentPolicyPack(pack)
+            await refreshEnrichmentSources()
+            enrichmentSourcesStatus = "Activated policy pack \(policyPackID)."
+        } catch {
+            enrichmentSourcesStatus = "Could not activate enrichment policy pack: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    @MainActor
+    private func setupEnrichmentSourcePreset(_ preset: BarnOwlControlEnrichmentSourcePreset) async {
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
+            let now = Date()
+            let source = BarnOwlEnrichmentSourceRecord(
+                id: preset.id,
+                ownerID: ownerID,
+                displayName: preset.displayName,
+                sourceType: preset.sourceType,
+                enabled: true,
+                scope: BarnOwlEnrichmentSourceScope(rawValue: preset.scope) ?? .workspacePrivate,
+                authorityProfile: preset.authorityProfile,
+                bestUsedFor: preset.bestUsedFor,
+                authState: BarnOwlEnrichmentSourceAuthState(rawValue: preset.defaultAuthState) ?? .needsAuthentication,
+                healthStatus: BarnOwlEnrichmentSourceHealthStatus(rawValue: preset.defaultHealthStatus) ?? .needsAuth,
+                connectorReference: preset.connectorReference,
+                privacyCopyPolicy: preset.privacyCopyPolicy,
+                queryBudgetPolicy: preset.queryBudgetPolicy,
+                createdAt: now,
+                updatedAt: now
+            )
+            try await database.upsertEnrichmentSource(source)
+            await refreshEnrichmentSources()
+            enrichmentSourcesStatus = "Configured preset \(preset.id)."
+        } catch {
+            enrichmentSourcesStatus = "Could not configure source preset: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    private func enrichmentSourceTint(_ status: BarnOwlEnrichmentSourceHealthStatus) -> Color {
+        switch status {
+        case .ready:
+            return BarnOwlSettingsTheme.success
+        case .disabled:
+            return .secondary
+        case .needsAuth, .stale, .partial:
+            return BarnOwlSettingsTheme.warning
+        case .error:
+            return .red
+        }
     }
 
     private func refreshReadinessChecks() {

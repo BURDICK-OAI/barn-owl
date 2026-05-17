@@ -25,20 +25,34 @@ NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
     "confirmation_required",
     "context_item_not_found",
     "meeting_not_found",
+    "missing_authority_profile_id",
     "missing_context",
     "missing_context_item_id",
+    "missing_description",
+    "missing_display_name",
     "missing_job_id",
+    "missing_knowledge_entity_id",
     "missing_meeting_id",
     "missing_meeting_type",
+    "missing_policy_pack_id",
+    "missing_preset_id",
     "missing_prompt",
     "missing_query",
     "missing_question",
+    "missing_source_display_name",
+    "missing_source_id",
+    "missing_source_type",
     "missing_slack_webhook",
     "missing_title",
     "no_active_recording",
     "no_context",
     "no_reportable_error",
     "owner_feedback_suppressed",
+    "invalid_source_scope",
+    "enrichment_policy_pack_not_found",
+    "enrichment_source_preset_not_found",
+    "enrichment_source_not_found",
+    "knowledge_entity_not_found",
     "unsupported_quick_command",
 }
 REDACTION_PATTERNS = [
@@ -513,6 +527,117 @@ def markdown_response(response: dict) -> str:
             lines.append(f"Next: `{response['nextCommand']}`")
         append_feedback_suggestion(lines, response)
         return "\n".join(lines).rstrip()
+    if response.get("enrichmentSources") is not None:
+        lines = ["# Enrichment Sources"]
+        sources = response.get("enrichmentSources") or []
+        if not sources:
+            lines.append("")
+            lines.append("No enrichment sources configured.")
+        for source in sources:
+            state = "enabled" if source.get("enabled") else "disabled"
+            lines.append("")
+            lines.append(f"## {source.get('displayName', source.get('id', 'source'))} `{source.get('id', 'unknown')}`")
+            lines.append(f"- State: {state}")
+            lines.append(f"- Type: {source.get('sourceType', 'unknown')}")
+            lines.append(f"- Scope: {source.get('scopeLabel') or source.get('scope', 'unknown')}")
+            lines.append(f"- Status: {source.get('healthLabel') or source.get('healthStatus', 'unknown')}")
+            lines.append(f"- Auth: {source.get('authState', 'unknown')}")
+            lines.append(f"- Authority: {source.get('authorityProfile', 'unknown')}")
+            if source.get("bestUsedFor"):
+                lines.append(f"- Best for: {', '.join(source['bestUsedFor'])}")
+            if source.get("lastCheckedAt"):
+                lines.append(f"- Last checked: {source['lastCheckedAt']}")
+        policy_packs = response.get("enrichmentPolicyPacks") or []
+        if policy_packs:
+            lines.append("")
+            lines.append("## Policy Packs")
+            for pack in policy_packs:
+                state = "active" if pack.get("active") else "inactive"
+                lines.append("")
+                lines.append(f"### {pack.get('displayName', pack.get('id', 'policy'))} `{pack.get('id', 'unknown')}`")
+                lines.append(f"- State: {state}")
+                lines.append(f"- Promote after: {pack.get('minimumSupportingEvidenceCount', 0)} evidence items")
+                lines.append(
+                    f"- Conflict memory requires: {pack.get('minimumIndependentSourceCountAfterConflictMemory', 0)} independent sources"
+                )
+                if pack.get("description"):
+                    lines.append(f"- {pack['description']}")
+        authority_profiles = response.get("enrichmentAuthorityProfiles") or []
+        if authority_profiles:
+            lines.append("")
+            lines.append("## Authority Profiles")
+            for profile in authority_profiles:
+                lines.append("")
+                lines.append(f"### {profile.get('displayName', profile.get('id', 'profile'))} `{profile.get('id', 'unknown')}`")
+                lines.append(f"- Built in: {'yes' if profile.get('builtIn') else 'no'}")
+                lines.append(f"- Default weight: {profile.get('defaultWeight', 0)}")
+                strongest = profile.get("strongestEntityKinds") or []
+                if strongest:
+                    lines.append(f"- Strongest for: {', '.join(strongest)}")
+                weakest = profile.get("weakestEntityKinds") or []
+                if weakest:
+                    lines.append(f"- Weakest for: {', '.join(weakest)}")
+                if profile.get("description"):
+                    lines.append(f"- {profile['description']}")
+        append_feedback_suggestion(lines, response)
+        return "\n".join(lines).rstrip()
+    if response.get("enrichmentSourcePresets") is not None:
+        lines = ["# Enrichment Source Presets"]
+        presets = response.get("enrichmentSourcePresets") or []
+        if not presets:
+            lines.append("")
+            lines.append("No enrichment source presets available.")
+        for preset in presets:
+            lines.append("")
+            lines.append(f"## {preset.get('displayName', preset.get('id', 'preset'))} `{preset.get('id', 'unknown')}`")
+            lines.append(f"- Type: {preset.get('sourceType', 'unknown')}")
+            lines.append(f"- Scope: {preset.get('scopeLabel') or preset.get('scope', 'unknown')}")
+            lines.append(f"- Authority: {preset.get('authorityProfile', 'unknown')}")
+            if preset.get("connectorReference"):
+                lines.append(f"- Connector: {preset['connectorReference']}")
+            if preset.get("bestUsedFor"):
+                lines.append(f"- Best for: {', '.join(preset['bestUsedFor'])}")
+            lines.append(f"- Default auth: {preset.get('defaultAuthState', 'unknown')}")
+            lines.append(f"- Default health: {preset.get('defaultHealthStatus', 'unknown')}")
+        return "\n".join(lines).rstrip()
+    if response.get("enrichmentAuthorityProfiles") is not None:
+        lines = ["# Authority Profiles"]
+        profiles = response.get("enrichmentAuthorityProfiles") or []
+        if not profiles:
+            lines.append("")
+            lines.append("No enrichment authority profiles configured.")
+        for profile in profiles:
+            lines.append("")
+            lines.append(f"## {profile.get('displayName', profile.get('id', 'profile'))} `{profile.get('id', 'unknown')}`")
+            lines.append(f"- Built in: {'yes' if profile.get('builtIn') else 'no'}")
+            lines.append(f"- Default weight: {profile.get('defaultWeight', 0)}")
+            strongest = profile.get("strongestEntityKinds") or []
+            if strongest:
+                lines.append(f"- Strongest for: {', '.join(strongest)}")
+            weakest = profile.get("weakestEntityKinds") or []
+            if weakest:
+                lines.append(f"- Weakest for: {', '.join(weakest)}")
+            if profile.get("description"):
+                lines.append(f"- {profile['description']}")
+        return "\n".join(lines).rstrip()
+    if response.get("enrichmentPolicyPacks") is not None:
+        lines = ["# Policy Packs"]
+        packs = response.get("enrichmentPolicyPacks") or []
+        if not packs:
+            lines.append("")
+            lines.append("No enrichment policy packs configured.")
+        for pack in packs:
+            state = "active" if pack.get("active") else "inactive"
+            lines.append("")
+            lines.append(f"## {pack.get('displayName', pack.get('id', 'policy'))} `{pack.get('id', 'unknown')}`")
+            lines.append(f"- State: {state}")
+            lines.append(f"- Promote after: {pack.get('minimumSupportingEvidenceCount', 0)} evidence items")
+            lines.append(
+                f"- Conflict memory requires: {pack.get('minimumIndependentSourceCountAfterConflictMemory', 0)} independent sources"
+            )
+            if pack.get("description"):
+                lines.append(f"- {pack['description']}")
+        return "\n".join(lines).rstrip()
     if (
         response.get("bridgeStatus") or response.get("recordingStatus") or response.get("nextCommand")
     ) and not any(response.get(key) for key in [
@@ -619,6 +744,66 @@ def markdown_response(response: dict) -> str:
                 lines.append(f"Meeting: `{item['meetingID']}`")
                 lines.append("")
             lines.append(item.get("body", ""))
+        return "\n".join(lines).rstrip()
+    if response.get("enrichmentJobs") is not None:
+        lines = ["# Enrichment Jobs"]
+        jobs = response.get("enrichmentJobs") or []
+        if not jobs:
+            lines.append("")
+            lines.append("No enrichment jobs found.")
+        for job in jobs:
+            lines.append("")
+            lines.append(f"## {job.get('conceptKey', 'concept')} `{job.get('id')}`")
+            lines.append(f"- Status: {job.get('statusLabel') or job.get('status', 'unknown')}")
+            lines.append(f"- Evidence: {job.get('evidenceCount', 0)}")
+            selected = job.get("selectedSources") or []
+            if selected:
+                lines.append(f"- Sources: {', '.join(selected)}")
+            if job.get("summary"):
+                lines.append("")
+                lines.append(job["summary"])
+            if job.get("rationale"):
+                lines.append("")
+                lines.append(f"Rationale: {job['rationale']}")
+        evidence = response.get("enrichmentEvidence") or []
+        if evidence:
+            lines.append("")
+            lines.append("## Evidence")
+            for item in evidence:
+                lines.append("")
+                lines.append(f"- **{item.get('sourceDisplayName', item.get('sourceID', 'source'))}**: {item.get('summary', '')}")
+        concept_histories = response.get("enrichmentConceptHistories") or []
+        if concept_histories:
+            lines.append("")
+            lines.append("## Concept Memory")
+            for history in concept_histories:
+                lines.append("")
+                lines.append(f"### {history.get('conceptKey', 'concept')}")
+                lines.append(f"- Supported jobs: {history.get('supportedCandidateJobs', 0)}")
+                lines.append(f"- Conflicted jobs: {history.get('conflictingJobs', 0)}")
+                lines.append(f"- Negative evidence items: {history.get('negativeEvidenceItems', 0)}")
+                if history.get("requiresConflictMemoryHold"):
+                    lines.append("- Automation threshold: higher bar active because prior conflict memory exists")
+                else:
+                    lines.append("- Automation threshold: standard")
+        return "\n".join(lines).rstrip()
+    if response.get("knowledgeEntities") is not None:
+        lines = ["# Durable Knowledge Entities"]
+        entities = response.get("knowledgeEntities") or []
+        if not entities:
+            lines.append("")
+            lines.append("No durable knowledge entities recorded.")
+        for entity in entities:
+            lines.append("")
+            lines.append(f"## {entity.get('canonicalName', 'entity')} `{entity.get('id', 'unknown')}`")
+            lines.append(f"- Kind: {entity.get('kind', 'unknown')}")
+            lines.append(f"- Confidence: {entity.get('confidence', 0)}")
+            lines.append(f"- Lifecycle: {entity.get('lifecycleStatus', 'unknown')}")
+            if entity.get("lifecycleReason"):
+                lines.append(f"- Reason: {entity['lifecycleReason']}")
+            if entity.get("summary"):
+                lines.append("")
+                lines.append(entity["summary"])
         return "\n".join(lines).rstrip()
     if response.get("meetings"):
         lines = ["# Meetings"]
@@ -789,6 +974,107 @@ def build_parser() -> argparse.ArgumentParser:
     permissions_subparsers = permissions.add_subparsers(dest="permissions_command", required=True)
     add_format(permissions_subparsers.add_parser("check"))
     add_format(permissions_subparsers.add_parser("test"))
+
+    enrichment_sources = subparsers.add_parser("enrichment-sources")
+    enrichment_subparsers = enrichment_sources.add_subparsers(dest="enrichment_sources_command", required=True)
+    enrichment_list = enrichment_subparsers.add_parser("list")
+    add_format(enrichment_list)
+    enrichment_presets = enrichment_subparsers.add_parser("presets")
+    add_format(enrichment_presets)
+    enrichment_setup = enrichment_subparsers.add_parser("setup")
+    enrichment_setup.add_argument("preset_id")
+    enrichment_setup.add_argument("--source-id")
+    enrichment_setup.add_argument("--name")
+    enrichment_setup.add_argument("--authority")
+    enrichment_setup.add_argument("--best-for", dest="best_used_for", action="append", default=[])
+    enrichment_setup.add_argument("--disabled", action="store_true")
+    enrichment_setup.add_argument("--config-json")
+    enrichment_setup.add_argument("--connector-reference")
+    enrichment_setup.add_argument("--privacy-copy-policy")
+    enrichment_setup.add_argument("--query-budget-policy")
+    add_format(enrichment_setup)
+    enrichment_check = enrichment_subparsers.add_parser("check")
+    enrichment_check.add_argument("source_id")
+    add_format(enrichment_check)
+    enrichment_upsert = enrichment_subparsers.add_parser("upsert")
+    enrichment_upsert.add_argument("source_id")
+    enrichment_upsert.add_argument("--name", required=True)
+    enrichment_upsert.add_argument("--type", dest="source_type", required=True)
+    enrichment_upsert.add_argument(
+        "--scope",
+        required=True,
+        choices=["local_private", "personal_private", "workspace_private", "organization_scoped", "public"],
+    )
+    enrichment_upsert.add_argument("--authority", required=True)
+    enrichment_upsert.add_argument("--best-for", dest="best_used_for", action="append", default=[])
+    enrichment_upsert.add_argument("--disabled", action="store_true")
+    enrichment_upsert.add_argument(
+        "--auth-state",
+        choices=["not_required", "configured", "needs_authentication", "unavailable"],
+    )
+    enrichment_upsert.add_argument(
+        "--health-status",
+        choices=["ready", "disabled", "needs_auth", "stale", "partial", "error"],
+    )
+    enrichment_upsert.add_argument("--config-json")
+    enrichment_upsert.add_argument("--connector-reference")
+    enrichment_upsert.add_argument("--privacy-copy-policy")
+    enrichment_upsert.add_argument("--query-budget-policy")
+    add_format(enrichment_upsert)
+    for name in ["enable", "disable"]:
+        leaf = enrichment_subparsers.add_parser(name)
+        leaf.add_argument("source_id")
+        add_format(leaf)
+
+    authority_profiles = subparsers.add_parser("authority-profiles")
+    authority_subparsers = authority_profiles.add_subparsers(dest="authority_profiles_command", required=True)
+    add_format(authority_subparsers.add_parser("list"))
+    authority_upsert = authority_subparsers.add_parser("upsert")
+    authority_upsert.add_argument("profile_id")
+    authority_upsert.add_argument("--name", required=True)
+    authority_upsert.add_argument("--description", required=True)
+    authority_upsert.add_argument("--strongest-for", dest="strongest_entity_kinds", action="append", default=[])
+    authority_upsert.add_argument("--weakest-for", dest="weakest_entity_kinds", action="append", default=[])
+    authority_upsert.add_argument("--weight", dest="default_weight", type=float)
+    authority_upsert.add_argument("--auto-persist-policy-json")
+    add_format(authority_upsert)
+
+    policy_packs = subparsers.add_parser("policy-packs")
+    policy_subparsers = policy_packs.add_subparsers(dest="policy_packs_command", required=True)
+    add_format(policy_subparsers.add_parser("list"))
+    policy_upsert = policy_subparsers.add_parser("upsert")
+    policy_upsert.add_argument("policy_pack_id")
+    policy_upsert.add_argument("--name", required=True)
+    policy_upsert.add_argument("--description", required=True)
+    policy_upsert.add_argument("--minimum-evidence", dest="minimum_supporting_evidence_count", type=int)
+    policy_upsert.add_argument("--minimum-conflict-sources", dest="minimum_independent_source_count_after_conflict_memory", type=int)
+    policy_upsert.add_argument("--active", action="store_true")
+    add_format(policy_upsert)
+    policy_activate = policy_subparsers.add_parser("activate")
+    policy_activate.add_argument("policy_pack_id")
+    add_format(policy_activate)
+
+    knowledge = subparsers.add_parser("knowledge")
+    knowledge_subparsers = knowledge.add_subparsers(dest="knowledge_command", required=True)
+    knowledge_enrich = knowledge_subparsers.add_parser("enrich")
+    knowledge_enrich.add_argument("query")
+    knowledge_enrich.add_argument("--limit", type=int, default=8)
+    add_format(knowledge_enrich)
+    knowledge_jobs = knowledge_subparsers.add_parser("jobs")
+    knowledge_jobs_subparsers = knowledge_jobs.add_subparsers(dest="knowledge_jobs_command", required=True)
+    knowledge_jobs_list = knowledge_jobs_subparsers.add_parser("list")
+    knowledge_jobs_list.add_argument("--limit", type=int, default=25)
+    add_format(knowledge_jobs_list)
+    knowledge_entities = knowledge_subparsers.add_parser("entities")
+    knowledge_entities_subparsers = knowledge_entities.add_subparsers(dest="knowledge_entities_command", required=True)
+    knowledge_entities_list = knowledge_entities_subparsers.add_parser("list")
+    knowledge_entities_list.add_argument("--limit", type=int, default=100)
+    add_format(knowledge_entities_list)
+    for name in ["suppress", "reactivate"]:
+        leaf = knowledge_entities_subparsers.add_parser(name)
+        leaf.add_argument("entity_id")
+        leaf.add_argument("--reason")
+        add_format(leaf)
 
     feedback = subparsers.add_parser("feedback")
     feedback_subparsers = feedback.add_subparsers(dest="feedback_command", required=True)
@@ -982,6 +1268,126 @@ def main(argv: list[str]) -> int:
     elif args.command == "permissions" and args.permissions_command == "test":
         payload = {
             "command": "permissions_test",
+            "format": output_format,
+        }
+    elif args.command == "enrichment-sources" and args.enrichment_sources_command == "list":
+        payload = {
+            "command": "enrichment_sources_list",
+            "format": output_format,
+        }
+    elif args.command == "enrichment-sources" and args.enrichment_sources_command == "presets":
+        payload = {
+            "command": "enrichment_source_presets_list",
+            "format": output_format,
+        }
+    elif args.command == "enrichment-sources" and args.enrichment_sources_command == "setup":
+        payload = {
+            "command": "enrichment_source_setup_preset",
+            "presetID": args.preset_id,
+            "sourceID": args.source_id,
+            "sourceDisplayName": args.name,
+            "authorityProfile": args.authority,
+            "bestUsedFor": args.best_used_for or None,
+            "enabled": not args.disabled,
+            "configJSON": args.config_json,
+            "connectorReference": args.connector_reference,
+            "privacyCopyPolicy": args.privacy_copy_policy,
+            "queryBudgetPolicy": args.query_budget_policy,
+            "format": output_format,
+        }
+    elif args.command == "enrichment-sources" and args.enrichment_sources_command == "check":
+        payload = {
+            "command": "enrichment_source_health_check",
+            "sourceID": args.source_id,
+            "format": output_format,
+        }
+    elif args.command == "enrichment-sources" and args.enrichment_sources_command == "upsert":
+        payload = {
+            "command": "enrichment_source_upsert",
+            "sourceID": args.source_id,
+            "sourceDisplayName": args.name,
+            "sourceType": args.source_type,
+            "scope": args.scope,
+            "authorityProfile": args.authority,
+            "bestUsedFor": args.best_used_for,
+            "enabled": not args.disabled,
+            "authState": args.auth_state,
+            "healthStatus": args.health_status,
+            "configJSON": args.config_json,
+            "connectorReference": args.connector_reference,
+            "privacyCopyPolicy": args.privacy_copy_policy,
+            "queryBudgetPolicy": args.query_budget_policy,
+            "format": output_format,
+        }
+    elif args.command == "enrichment-sources" and args.enrichment_sources_command in {"enable", "disable"}:
+        payload = {
+            "command": f"enrichment_source_{args.enrichment_sources_command}",
+            "sourceID": args.source_id,
+            "format": output_format,
+        }
+    elif args.command == "authority-profiles" and args.authority_profiles_command == "list":
+        payload = {
+            "command": "enrichment_authority_profiles_list",
+            "format": output_format,
+        }
+    elif args.command == "authority-profiles" and args.authority_profiles_command == "upsert":
+        payload = {
+            "command": "enrichment_authority_profile_upsert",
+            "authorityProfileID": args.profile_id,
+            "displayName": args.name,
+            "description": args.description,
+            "strongestEntityKinds": args.strongest_entity_kinds,
+            "weakestEntityKinds": args.weakest_entity_kinds,
+            "defaultWeight": args.default_weight,
+            "autoPersistPolicyJSON": args.auto_persist_policy_json,
+            "format": output_format,
+        }
+    elif args.command == "policy-packs" and args.policy_packs_command == "list":
+        payload = {
+            "command": "enrichment_policy_packs_list",
+            "format": output_format,
+        }
+    elif args.command == "policy-packs" and args.policy_packs_command == "upsert":
+        payload = {
+            "command": "enrichment_policy_pack_upsert",
+            "policyPackID": args.policy_pack_id,
+            "displayName": args.name,
+            "description": args.description,
+            "minimumSupportingEvidenceCount": args.minimum_supporting_evidence_count,
+            "minimumIndependentSourceCountAfterConflictMemory": args.minimum_independent_source_count_after_conflict_memory,
+            "enabled": args.active,
+            "format": output_format,
+        }
+    elif args.command == "policy-packs" and args.policy_packs_command == "activate":
+        payload = {
+            "command": "enrichment_policy_pack_activate",
+            "policyPackID": args.policy_pack_id,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "enrich":
+        payload = {
+            "command": "knowledge_enrich",
+            "query": args.query,
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "jobs" and args.knowledge_jobs_command == "list":
+        payload = {
+            "command": "knowledge_jobs_list",
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "entities" and args.knowledge_entities_command == "list":
+        payload = {
+            "command": "knowledge_entities_list",
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "entities" and args.knowledge_entities_command in {"suppress", "reactivate"}:
+        payload = {
+            "command": f"knowledge_entity_{args.knowledge_entities_command}",
+            "knowledgeEntityID": args.entity_id,
+            "reason": args.reason,
             "format": output_format,
         }
     elif args.command == "title" and args.title_command == "set":

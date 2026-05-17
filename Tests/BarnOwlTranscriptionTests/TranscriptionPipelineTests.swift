@@ -341,6 +341,44 @@ func pipelineUsesInjectedSummaryGenerator() async throws {
 }
 
 @Test
+func pipelineEnrichesSummaryContextAfterTranscriptReview() async throws {
+    let audioFile = RecordedAudioFile(
+        url: URL(fileURLWithPath: "/tmp/context-aware.wav"),
+        trackLabel: "Microphone"
+    )
+    let capturedContexts = CapturedSummaryContexts()
+    let pipeline = FinalTranscriptionPipeline(
+        transcriptionClient: StubAudioFileTranscriptionClient(responses: [
+            audioFile.url: AudioFileTranscriptionResponse(segments: [
+                AudioFileTranscriptionSegment(text: "Rosalind launch is on track.", startTime: 0, endTime: 1)
+            ])
+        ]),
+        summaryGenerator: CapturingSummaryGenerator(
+            summary: MeetingSummary(overview: "Context-aware summary."),
+            capturedContexts: capturedContexts
+        ),
+        summaryContextProvider: { _, segments, context in
+            guard segments.map(\.text).joined(separator: " ").contains("Rosalind") else {
+                return context
+            }
+            return context + ["Known project: Rosalind. Internal launch workstream."]
+        }
+    )
+
+    let result = try await pipeline.run(
+        session: makeSession(),
+        audioFiles: [audioFile],
+        context: ["Calendar context: GTM review."]
+    )
+
+    #expect(result.summary.overview == "Context-aware summary.")
+    #expect(await capturedContexts.latest() == [
+        "Calendar context: GTM review.",
+        "Known project: Rosalind. Internal launch workstream."
+    ])
+}
+
+@Test
 func cachedTranscriptionClientUsesCompletedCacheWithoutCallingWrappedClient() async throws {
     let sessionID = UUID()
     let audioFile = RecordedAudioFile(
@@ -602,6 +640,34 @@ private struct StubSummaryGenerator: MeetingSummaryGenerator {
         _ = session
         _ = segments
         _ = context
+        return summary
+    }
+}
+
+private actor CapturedSummaryContexts {
+    private var values: [[String]] = []
+
+    func append(_ context: [String]) {
+        values.append(context)
+    }
+
+    func latest() -> [String]? {
+        values.last
+    }
+}
+
+private struct CapturingSummaryGenerator: MeetingSummaryGenerator {
+    var summary: MeetingSummary
+    let capturedContexts: CapturedSummaryContexts
+
+    func generateSummary(
+        session: RecordingSession,
+        segments: [TranscriptSegment],
+        context: [String]
+    ) async throws -> MeetingSummary {
+        _ = session
+        _ = segments
+        await capturedContexts.append(context)
         return summary
     }
 }

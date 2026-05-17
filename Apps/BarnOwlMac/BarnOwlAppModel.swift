@@ -280,6 +280,658 @@ struct BarnOwlLaunchRecoveryReport: Equatable {
     }
 }
 
+private struct BarnOwlMemoryEnrichmentSourceAdapter: BarnOwlEnrichmentSourceAdapter {
+    let database: BarnOwlDatabase
+
+    var sourceID: String { "barnowl_memory" }
+
+    func healthSnapshot(
+        for source: BarnOwlEnrichmentSourceDescriptor
+    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
+        BarnOwlEnrichmentSourceHealthSnapshot(
+            status: .ready,
+            authState: .notRequired,
+            detail: "\(source.displayName) is backed by the local Barn Owl meeting index."
+        )
+    }
+
+    func enrich(
+        request: BarnOwlEnrichmentSourceRequest,
+        source: BarnOwlEnrichmentSourceDescriptor
+    ) async throws -> BarnOwlEnrichmentSourceResult {
+        let searchResults = try await database.searchLibrary(BarnOwlDatabaseSearchQuery(
+            text: request.conceptKey,
+            limit: max(1, min(request.limit, 24))
+        ))
+        let evidence = searchResults.prefix(8).map { result in
+            let confidence = min(0.95, max(0.55, 0.55 + (result.score / 20)))
+            return BarnOwlEnrichmentEvidenceRecord(
+                subject: request.conceptKey,
+                candidateKind: "unresolved_concept",
+                canonicalName: request.conceptKey,
+                summary: "\(result.meeting.title): \(result.snippet)",
+                confidence: confidence,
+                sourceID: source.id,
+                sourceDisplayName: source.displayName,
+                authorityProfile: source.authorityProfile,
+                freshness: .recent,
+                scope: source.scope,
+                citations: ["meeting:\(result.meeting.id.uuidString.lowercased())"],
+                observedAt: result.meeting.updatedAt
+            )
+        }
+
+        return BarnOwlEnrichmentSourceResult(
+            sourceID: source.id,
+            evidence: evidence,
+            summary: "Barn Owl Memory returned \(evidence.count) normalized evidence item\(evidence.count == 1 ? "" : "s")."
+        )
+    }
+}
+
+struct BarnOwlCommandResult: Sendable {
+    var standardOutput: Data
+    var standardError: Data
+    var terminationStatus: Int32
+}
+
+protocol BarnOwlCommandRunning: Sendable {
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]?
+    ) async throws -> BarnOwlCommandResult
+}
+
+struct BarnOwlSystemCommandRunner: BarnOwlCommandRunning {
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]? = nil
+    ) async throws -> BarnOwlCommandResult {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = environment
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+
+        return BarnOwlCommandResult(
+            standardOutput: stdout.fileHandleForReading.readDataToEndOfFile(),
+            standardError: stderr.fileHandleForReading.readDataToEndOfFile(),
+            terminationStatus: process.terminationStatus
+        )
+    }
+}
+
+struct BarnOwlCollinOSReferenceAdapter: BarnOwlEnrichmentSourceAdapter {
+    struct Configuration: Decodable {
+        var cliScriptPath: String?
+        var baseURL: String?
+        var authenticatedUser: String?
+        var audience: String?
+        var scope: String?
+        var allowUnauthenticated: Bool?
+
+        init(
+            cliScriptPath: String? = nil,
+            baseURL: String? = nil,
+            authenticatedUser: String? = nil,
+            audience: String? = nil,
+            scope: String? = nil,
+            allowUnauthenticated: Bool? = nil
+        ) {
+            self.cliScriptPath = cliScriptPath
+            self.baseURL = baseURL
+            self.authenticatedUser = authenticatedUser
+            self.audience = audience
+            self.scope = scope
+            self.allowUnauthenticated = allowUnauthenticated
+        }
+    }
+
+    let sourceID: String
+    let commandRunner: any BarnOwlCommandRunning
+    let defaultCLIScriptPath: String
+
+    init(
+        sourceID: String,
+        commandRunner: any BarnOwlCommandRunning = BarnOwlSystemCommandRunner(),
+        defaultCLIScriptPath: String = "/Users/burdick/Documents/Collin OS/automation-context/scripts/collin_os_cli.py"
+    ) {
+        self.sourceID = sourceID
+        self.commandRunner = commandRunner
+        self.defaultCLIScriptPath = defaultCLIScriptPath
+    }
+
+    func healthSnapshot(
+        for source: BarnOwlEnrichmentSourceDescriptor
+    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
+        let configuration = decodedConfiguration(from: source)
+        let scriptPath = configuration.cliScriptPath ?? defaultCLIScriptPath
+        let scriptExists = FileManager.default.fileExists(atPath: scriptPath)
+        return BarnOwlEnrichmentSourceHealthSnapshot(
+            status: scriptExists ? .ready : .partial,
+            authState: .configured,
+            detail: scriptExists
+                ? "\(source.displayName) can query Collin OS through the local CLI bridge."
+                : "\(source.displayName) is configured for Collin OS, but its CLI script was not found."
+        )
+    }
+
+    func enrich(
+        request: BarnOwlEnrichmentSourceRequest,
+        source: BarnOwlEnrichmentSourceDescriptor
+    ) async throws -> BarnOwlEnrichmentSourceResult {
+        let configuration = decodedConfiguration(from: source)
+        let scriptPath = configuration.cliScriptPath ?? defaultCLIScriptPath
+        guard FileManager.default.fileExists(atPath: scriptPath) else {
+            return BarnOwlEnrichmentSourceResult(
+                sourceID: source.id,
+                evidence: [],
+                caveats: ["\(source.id) could not find the configured Collin OS CLI script."]
+            )
+        }
+
+        var arguments = [
+            "python3",
+            scriptPath,
+            "recall",
+            request.conceptKey,
+            "--format",
+            "json",
+            "--scope",
+            configuration.scope ?? "all",
+            "--audience",
+            configuration.audience ?? "owner",
+            "--limit",
+            String(max(1, min(request.limit, 24)))
+        ]
+        if let baseURL = configuration.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !baseURL.isEmpty {
+            arguments.append(contentsOf: ["--base-url", baseURL])
+        }
+        if let authenticatedUser = configuration.authenticatedUser?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !authenticatedUser.isEmpty {
+            arguments.append(contentsOf: ["--authenticated-user", authenticatedUser])
+        }
+        if configuration.allowUnauthenticated == true {
+            arguments.append("--allow-unauthenticated")
+        }
+
+        let result = try await commandRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: arguments,
+            environment: ProcessInfo.processInfo.environment
+        )
+        guard !result.standardOutput.isEmpty,
+              let packet = try JSONSerialization.jsonObject(with: result.standardOutput) as? [String: Any]
+        else {
+            let stderr = String(decoding: result.standardError, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return BarnOwlEnrichmentSourceResult(
+                sourceID: source.id,
+                evidence: [],
+                caveats: [
+                    stderr.isEmpty
+                        ? "\(source.id) returned no Collin OS recall payload."
+                        : "\(source.id) returned no readable Collin OS recall payload: \(stderr)"
+                ]
+            )
+        }
+
+        if String(describing: packet["status"] ?? "").lowercased() == "blocked" {
+            let blocker = packet["blocker"] as? String
+                ?? packet["recommended_next_step"] as? String
+                ?? "Collin OS recall was blocked."
+            return BarnOwlEnrichmentSourceResult(
+                sourceID: source.id,
+                evidence: [],
+                caveats: ["\(source.id) blocked: \(blocker)"]
+            )
+        }
+
+        let response = packet["response"] as? [String: Any] ?? packet
+        let answerPacket = response["answer_packet"] as? [String: Any] ?? [:]
+        let recallDigest = response["recall_digest"] as? [String: Any] ?? [:]
+        let trustSummary = response["trust_summary"] as? [String: Any] ?? [:]
+        let operatorDecision = response["operator_decision"] as? [String: Any] ?? [:]
+        let evidenceItems = answerPacket["evidence"] as? [[String: Any]] ?? []
+        let currentRead = recallDigest["current_read"] as? String
+        let fallbackSummary = currentRead
+            ?? trustSummary["summary"] as? String
+            ?? "Collin OS returned a scoped recall packet for \(request.conceptKey)."
+        let freshness = Self.freshness(from: recallDigest["source_health_state"] as? String)
+        let confidence = Self.confidence(
+            trustPosture: trustSummary["posture"] as? String,
+            downstreamReuseAllowed: operatorDecision["downstream_reuse_allowed"] as? Bool
+        )
+
+        var evidence = evidenceItems.prefix(max(1, request.limit)).map { item in
+            let evidenceKind = Self.candidateKind(from: item["kind"] as? String)
+            let title = (item["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = (item["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let renderedSummary = [title, summary]
+                .compactMap { value in
+                    guard let value, !value.isEmpty else { return nil }
+                    return value
+                }
+                .joined(separator: ": ")
+            return BarnOwlEnrichmentEvidenceRecord(
+                subject: request.conceptKey,
+                candidateKind: evidenceKind,
+                canonicalName: evidenceKind == "unresolved_concept"
+                    ? request.conceptKey
+                    : title ?? request.conceptKey,
+                summary: renderedSummary.isEmpty ? fallbackSummary : renderedSummary,
+                confidence: confidence,
+                sourceID: source.id,
+                sourceDisplayName: source.displayName,
+                authorityProfile: source.authorityProfile,
+                freshness: freshness,
+                scope: source.scope,
+                citations: ["collin-os:recall:\(Self.normalized(request.conceptKey))"],
+                observedAt: request.requestedAt
+            )
+        }
+
+        if evidence.isEmpty {
+            evidence = [
+                BarnOwlEnrichmentEvidenceRecord(
+                    subject: request.conceptKey,
+                    candidateKind: "unresolved_concept",
+                    canonicalName: request.conceptKey,
+                    summary: fallbackSummary,
+                    confidence: confidence,
+                    sourceID: source.id,
+                    sourceDisplayName: source.displayName,
+                    authorityProfile: source.authorityProfile,
+                    freshness: freshness,
+                    scope: source.scope,
+                    citations: ["collin-os:recall:\(Self.normalized(request.conceptKey))"],
+                    observedAt: request.requestedAt
+                )
+            ]
+        }
+
+        let reuseAllowed = operatorDecision["downstream_reuse_allowed"] as? Bool
+        let caveats = reuseAllowed == false
+            ? ["\(source.id) returned recall evidence with an explicit downstream-reuse caveat."]
+            : []
+
+        return BarnOwlEnrichmentSourceResult(
+            sourceID: source.id,
+            evidence: evidence,
+            summary: "\(source.displayName) returned \(evidence.count) live Collin OS evidence item\(evidence.count == 1 ? "" : "s").",
+            caveats: caveats
+        )
+    }
+
+    private func decodedConfiguration(from source: BarnOwlEnrichmentSourceDescriptor) -> Configuration {
+        guard let configJSON = source.configJSON,
+              let data = configJSON.data(using: .utf8),
+              let configuration = try? JSONDecoder().decode(Configuration.self, from: data)
+        else {
+            return Configuration()
+        }
+        return configuration
+    }
+
+    private static func candidateKind(from rawKind: String?) -> String {
+        switch rawKind?.lowercased() {
+        case "person", "company", "project", "event", "account", "customer", "internal_term":
+            return rawKind?.lowercased() ?? "unresolved_concept"
+        default:
+            return "unresolved_concept"
+        }
+    }
+
+    private static func freshness(from rawValue: String?) -> BarnOwlEnrichmentEvidenceFreshness {
+        switch rawValue?.lowercased() {
+        case "fresh", "current", "source_backed":
+            return .current
+        case "recent":
+            return .recent
+        case "stale":
+            return .stale
+        default:
+            return .unknown
+        }
+    }
+
+    private static func confidence(
+        trustPosture: String?,
+        downstreamReuseAllowed: Bool?
+    ) -> Double {
+        let base: Double = switch trustPosture?.lowercased() {
+        case "ready":
+            0.93
+        case "review_required":
+            0.78
+        case "thin":
+            0.64
+        default:
+            0.72
+        }
+        return downstreamReuseAllowed == false ? max(0.55, base - 0.12) : base
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+    }
+}
+
+struct BarnOwlPublicReferenceResearchAdapter: BarnOwlEnrichmentSourceAdapter {
+    struct SearchResponse: Decodable {
+        var search: [SearchItem]
+    }
+
+    struct SearchItem: Decodable {
+        var id: String
+        var label: String
+        var description: String?
+        var concepturi: String?
+    }
+
+    let sourceID: String
+    let transport: any OpenAIHTTPTransport
+    let baseURL: URL
+
+    init(
+        sourceID: String,
+        transport: any OpenAIHTTPTransport = URLSession.shared,
+        baseURL: URL = URL(string: "https://www.wikidata.org/w/api.php")!
+    ) {
+        self.sourceID = sourceID
+        self.transport = transport
+        self.baseURL = baseURL
+    }
+
+    func healthSnapshot(
+        for source: BarnOwlEnrichmentSourceDescriptor
+    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
+        BarnOwlEnrichmentSourceHealthSnapshot(
+            status: .ready,
+            authState: .notRequired,
+            detail: "\(source.displayName) can issue public Wikidata reference lookups."
+        )
+    }
+
+    func enrich(
+        request: BarnOwlEnrichmentSourceRequest,
+        source: BarnOwlEnrichmentSourceDescriptor
+    ) async throws -> BarnOwlEnrichmentSourceResult {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "action", value: "wbsearchentities"),
+            URLQueryItem(name: "search", value: request.conceptKey),
+            URLQueryItem(name: "language", value: "en"),
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "limit", value: String(max(1, min(request.limit, 8))))
+        ]
+        guard let url = components?.url else {
+            return BarnOwlEnrichmentSourceResult(
+                sourceID: source.id,
+                evidence: [],
+                caveats: ["\(source.id) could not build a public-reference lookup URL."]
+            )
+        }
+
+        let (data, response) = try await transport.data(for: URLRequest(url: url))
+        guard (200..<300).contains(response.statusCode) else {
+            throw OpenAITranscriptionClientError.unsuccessfulStatusCode(response.statusCode, data)
+        }
+        let payload = try JSONDecoder().decode(SearchResponse.self, from: data)
+        let evidence = payload.search.prefix(max(1, min(request.limit, 8))).compactMap { item -> BarnOwlEnrichmentEvidenceRecord? in
+            let candidateKind = Self.candidateKind(label: item.label, description: item.description)
+            guard candidateKind != "unresolved_concept" else {
+                return nil
+            }
+            return BarnOwlEnrichmentEvidenceRecord(
+                subject: request.conceptKey,
+                candidateKind: candidateKind,
+                canonicalName: item.label,
+                summary: Self.nonEmpty(item.description)
+                    ?? "Public Wikidata reference for \(item.label).",
+                confidence: candidateKind == "public_reference" ? 0.68 : 0.82,
+                sourceID: source.id,
+                sourceDisplayName: source.displayName,
+                authorityProfile: source.authorityProfile,
+                freshness: .recent,
+                scope: .publicReference,
+                citations: [item.concepturi ?? "https://www.wikidata.org/wiki/\(item.id)"],
+                observedAt: request.requestedAt
+            )
+        }
+
+        return BarnOwlEnrichmentSourceResult(
+            sourceID: source.id,
+            evidence: Array(evidence),
+            summary: "\(source.displayName) returned \(payload.search.count) public reference candidate\(payload.search.count == 1 ? "" : "s")."
+        )
+    }
+
+    private static func candidateKind(label: String, description: String?) -> String {
+        let haystack = "\(label) \(description ?? "")".lowercased()
+        if haystack.contains(" company")
+            || haystack.contains(" corporation")
+            || haystack.contains("business")
+            || haystack.contains("biotechnology company")
+        {
+            return "company"
+        }
+        if haystack.contains("scientist")
+            || haystack.contains("researcher")
+            || haystack.contains("person")
+            || haystack.contains("executive")
+            || haystack.contains("author")
+        {
+            return "person"
+        }
+        if haystack.contains(" conference")
+            || haystack.contains(" event")
+            || haystack.contains("summit")
+            || haystack.contains("festival")
+        {
+            return "event"
+        }
+        if haystack.contains(" project")
+            || haystack.contains(" initiative")
+            || haystack.contains(" program")
+        {
+            return "project"
+        }
+        return "unresolved_concept"
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else {
+            return nil
+        }
+        return value
+    }
+}
+
+private struct BarnOwlConfiguredInternalReferenceAdapter: BarnOwlEnrichmentSourceAdapter {
+    struct Configuration: Decodable {
+        var entries: [Entry]
+    }
+
+    struct Entry: Decodable {
+        var matchTerms: [String]?
+        var candidateKind: String
+        var canonicalName: String
+        var summary: String
+        var confidence: Double?
+        var citations: [String]?
+        var freshness: BarnOwlEnrichmentEvidenceFreshness?
+        var contradiction: Bool?
+        var negativeEvidence: Bool?
+    }
+
+    let sourceID: String
+
+    func healthSnapshot(
+        for source: BarnOwlEnrichmentSourceDescriptor
+    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
+        BarnOwlEnrichmentSourceHealthSnapshot(
+            status: source.configJSON == nil ? .partial : .ready,
+            authState: .configured,
+            detail: source.configJSON == nil
+                ? "\(source.displayName) has no configured internal reference payload."
+                : "\(source.displayName) can emit normalized private/internal evidence from its configured reference payload."
+        )
+    }
+
+    func enrich(
+        request: BarnOwlEnrichmentSourceRequest,
+        source: BarnOwlEnrichmentSourceDescriptor
+    ) async throws -> BarnOwlEnrichmentSourceResult {
+        guard let configJSON = source.configJSON,
+              let data = configJSON.data(using: .utf8),
+              let configuration = try? JSONDecoder().decode(Configuration.self, from: data)
+        else {
+            return BarnOwlEnrichmentSourceResult(
+                sourceID: source.id,
+                evidence: [],
+                caveats: ["\(source.id) has no readable internal reference configuration."]
+            )
+        }
+
+        let normalizedConcept = Self.normalized(request.conceptKey)
+        let matchingEntries = configuration.entries.filter { entry in
+            let terms = (entry.matchTerms ?? []) + [entry.canonicalName]
+            return terms.contains { Self.normalized($0) == normalizedConcept }
+        }
+
+        let evidence = matchingEntries.prefix(max(1, request.limit)).map { entry in
+            BarnOwlEnrichmentEvidenceRecord(
+                subject: request.conceptKey,
+                candidateKind: entry.candidateKind,
+                canonicalName: entry.canonicalName,
+                summary: entry.summary,
+                confidence: entry.confidence ?? 0.92,
+                sourceID: source.id,
+                sourceDisplayName: source.displayName,
+                authorityProfile: source.authorityProfile,
+                freshness: entry.freshness ?? .current,
+                scope: source.scope,
+                citations: entry.citations ?? ["source:\(source.id):\(Self.normalized(entry.canonicalName))"],
+                observedAt: request.requestedAt,
+                contradiction: entry.contradiction ?? false,
+                negativeEvidence: entry.negativeEvidence ?? false
+            )
+        }
+
+        return BarnOwlEnrichmentSourceResult(
+            sourceID: source.id,
+            evidence: evidence,
+            summary: "\(source.displayName) returned \(evidence.count) normalized internal evidence item\(evidence.count == 1 ? "" : "s")."
+        )
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+}
+
+private struct BarnOwlConfiguredPublicReferenceAdapter: BarnOwlEnrichmentSourceAdapter {
+    struct Configuration: Decodable {
+        var entries: [Entry]
+    }
+
+    struct Entry: Decodable {
+        var matchTerms: [String]?
+        var candidateKind: String
+        var canonicalName: String
+        var summary: String
+        var confidence: Double?
+        var citations: [String]?
+        var freshness: BarnOwlEnrichmentEvidenceFreshness?
+        var contradiction: Bool?
+        var negativeEvidence: Bool?
+    }
+
+    let sourceID: String
+
+    func healthSnapshot(
+        for source: BarnOwlEnrichmentSourceDescriptor
+    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
+        BarnOwlEnrichmentSourceHealthSnapshot(
+            status: source.configJSON == nil ? .partial : .ready,
+            authState: .notRequired,
+            detail: source.configJSON == nil
+                ? "\(source.displayName) is enabled, but no public/reference evidence payload is configured yet."
+                : "\(source.displayName) can emit normalized public/reference evidence from its configured retrieval payload."
+        )
+    }
+
+    func enrich(
+        request: BarnOwlEnrichmentSourceRequest,
+        source: BarnOwlEnrichmentSourceDescriptor
+    ) async throws -> BarnOwlEnrichmentSourceResult {
+        guard let configJSON = source.configJSON,
+              let data = configJSON.data(using: .utf8),
+              let configuration = try? JSONDecoder().decode(Configuration.self, from: data)
+        else {
+            return BarnOwlEnrichmentSourceResult(
+                sourceID: source.id,
+                evidence: [],
+                caveats: ["\(source.id) has no readable public/reference retrieval payload."]
+            )
+        }
+
+        let normalizedConcept = Self.normalized(request.conceptKey)
+        let matchingEntries = configuration.entries.filter { entry in
+            let terms = (entry.matchTerms ?? []) + [entry.canonicalName]
+            return terms.contains { Self.normalized($0) == normalizedConcept }
+        }
+
+        let evidence = matchingEntries.prefix(max(1, request.limit)).map { entry in
+            BarnOwlEnrichmentEvidenceRecord(
+                subject: request.conceptKey,
+                candidateKind: entry.candidateKind,
+                canonicalName: entry.canonicalName,
+                summary: entry.summary,
+                confidence: entry.confidence ?? 0.8,
+                sourceID: source.id,
+                sourceDisplayName: source.displayName,
+                authorityProfile: source.authorityProfile,
+                freshness: entry.freshness ?? .recent,
+                scope: .publicReference,
+                citations: entry.citations ?? ["public:\(Self.normalized(entry.canonicalName))"],
+                observedAt: request.requestedAt,
+                contradiction: entry.contradiction ?? false,
+                negativeEvidence: entry.negativeEvidence ?? false
+            )
+        }
+
+        return BarnOwlEnrichmentSourceResult(
+            sourceID: source.id,
+            evidence: evidence,
+            summary: "\(source.displayName) returned \(evidence.count) normalized public/reference evidence item\(evidence.count == 1 ? "" : "s")."
+        )
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+}
+
 enum BarnOwlRecoveryCoordinator {
     static func recoverInterruptedWork(
         database: BarnOwlDatabase,
@@ -531,6 +1183,7 @@ final class BarnOwlAppModel: ObservableObject {
     private let makeLibraryStore: @Sendable () throws -> FilesystemLocalLibraryStore
     private let makeDatabase: @Sendable () throws -> BarnOwlDatabase
     private let makeCalendarContextProvider: @Sendable () -> any CalendarMeetingContextProvider
+    private let currentEnrichmentOwnerID: @Sendable () -> String
     private let diagnosticsStore: DiagnosticsLogStore
     private let jobRunner: BarnOwlJobRunner
     private var realtimeTranscriptionController: BarnOwlRealtimeTranscriptionController?
@@ -591,6 +1244,9 @@ final class BarnOwlAppModel: ObservableObject {
         makeCalendarContextProvider: @escaping @Sendable () -> any CalendarMeetingContextProvider = {
             EmptyCalendarMeetingContextProvider()
         },
+        currentEnrichmentOwnerID: @escaping @Sendable () -> String = {
+            BarnOwlEnrichmentSourceOwner.localUserID()
+        },
         diagnosticsStore: DiagnosticsLogStore = DiagnosticsLogStore(rootDirectory: BarnOwlAppModel.defaultDiagnosticsRoot())
     ) {
         self.makeAudioCoordinator = makeAudioCoordinator
@@ -598,11 +1254,13 @@ final class BarnOwlAppModel: ObservableObject {
         self.makeLibraryStore = makeLibraryStore
         self.makeDatabase = makeDatabase
         self.makeCalendarContextProvider = makeCalendarContextProvider
+        self.currentEnrichmentOwnerID = currentEnrichmentOwnerID
         self.diagnosticsStore = diagnosticsStore
         self.jobRunner = BarnOwlJobRunner(makeDatabase: makeDatabase, meetingProcessor: meetingProcessor)
         configurePeriodicUpdateChecks()
         installSleepWakeObservers()
         Task.detached(priority: .utility) {
+            await self.seedDefaultEnrichmentSources()
             await self.performLaunchRecovery()
             await self.refreshRecentSessions()
             await self.refreshJobSummaries()
@@ -2533,6 +3191,15 @@ final class BarnOwlAppModel: ObservableObject {
         meeting: BarnOwlControlMeeting? = nil,
         meetings: [BarnOwlControlMeeting]? = nil,
         jobs: [BarnOwlControlJob]? = nil,
+        enrichmentSources: [BarnOwlControlEnrichmentSource]? = nil,
+        enrichmentSourcePresets: [BarnOwlControlEnrichmentSourcePreset]? = nil,
+        enrichmentAuthorityProfiles: [BarnOwlControlEnrichmentAuthorityProfile]? = nil,
+        enrichmentPolicyPacks: [BarnOwlControlEnrichmentPolicyPack]? = nil,
+        enrichmentJobs: [BarnOwlControlEnrichmentJob]? = nil,
+        enrichmentEvidence: [BarnOwlEnrichmentEvidenceRecord]? = nil,
+        enrichmentConflicts: [BarnOwlControlEnrichmentConflict]? = nil,
+        enrichmentConceptHistories: [BarnOwlControlEnrichmentConceptHistory]? = nil,
+        knowledgeEntities: [BarnOwlControlKnowledgeEntity]? = nil,
         transcript: String? = nil,
         notes: String? = nil,
         summary: String? = nil,
@@ -2596,6 +3263,15 @@ final class BarnOwlAppModel: ObservableObject {
             meeting: meeting,
             meetings: meetings,
             jobs: jobs,
+            enrichmentSources: enrichmentSources,
+            enrichmentSourcePresets: enrichmentSourcePresets,
+            enrichmentAuthorityProfiles: enrichmentAuthorityProfiles,
+            enrichmentPolicyPacks: enrichmentPolicyPacks,
+            enrichmentJobs: enrichmentJobs,
+            enrichmentEvidence: enrichmentEvidence,
+            enrichmentConflicts: enrichmentConflicts,
+            enrichmentConceptHistories: enrichmentConceptHistories,
+            knowledgeEntities: knowledgeEntities,
             transcript: transcript,
             notes: notes,
             summary: summary,
@@ -2635,16 +3311,104 @@ final class BarnOwlAppModel: ObservableObject {
         "meeting_not_found",
         "missing_context",
         "missing_context_item_id",
+        "missing_authority_profile_id",
+        "missing_description",
+        "missing_display_name",
         "missing_job_id",
+        "missing_knowledge_entity_id",
         "missing_meeting_id",
         "missing_meeting_type",
+        "missing_policy_pack_id",
+        "missing_preset_id",
         "missing_prompt",
         "missing_query",
         "missing_question",
+        "missing_source_display_name",
+        "missing_source_id",
+        "missing_source_type",
+        "knowledge_source_unavailable",
         "missing_title",
         "no_active_recording",
         "no_context",
+        "invalid_source_scope",
+        "enrichment_source_not_found",
+        "enrichment_policy_pack_not_found",
+        "enrichment_source_preset_not_found",
+        "knowledge_entity_not_found",
         "unsupported_quick_command"
+    ]
+
+    nonisolated static let enrichmentSourcePresets: [BarnOwlControlEnrichmentSourcePreset] = [
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "collin_os",
+            displayName: "Collin OS",
+            sourceType: "internal_memory",
+            scope: BarnOwlEnrichmentSourceScope.personalPrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.personalPrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "collin-os",
+            bestUsedFor: ["projects", "people", "customer/account context", "internal terminology"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.configured.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.partial.rawValue,
+            privacyCopyPolicy: "private_source_summary_only",
+            queryBudgetPolicy: "owner_scoped"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "google_drive_reference",
+            displayName: "Google Drive Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.personalPrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.personalPrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "google-drive",
+            bestUsedFor: ["project briefs", "glossaries", "people context", "internal terminology"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "slack_reference",
+            displayName: "Slack Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.workspacePrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.workspacePrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "slack",
+            bestUsedFor: ["project aliases", "recent coordination", "team terminology"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "notion_reference",
+            displayName: "Notion Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.workspacePrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.workspacePrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "notion",
+            bestUsedFor: ["project records", "customer/account context", "internal playbooks"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "salesforce_reference",
+            displayName: "Salesforce Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.organizationScoped.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.organizationScoped.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "salesforce",
+            bestUsedFor: ["accounts", "customers", "opportunities", "company context"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        )
     ]
 
     nonisolated static func shouldSuggestSlackFeedback(
@@ -2911,6 +3675,11 @@ final class BarnOwlAppModel: ObservableObject {
             return displayedNote.id
         }
         return try? await database.meetingStates(limit: 1).first?.id
+    }
+
+    private func seedDefaultEnrichmentSources() async {
+        guard let database = try? makeDatabase() else { return }
+        try? await database.seedDefaultEnrichmentSources(ownerID: currentEnrichmentOwnerID())
     }
 
     private func controlState(
@@ -3205,6 +3974,899 @@ final class BarnOwlAppModel: ObservableObject {
             )
         } catch {
             return controlStatusResponse(ok: false, message: "Could not delete context item.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlEnrichmentSourcesListResponse() async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            try await database.seedDefaultEnrichmentSources(ownerID: ownerID)
+            let usefulnessBySourceID = Dictionary(
+                uniqueKeysWithValues: try await database.enrichmentSourceUsefulness(ownerID: ownerID)
+                    .map { ($0.sourceID, $0) }
+            )
+            let sources = try await database.enrichmentSources(ownerID: ownerID)
+                .map { controlEnrichmentSource(from: $0, usefulness: usefulnessBySourceID[$0.id]) }
+            let authorityProfiles = try await database.enrichmentAuthorityProfiles(ownerID: ownerID)
+                .map(controlEnrichmentAuthorityProfile(from:))
+            let policyPacks = try await database.enrichmentPolicyPacks(ownerID: ownerID)
+                .map(controlEnrichmentPolicyPack(from:))
+            return controlStatusResponse(
+                message: sources.isEmpty ? "No enrichment sources configured." : "Barn Owl enrichment sources.",
+                enrichmentSources: sources,
+                enrichmentAuthorityProfiles: authorityProfiles,
+                enrichmentPolicyPacks: policyPacks
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not load enrichment sources.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentSourcePresetsListResponse() -> BarnOwlControlResponse {
+        controlStatusResponse(
+            message: "Barn Owl enrichment source presets.",
+            enrichmentSourcePresets: Self.enrichmentSourcePresets
+        )
+    }
+
+    func controlEnrichmentSourceSetupPresetResponse(_ command: BarnOwlControlCommand) async -> BarnOwlControlResponse {
+        let presetID = command.presetID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !presetID.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_setup_preset requires presetID.", error: "missing_preset_id")
+        }
+        guard let preset = Self.enrichmentSourcePresets.first(where: { $0.id == presetID }) else {
+            return controlStatusResponse(ok: false, message: "Enrichment source preset not found.", error: "enrichment_source_preset_not_found")
+        }
+        let sourceID = command.sourceID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSourceID = sourceID?.isEmpty == false ? sourceID! : preset.id
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let existing = try await database.enrichmentSource(ownerID: ownerID, id: resolvedSourceID)
+            let now = Date()
+            let requestedDisplayName = command.sourceDisplayName?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let requestedAuthorityProfile = command.authorityProfile?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let source = BarnOwlEnrichmentSourceRecord(
+                id: resolvedSourceID,
+                ownerID: ownerID,
+                displayName: (requestedDisplayName?.isEmpty == false ? requestedDisplayName! : nil)
+                    ?? existing?.displayName
+                    ?? preset.displayName,
+                sourceType: preset.sourceType,
+                enabled: command.enabled ?? existing?.enabled ?? true,
+                scope: BarnOwlEnrichmentSourceScope(rawValue: preset.scope) ?? .workspacePrivate,
+                authorityProfile: (requestedAuthorityProfile?.isEmpty == false ? requestedAuthorityProfile! : nil)
+                    ?? existing?.authorityProfile
+                    ?? preset.authorityProfile,
+                bestUsedFor: command.bestUsedFor ?? existing?.bestUsedFor ?? preset.bestUsedFor,
+                configJSON: command.configJSON ?? existing?.configJSON,
+                authState: BarnOwlEnrichmentSourceAuthState(rawValue: command.authState ?? "")
+                    ?? existing?.authState
+                    ?? BarnOwlEnrichmentSourceAuthState(rawValue: preset.defaultAuthState)
+                    ?? .needsAuthentication,
+                healthStatus: BarnOwlEnrichmentSourceHealthStatus(rawValue: command.healthStatus ?? "")
+                    ?? existing?.healthStatus
+                    ?? BarnOwlEnrichmentSourceHealthStatus(rawValue: preset.defaultHealthStatus)
+                    ?? .needsAuth,
+                healthDetail: existing?.healthDetail,
+                lastCheckedAt: existing?.lastCheckedAt,
+                lastSuccessfulCheckAt: existing?.lastSuccessfulCheckAt,
+                lastFailedCheckAt: existing?.lastFailedCheckAt,
+                connectorReference: command.connectorReference ?? existing?.connectorReference ?? preset.connectorReference,
+                privacyCopyPolicy: command.privacyCopyPolicy ?? existing?.privacyCopyPolicy ?? preset.privacyCopyPolicy,
+                queryBudgetPolicy: command.queryBudgetPolicy ?? existing?.queryBudgetPolicy ?? preset.queryBudgetPolicy,
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertEnrichmentSource(source)
+            return controlStatusResponse(
+                message: existing == nil ? "Configured enrichment source from preset." : "Updated enrichment source from preset.",
+                enrichmentSources: [controlEnrichmentSource(from: source, usefulness: try await database.enrichmentSourceUsefulness(ownerID: ownerID, sourceID: source.id))],
+                enrichmentSourcePresets: [preset]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not configure enrichment source from preset.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentSourceHealthCheckResponse(sourceID: String) async -> BarnOwlControlResponse {
+        let sourceID = sourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sourceID.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_health_check requires sourceID.", error: "missing_source_id")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            guard var source = try await database.enrichmentSource(ownerID: ownerID, id: sourceID) else {
+                return controlStatusResponse(ok: false, message: "Enrichment source not found.", error: "enrichment_source_not_found")
+            }
+            let now = Date()
+            let snapshot: BarnOwlEnrichmentSourceHealthSnapshot
+            let connectorNeedsSetup = source.connectorReference != nil
+                && source.connectorReference?.lowercased() != "collin-os"
+                && source.configJSON?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+            if connectorNeedsSetup {
+                snapshot = BarnOwlEnrichmentSourceHealthSnapshot(
+                    status: .needsAuth,
+                    authState: .needsAuthentication,
+                    checkedAt: now,
+                    detail: "\(source.displayName) is connector-backed. Authorize the connector and hydrate this source with retrieved reference configuration before automatic enrichment."
+                )
+            } else if let adapter = enrichmentAdapter(for: source, database: database) {
+                snapshot = await adapter.healthSnapshot(for: source.descriptor)
+            } else {
+                snapshot = BarnOwlEnrichmentSourceHealthSnapshot(
+                    status: source.connectorReference == nil ? .partial : .needsAuth,
+                    authState: source.connectorReference == nil ? source.authState : .needsAuthentication,
+                    checkedAt: now,
+                    detail: source.connectorReference == nil
+                        ? "\(source.displayName) has no installed adapter or connector setup."
+                        : "\(source.displayName) is registered as connector-backed, but Barn Owl still needs authenticated connector retrieval setup before it can auto-enrich."
+                )
+            }
+            source.authState = snapshot.authState
+            source.healthStatus = source.enabled ? snapshot.status : .disabled
+            source.healthDetail = snapshot.detail
+            source.lastCheckedAt = snapshot.checkedAt
+            if snapshot.status == .ready || snapshot.status == .partial {
+                source.lastSuccessfulCheckAt = snapshot.checkedAt
+            } else {
+                source.lastFailedCheckAt = snapshot.checkedAt
+            }
+            source.updatedAt = now
+            try await database.upsertEnrichmentSource(source)
+            return controlStatusResponse(
+                message: "Checked enrichment source health.",
+                enrichmentSources: [controlEnrichmentSource(from: source, usefulness: try await database.enrichmentSourceUsefulness(ownerID: ownerID, sourceID: source.id))]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not check enrichment source health.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentSourceUpsertResponse(_ command: BarnOwlControlCommand) async -> BarnOwlControlResponse {
+        let sourceID = command.sourceID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = command.sourceDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sourceType = command.sourceType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let authorityProfile = command.authorityProfile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !sourceID.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_upsert requires sourceID.", error: "missing_source_id")
+        }
+        guard !displayName.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_upsert requires sourceDisplayName.", error: "missing_source_display_name")
+        }
+        guard !sourceType.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_upsert requires sourceType.", error: "missing_source_type")
+        }
+        guard !authorityProfile.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_upsert requires authorityProfile.", error: "missing_authority_profile")
+        }
+        guard let scope = BarnOwlEnrichmentSourceScope(rawValue: command.scope ?? "") else {
+            return controlStatusResponse(ok: false, message: "enrichment_source_upsert requires a valid scope.", error: "invalid_source_scope")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let now = Date()
+            let existing = try await database.enrichmentSource(ownerID: ownerID, id: sourceID)
+            let authState = BarnOwlEnrichmentSourceAuthState(rawValue: command.authState ?? "")
+                ?? existing?.authState
+                ?? .notRequired
+            let healthStatus = BarnOwlEnrichmentSourceHealthStatus(rawValue: command.healthStatus ?? "")
+                ?? existing?.healthStatus
+                ?? (command.enabled == false ? .disabled : .ready)
+            let source = BarnOwlEnrichmentSourceRecord(
+                id: sourceID,
+                ownerID: ownerID,
+                displayName: displayName,
+                sourceType: sourceType,
+                enabled: command.enabled ?? existing?.enabled ?? true,
+                scope: scope,
+                authorityProfile: authorityProfile,
+                bestUsedFor: command.bestUsedFor ?? existing?.bestUsedFor ?? [],
+                configJSON: command.configJSON ?? existing?.configJSON,
+                authState: authState,
+                healthStatus: command.enabled == false ? .disabled : healthStatus,
+                healthDetail: existing?.healthDetail,
+                lastCheckedAt: existing?.lastCheckedAt,
+                lastSuccessfulCheckAt: existing?.lastSuccessfulCheckAt,
+                lastFailedCheckAt: existing?.lastFailedCheckAt,
+                connectorReference: command.connectorReference ?? existing?.connectorReference,
+                privacyCopyPolicy: command.privacyCopyPolicy ?? existing?.privacyCopyPolicy,
+                queryBudgetPolicy: command.queryBudgetPolicy ?? existing?.queryBudgetPolicy,
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertEnrichmentSource(source)
+            return controlStatusResponse(
+                message: existing == nil ? "Created enrichment source." : "Updated enrichment source.",
+                enrichmentSources: [controlEnrichmentSource(from: source, usefulness: try await database.enrichmentSourceUsefulness(ownerID: ownerID, sourceID: source.id))]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not save enrichment source.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentSourceEnabledResponse(sourceID: String, enabled: Bool) async -> BarnOwlControlResponse {
+        let sourceID = sourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sourceID.isEmpty else {
+            return controlStatusResponse(ok: false, message: "Enrichment source id is required.", error: "missing_source_id")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            guard let source = try await database.setEnrichmentSourceEnabled(ownerID: ownerID, id: sourceID, enabled: enabled) else {
+                return controlStatusResponse(ok: false, message: "Enrichment source not found.", error: "enrichment_source_not_found")
+            }
+            return controlStatusResponse(
+                message: enabled ? "Enabled enrichment source." : "Disabled enrichment source.",
+                enrichmentSources: [controlEnrichmentSource(from: source, usefulness: try await database.enrichmentSourceUsefulness(ownerID: ownerID, sourceID: source.id))]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not update enrichment source.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentAuthorityProfilesListResponse() async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            try await database.seedDefaultEnrichmentAuthorityProfiles(ownerID: ownerID)
+            let profiles = try await database.enrichmentAuthorityProfiles(ownerID: ownerID)
+                .map(controlEnrichmentAuthorityProfile(from:))
+            return controlStatusResponse(
+                message: profiles.isEmpty ? "No enrichment authority profiles configured." : "Barn Owl enrichment authority profiles.",
+                enrichmentAuthorityProfiles: profiles
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not load enrichment authority profiles.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentAuthorityProfileUpsertResponse(_ command: BarnOwlControlCommand) async -> BarnOwlControlResponse {
+        let id = command.authorityProfileID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = command.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let description = command.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !id.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_authority_profile_upsert requires authorityProfileID.", error: "missing_authority_profile_id")
+        }
+        guard !displayName.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_authority_profile_upsert requires displayName.", error: "missing_display_name")
+        }
+        guard !description.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_authority_profile_upsert requires description.", error: "missing_description")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let existing = try await database.enrichmentAuthorityProfile(ownerID: ownerID, id: id)
+            let now = Date()
+            let profile = BarnOwlEnrichmentAuthorityProfileRecord(
+                id: id,
+                ownerID: ownerID,
+                displayName: displayName,
+                description: description,
+                strongestEntityKinds: command.strongestEntityKinds ?? existing?.strongestEntityKinds ?? [],
+                weakestEntityKinds: command.weakestEntityKinds ?? existing?.weakestEntityKinds ?? [],
+                defaultWeight: command.defaultWeight ?? existing?.defaultWeight ?? 0.75,
+                autoPersistPolicyJSON: command.autoPersistPolicyJSON ?? existing?.autoPersistPolicyJSON,
+                builtIn: existing?.builtIn ?? false,
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertEnrichmentAuthorityProfile(profile)
+            return controlStatusResponse(
+                message: existing == nil ? "Created enrichment authority profile." : "Updated enrichment authority profile.",
+                enrichmentAuthorityProfiles: [controlEnrichmentAuthorityProfile(from: profile)]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not save enrichment authority profile.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentPolicyPacksListResponse() async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            try await database.seedDefaultEnrichmentPolicyPacks(ownerID: ownerID)
+            let packs = try await database.enrichmentPolicyPacks(ownerID: ownerID)
+                .map(controlEnrichmentPolicyPack(from:))
+            return controlStatusResponse(
+                message: packs.isEmpty ? "No enrichment policy packs configured." : "Barn Owl enrichment policy packs.",
+                enrichmentPolicyPacks: packs
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not load enrichment policy packs.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentPolicyPackUpsertResponse(_ command: BarnOwlControlCommand) async -> BarnOwlControlResponse {
+        let id = command.policyPackID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = command.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let description = command.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !id.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_policy_pack_upsert requires policyPackID.", error: "missing_policy_pack_id")
+        }
+        guard !displayName.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_policy_pack_upsert requires displayName.", error: "missing_display_name")
+        }
+        guard !description.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_policy_pack_upsert requires description.", error: "missing_description")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let existing = try await database.enrichmentPolicyPack(ownerID: ownerID, id: id)
+            let now = Date()
+            let pack = BarnOwlEnrichmentPolicyPackRecord(
+                id: id,
+                ownerID: ownerID,
+                displayName: displayName,
+                description: description,
+                minimumSupportingEvidenceCount: command.minimumSupportingEvidenceCount ?? existing?.minimumSupportingEvidenceCount ?? 2,
+                minimumIndependentSourceCountAfterConflictMemory: command.minimumIndependentSourceCountAfterConflictMemory ?? existing?.minimumIndependentSourceCountAfterConflictMemory ?? 2,
+                active: command.enabled ?? existing?.active ?? false,
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertEnrichmentPolicyPack(pack)
+            return controlStatusResponse(
+                message: existing == nil ? "Created enrichment policy pack." : "Updated enrichment policy pack.",
+                enrichmentPolicyPacks: [controlEnrichmentPolicyPack(from: pack)]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not save enrichment policy pack.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlEnrichmentPolicyPackActivateResponse(policyPackID: String) async -> BarnOwlControlResponse {
+        let policyPackID = policyPackID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !policyPackID.isEmpty else {
+            return controlStatusResponse(ok: false, message: "enrichment_policy_pack_activate requires policyPackID.", error: "missing_policy_pack_id")
+        }
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            guard var pack = try await database.enrichmentPolicyPack(ownerID: ownerID, id: policyPackID) else {
+                return controlStatusResponse(ok: false, message: "Enrichment policy pack not found.", error: "enrichment_policy_pack_not_found")
+            }
+            pack.active = true
+            pack.updatedAt = Date()
+            try await database.upsertEnrichmentPolicyPack(pack)
+            return controlStatusResponse(
+                message: "Activated enrichment policy pack.",
+                enrichmentPolicyPacks: try await database.enrichmentPolicyPacks(ownerID: ownerID).map(controlEnrichmentPolicyPack(from:))
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not activate enrichment policy pack.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlKnowledgeEnrichResponse(concept: String, limit: Int? = nil) async -> BarnOwlControlResponse {
+        let concept = concept.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !concept.isEmpty else {
+            return controlStatusResponse(ok: false, message: "knowledge_enrich requires a concept query.", error: "missing_query")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let now = Date()
+            let execution = try await executeKnowledgeEnrichment(
+                concept: concept,
+                limit: max(1, min(limit ?? 8, 24)),
+                ownerID: ownerID,
+                database: database,
+                now: now
+            )
+
+            return controlStatusResponse(
+                message: execution.run.status == .supportedCandidate
+                    ? execution.persistedKnowledge == nil
+                        ? "Recorded supported enrichment candidate."
+                        : "Recorded supported enrichment candidate and updated durable knowledge."
+                    : "Recorded held enrichment result.",
+                enrichmentJobs: [controlEnrichmentJob(from: execution.job, evidenceCount: execution.run.evidence.count)],
+                enrichmentEvidence: execution.run.evidence,
+                enrichmentConflicts: execution.run.status == .heldConflictingEvidence
+                    ? try await database.enrichmentConflicts(ownerID: ownerID, limit: 1).map(controlEnrichmentConflict(from:))
+                    : nil,
+                enrichmentConceptHistories: [
+                    controlConceptHistory(
+                        conceptKey: concept,
+                        history: try await enrichmentConceptHistory(
+                            concept: concept,
+                            ownerID: ownerID,
+                            database: database
+                        )
+                    )
+                ]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not run knowledge enrichment.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    private struct BarnOwlKnowledgeEnrichmentExecution {
+        var run: BarnOwlEnrichmentRunResult
+        var job: BarnOwlEnrichmentJobRecord
+        var persistedKnowledge: BarnOwlKnowledgeEntityRecord?
+    }
+
+    private func executeKnowledgeEnrichment(
+        concept: String,
+        limit: Int,
+        ownerID: String,
+        database: BarnOwlDatabase,
+        now: Date
+    ) async throws -> BarnOwlKnowledgeEnrichmentExecution {
+        try await database.seedDefaultEnrichmentSources(ownerID: ownerID, now: now)
+        let configuredSources = try await database.enrichmentSources(ownerID: ownerID)
+        let usefulnessBySourceID = Dictionary(
+            uniqueKeysWithValues: try await database.enrichmentSourceUsefulness(ownerID: ownerID)
+                .map { ($0.sourceID, $0) }
+        )
+        let configuredAdapters: [any BarnOwlEnrichmentSourceAdapter] = configuredSources.compactMap {
+            enrichmentAdapter(for: $0, database: database)
+        }
+        let conceptHistory = try await enrichmentConceptHistory(
+            concept: concept,
+            ownerID: ownerID,
+            database: database
+        )
+        let policyPack = try await database.activeEnrichmentPolicyPack(ownerID: ownerID)
+        let executionPolicy = BarnOwlEnrichmentExecutionPolicy(
+            minimumSupportingEvidenceCount: policyPack?.minimumSupportingEvidenceCount ?? 2,
+            minimumIndependentSourceCountAfterConflictMemory: policyPack?.minimumIndependentSourceCountAfterConflictMemory ?? 2
+        )
+        let run = await BarnOwlEnrichmentOrchestrator(
+            adapters: configuredAdapters,
+            policy: executionPolicy
+        ).run(
+            request: BarnOwlEnrichmentSourceRequest(
+                conceptKey: concept,
+                limit: limit,
+                requestedAt: now
+            ),
+            sources: configuredSources.map {
+                BarnOwlEnrichmentConfiguredSource(
+                    descriptor: $0.descriptor,
+                    enabled: $0.enabled,
+                    authState: $0.authState,
+                    healthStatus: $0.healthStatus,
+                    routingPriority: Self.routingPriority(
+                        source: $0,
+                        usefulness: usefulnessBySourceID[$0.id]
+                    )
+                )
+            },
+            conceptHistory: conceptHistory
+        )
+
+        let job = BarnOwlEnrichmentJobRecord(
+            ownerID: ownerID,
+            conceptKey: concept,
+            requestedSources: run.requestedSources,
+            selectedSources: run.selectedSources,
+            status: run.status,
+            summary: run.summary,
+            rationale: run.rationale,
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            finishedAt: now
+        )
+        try await database.upsertEnrichmentJob(job)
+        for item in run.evidence {
+            try await database.upsertEnrichmentJobEvidence(BarnOwlEnrichmentJobEvidenceRecord(
+                jobID: job.id,
+                sourceID: item.sourceID,
+                evidenceJSON: BarnOwlEnrichmentJobEvidenceRecord.encodeEvidence(item),
+                acceptedByAdjudicator: run.status == .supportedCandidate,
+                createdAt: now
+            ))
+        }
+        if run.status == .heldConflictingEvidence {
+            try await database.upsertEnrichmentConflict(BarnOwlEnrichmentConflictRecord(
+                jobID: job.id,
+                ownerID: ownerID,
+                conceptKey: concept,
+                summary: run.rationale,
+                conflictingSourceIDs: Array(Set(run.evidence.map(\.sourceID))).sorted(),
+                createdAt: now
+            ))
+        }
+        for sourceID in run.selectedSources {
+            let sourceEvidence = run.evidence.filter { $0.sourceID == sourceID }
+            try await database.recordEnrichmentSourceUsefulness(
+                ownerID: ownerID,
+                sourceID: sourceID,
+                status: run.status,
+                evidenceItemCount: sourceEvidence.count,
+                acceptedEvidenceItemCount: run.status == .supportedCandidate ? sourceEvidence.count : 0,
+                contributedAt: sourceEvidence.isEmpty ? nil : now,
+                updatedAt: now
+            )
+        }
+        try await applyAutomaticKnowledgeReversalIfNeeded(
+            run: run,
+            job: job,
+            ownerID: ownerID,
+            database: database,
+            now: now
+        )
+        let persistedKnowledge = run.status == .supportedCandidate
+            ? try await persistSupportedKnowledge(
+                run: run,
+                job: job,
+                ownerID: ownerID,
+                database: database,
+                now: now
+            )
+            : nil
+        return BarnOwlKnowledgeEnrichmentExecution(
+            run: run,
+            job: job,
+            persistedKnowledge: persistedKnowledge
+        )
+    }
+
+    private func applyAutomaticKnowledgeReversalIfNeeded(
+        run: BarnOwlEnrichmentRunResult,
+        job: BarnOwlEnrichmentJobRecord,
+        ownerID: String,
+        database: BarnOwlDatabase,
+        now: Date
+    ) async throws {
+        guard run.status == .heldConflictingEvidence else {
+            return
+        }
+
+        let matchingEntities = try await database.knowledgeEntitiesMatchingConcept(
+            ownerID: ownerID,
+            concept: job.conceptKey
+        )
+        guard !matchingEntities.isEmpty else {
+            return
+        }
+
+        let nonPublicEvidence = run.evidence.filter { $0.scope != .publicReference }
+        guard !nonPublicEvidence.isEmpty else {
+            return
+        }
+
+        let hasExplicitPrivateContradiction = nonPublicEvidence.contains {
+            $0.contradiction || $0.negativeEvidence
+        }
+        if hasExplicitPrivateContradiction {
+            for entity in matchingEntities {
+                _ = try await database.setKnowledgeEntityLifecycleStatus(
+                    id: entity.id,
+                    ownerID: ownerID,
+                    status: .suppressed,
+                    reason: "Automatically suppressed after explicit private or internal contradictory enrichment evidence for \(job.conceptKey).",
+                    updatedAt: now
+                )
+            }
+            return
+        }
+
+        let privateSemanticCandidates = Set(
+            nonPublicEvidence
+                .filter {
+                    !$0.contradiction
+                        && !$0.negativeEvidence
+                        && $0.candidateKind != "unresolved_concept"
+                }
+                .map {
+                    "\($0.candidateKind.lowercased())|\($0.canonicalName.lowercased())"
+                }
+        )
+        guard privateSemanticCandidates.count > 1 else {
+            return
+        }
+
+        for entity in matchingEntities {
+            _ = try await database.setKnowledgeEntityConfidence(
+                id: entity.id,
+                ownerID: ownerID,
+                confidence: max(0.05, entity.confidence - 0.15),
+                updatedAt: now
+            )
+        }
+    }
+
+    private func enrichmentAdapter(
+        for source: BarnOwlEnrichmentSourceRecord,
+        database: BarnOwlDatabase
+    ) -> (any BarnOwlEnrichmentSourceAdapter)? {
+        if source.id == "barnowl_memory" || source.sourceType == "local_memory" {
+            return BarnOwlMemoryEnrichmentSourceAdapter(database: database)
+        }
+        if source.sourceType == "internal_memory" || source.sourceType == "private_reference" {
+            if source.connectorReference?.lowercased() == "collin-os" {
+                return BarnOwlCollinOSReferenceAdapter(sourceID: source.id)
+            }
+            return BarnOwlConfiguredInternalReferenceAdapter(sourceID: source.id)
+        }
+        if source.sourceType == "public_reference" {
+            if source.configJSON?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                return BarnOwlConfiguredPublicReferenceAdapter(sourceID: source.id)
+            }
+            return BarnOwlPublicReferenceResearchAdapter(sourceID: source.id)
+        }
+        return nil
+    }
+
+    private func enrichmentConceptHistory(
+        concept: String,
+        ownerID: String,
+        database: BarnOwlDatabase
+    ) async throws -> BarnOwlEnrichmentConceptHistory {
+        let recentJobs = try await database.enrichmentJobs(
+            ownerID: ownerID,
+            conceptKey: concept,
+            limit: 50
+        )
+        var negativeEvidenceItems = 0
+        for job in recentJobs {
+            let jobEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
+            negativeEvidenceItems += jobEvidence.compactMap(\.evidence).filter(\.negativeEvidence).count
+        }
+        return BarnOwlEnrichmentConceptHistory(
+            supportedCandidateJobs: recentJobs.filter { $0.status == .supportedCandidate }.count,
+            conflictingJobs: recentJobs.filter { $0.status == .heldConflictingEvidence }.count,
+            negativeEvidenceItems: negativeEvidenceItems
+        )
+    }
+
+    private nonisolated static func routingPriority(
+        source: BarnOwlEnrichmentSourceRecord,
+        usefulness: BarnOwlEnrichmentSourceUsefulnessRecord?
+    ) -> Double {
+        let scopeBias: Double = switch source.scope {
+        case .localPrivate, .personalPrivate, .workspacePrivate:
+            0.4
+        case .organizationScoped:
+            0.2
+        case .publicReference:
+            0
+        }
+        guard let usefulness else {
+            return scopeBias
+        }
+
+        return scopeBias
+            + (Double(usefulness.supportedJobs) * 2.0)
+            + (Double(usefulness.acceptedEvidenceItems) * 0.25)
+            - (Double(usefulness.conflictingJobs) * 1.5)
+            - Double(usefulness.failedJobs)
+    }
+
+    private func persistSupportedKnowledge(
+        run: BarnOwlEnrichmentRunResult,
+        job: BarnOwlEnrichmentJobRecord,
+        ownerID: String,
+        database: BarnOwlDatabase,
+        now: Date
+    ) async throws -> BarnOwlKnowledgeEntityRecord? {
+        let semanticEvidence = run.evidence.filter {
+            !$0.negativeEvidence
+                && !$0.contradiction
+                && $0.candidateKind != "unresolved_concept"
+        }
+        guard let strongest = semanticEvidence.max(by: { $0.confidence < $1.confidence }) else {
+            return nil
+        }
+
+        let conceptHistory = try await enrichmentConceptHistory(
+            concept: job.conceptKey,
+            ownerID: ownerID,
+            database: database
+        )
+        let repeatedSupportBoost = min(
+            0.08,
+            Double(max(0, conceptHistory.supportedCandidateJobs - 1)) * 0.02
+        )
+        let entity = BarnOwlKnowledgeEntityRecord(
+            ownerID: ownerID,
+            kind: strongest.candidateKind,
+            canonicalName: strongest.canonicalName,
+            summary: strongest.summary,
+            confidence: min(0.99, strongest.confidence + repeatedSupportBoost),
+            sourceJobID: job.id,
+            createdAt: now,
+            updatedAt: now
+        )
+        try await database.upsertKnowledgeEntity(entity)
+        guard let persistedEntity = try await database.knowledgeEntity(
+            ownerID: ownerID,
+            kind: strongest.candidateKind,
+            canonicalName: strongest.canonicalName
+        ) else {
+            return nil
+        }
+
+        let aliases = MeetingFacts.normalizedList([job.conceptKey, strongest.canonicalName])
+        for alias in aliases {
+            try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
+                ownerID: ownerID,
+                entityID: persistedEntity.id,
+                alias: alias,
+                confidence: strongest.confidence,
+                createdAt: now,
+                updatedAt: now
+            ))
+        }
+
+        let meetingIDs = Set(run.evidence.flatMap { evidence in
+            evidence.citations.compactMap(Self.meetingIDCitation)
+        })
+        for meetingID in meetingIDs {
+            try await database.upsertKnowledgeMeetingLink(BarnOwlKnowledgeMeetingLinkRecord(
+                ownerID: ownerID,
+                entityID: persistedEntity.id,
+                meetingID: meetingID,
+                evidenceJobID: job.id,
+                createdAt: now,
+                updatedAt: now
+            ))
+        }
+
+        return persistedEntity
+    }
+
+    private static func meetingIDCitation(_ citation: String) -> UUID? {
+        let prefix = "meeting:"
+        guard citation.lowercased().hasPrefix(prefix) else {
+            return nil
+        }
+        return UUID(uuidString: String(citation.dropFirst(prefix.count)))
+    }
+
+    func controlKnowledgeJobsListResponse(limit: Int? = nil) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let jobs = try await database.enrichmentJobs(ownerID: ownerID, limit: max(1, min(limit ?? 25, 100)))
+            var controlJobs: [BarnOwlControlEnrichmentJob] = []
+            var conceptHistories: [BarnOwlControlEnrichmentConceptHistory] = []
+            var seenConcepts: Set<String> = []
+            for job in jobs {
+                let evidenceCount = try await database.enrichmentJobEvidence(jobID: job.id)
+                    .count
+                controlJobs.append(controlEnrichmentJob(from: job, evidenceCount: evidenceCount))
+                let normalizedConcept = job.conceptKey.lowercased()
+                if !seenConcepts.contains(normalizedConcept) {
+                    seenConcepts.insert(normalizedConcept)
+                    conceptHistories.append(controlConceptHistory(
+                        conceptKey: job.conceptKey,
+                        history: try await enrichmentConceptHistory(
+                            concept: job.conceptKey,
+                            ownerID: ownerID,
+                            database: database
+                        )
+                    ))
+                }
+            }
+            return controlStatusResponse(
+                message: controlJobs.isEmpty ? "No enrichment jobs recorded." : "Barn Owl enrichment jobs.",
+                enrichmentJobs: controlJobs,
+                enrichmentConflicts: try await database.enrichmentConflicts(ownerID: ownerID, limit: max(1, min(limit ?? 25, 100)))
+                    .map(controlEnrichmentConflict(from:)),
+                enrichmentConceptHistories: conceptHistories
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not load enrichment jobs.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlKnowledgeEntitiesListResponse(limit: Int? = nil) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let entities = try await database.knowledgeEntitiesIncludingSuppressed(
+                ownerID: ownerID,
+                limit: max(1, min(limit ?? 100, 500))
+            ).map(controlKnowledgeEntity(from:))
+            return controlStatusResponse(
+                message: entities.isEmpty ? "No durable knowledge entities recorded." : "Barn Owl durable knowledge entities.",
+                knowledgeEntities: entities
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not load durable knowledge entities.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlKnowledgeEntityLifecycleResponse(
+        entityID: UUID,
+        status: BarnOwlKnowledgeEntityLifecycleStatus,
+        reason: String?
+    ) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let ownerID = currentEnrichmentOwnerID()
+            let normalizedReason = reason?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let persistedReason = normalizedReason?.isEmpty == false ? normalizedReason : nil
+            guard let entity = try await database.setKnowledgeEntityLifecycleStatus(
+                id: entityID,
+                ownerID: ownerID,
+                status: status,
+                reason: persistedReason
+            ) else {
+                return controlStatusResponse(ok: false, message: "Durable knowledge entity not found.", error: "knowledge_entity_not_found")
+            }
+            return controlStatusResponse(
+                message: status == .suppressed ? "Suppressed durable knowledge entity." : "Reactivated durable knowledge entity.",
+                knowledgeEntities: [controlKnowledgeEntity(from: entity)]
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not update durable knowledge entity.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
         }
     }
 
@@ -3631,6 +5293,132 @@ final class BarnOwlAppModel: ObservableObject {
             attemptCount: job.attemptCount,
             errorMessage: Self.sanitizedControlString(job.errorMessage),
             updatedAt: job.updatedAt
+        )
+    }
+
+    private func controlEnrichmentSource(
+        from source: BarnOwlEnrichmentSourceRecord,
+        usefulness: BarnOwlEnrichmentSourceUsefulnessRecord? = nil
+    ) -> BarnOwlControlEnrichmentSource {
+        BarnOwlControlEnrichmentSource(
+            id: source.id,
+            displayName: source.displayName,
+            sourceType: source.sourceType,
+            enabled: source.enabled,
+            scope: source.scope.rawValue,
+            scopeLabel: source.scope.displayName,
+            authorityProfile: source.authorityProfile,
+            bestUsedFor: source.bestUsedFor,
+            authState: source.authState.rawValue,
+            healthStatus: source.healthStatus.rawValue,
+            healthLabel: source.healthStatus.displayName,
+            lastCheckedAt: source.lastCheckedAt,
+            lastSuccessfulCheckAt: source.lastSuccessfulCheckAt,
+            lastFailedCheckAt: source.lastFailedCheckAt,
+            connectorReference: source.connectorReference,
+            privacyCopyPolicy: source.privacyCopyPolicy,
+            queryBudgetPolicy: source.queryBudgetPolicy,
+            attempts: usefulness?.attempts ?? 0,
+            evidenceItems: usefulness?.evidenceItems ?? 0,
+            acceptedEvidenceItems: usefulness?.acceptedEvidenceItems ?? 0,
+            supportedJobs: usefulness?.supportedJobs ?? 0,
+            heldJobs: usefulness?.heldJobs ?? 0,
+            conflictingJobs: usefulness?.conflictingJobs ?? 0,
+            failedJobs: usefulness?.failedJobs ?? 0,
+            lastOutcomeStatus: usefulness?.lastOutcomeStatus?.rawValue
+        )
+    }
+
+    private func controlEnrichmentConflict(
+        from conflict: BarnOwlEnrichmentConflictRecord
+    ) -> BarnOwlControlEnrichmentConflict {
+        BarnOwlControlEnrichmentConflict(
+            id: conflict.id,
+            jobID: conflict.jobID,
+            ownerID: conflict.ownerID,
+            conceptKey: conflict.conceptKey,
+            summary: conflict.summary,
+            conflictingSourceIDs: conflict.conflictingSourceIDs,
+            createdAt: conflict.createdAt
+        )
+    }
+
+    private nonisolated func controlConceptHistory(
+        conceptKey: String,
+        history: BarnOwlEnrichmentConceptHistory
+    ) -> BarnOwlControlEnrichmentConceptHistory {
+        BarnOwlControlEnrichmentConceptHistory(
+            conceptKey: conceptKey,
+            supportedCandidateJobs: history.supportedCandidateJobs,
+            conflictingJobs: history.conflictingJobs,
+            negativeEvidenceItems: history.negativeEvidenceItems,
+            requiresConflictMemoryHold: history.requiresConflictMemoryHold
+        )
+    }
+
+    private nonisolated func controlEnrichmentAuthorityProfile(
+        from profile: BarnOwlEnrichmentAuthorityProfileRecord
+    ) -> BarnOwlControlEnrichmentAuthorityProfile {
+        BarnOwlControlEnrichmentAuthorityProfile(
+            id: profile.id,
+            displayName: profile.displayName,
+            description: profile.description,
+            strongestEntityKinds: profile.strongestEntityKinds,
+            weakestEntityKinds: profile.weakestEntityKinds,
+            defaultWeight: profile.defaultWeight,
+            builtIn: profile.builtIn
+        )
+    }
+
+    private nonisolated func controlEnrichmentPolicyPack(
+        from pack: BarnOwlEnrichmentPolicyPackRecord
+    ) -> BarnOwlControlEnrichmentPolicyPack {
+        BarnOwlControlEnrichmentPolicyPack(
+            id: pack.id,
+            displayName: pack.displayName,
+            description: pack.description,
+            minimumSupportingEvidenceCount: pack.minimumSupportingEvidenceCount,
+            minimumIndependentSourceCountAfterConflictMemory: pack.minimumIndependentSourceCountAfterConflictMemory,
+            active: pack.active
+        )
+    }
+
+    private nonisolated func controlKnowledgeEntity(
+        from entity: BarnOwlKnowledgeEntityRecord
+    ) -> BarnOwlControlKnowledgeEntity {
+        BarnOwlControlKnowledgeEntity(
+            id: entity.id,
+            kind: entity.kind,
+            canonicalName: entity.canonicalName,
+            summary: entity.summary,
+            confidence: entity.confidence,
+            sourceJobID: entity.sourceJobID,
+            lifecycleStatus: entity.lifecycleStatus.rawValue,
+            lifecycleReason: entity.lifecycleReason,
+            lifecycleUpdatedAt: entity.lifecycleUpdatedAt,
+            createdAt: entity.createdAt,
+            updatedAt: entity.updatedAt
+        )
+    }
+
+    private func controlEnrichmentJob(
+        from job: BarnOwlEnrichmentJobRecord,
+        evidenceCount: Int
+    ) -> BarnOwlControlEnrichmentJob {
+        BarnOwlControlEnrichmentJob(
+            id: job.id,
+            ownerID: job.ownerID,
+            conceptKey: job.conceptKey,
+            requestedSources: job.requestedSources,
+            selectedSources: job.selectedSources,
+            status: job.status.rawValue,
+            statusLabel: job.status.displayName,
+            summary: job.summary,
+            rationale: job.rationale,
+            evidenceCount: evidenceCount,
+            createdAt: job.createdAt,
+            updatedAt: job.updatedAt,
+            finishedAt: job.finishedAt
         )
     }
 
@@ -5739,6 +7527,11 @@ final class BarnOwlAppModel: ObservableObject {
                     metadataJSON: #"{"source":"note-renderer"}"#
                 ))
             }
+            await runAutomaticRecurringKnowledgeEnrichment(
+                artifact: artifact,
+                database: database,
+                now: now
+            )
             if let beforeState,
                beforeState.generatedNotes != artifact.markdown,
                let afterState = try? await database.meetingState(id: artifact.session.id) {
@@ -5762,6 +7555,150 @@ final class BarnOwlAppModel: ObservableObject {
             )
         }
     }
+
+    private func runAutomaticRecurringKnowledgeEnrichment(
+        artifact: LocalMeetingArtifact,
+        database: BarnOwlDatabase,
+        now: Date
+    ) async {
+        do {
+            let ownerID = currentEnrichmentOwnerID()
+            let transcript = artifact.transcriptSegments
+                .map { "\($0.speakerLabel): \($0.text)" }
+                .joined(separator: "\n")
+            let candidates = try await recurringConceptsEligibleForAutomaticEnrichment(
+                transcript: transcript,
+                ownerID: ownerID,
+                database: database,
+                now: now
+            )
+            guard !candidates.isEmpty else { return }
+
+            for concept in candidates.prefix(3) {
+                let execution = try await executeKnowledgeEnrichment(
+                    concept: concept,
+                    limit: 8,
+                    ownerID: ownerID,
+                    database: database,
+                    now: now
+                )
+                recordActivity(
+                    category: "knowledge",
+                    message: execution.run.status == .supportedCandidate
+                        ? "Automatically enriched recurring concept \(concept)."
+                        : "Automatically reviewed recurring concept \(concept).",
+                    details: execution.run.summary,
+                    sessionID: artifact.session.id,
+                    updatePreview: false
+                )
+            }
+        } catch {
+            recordActivity(
+                level: .warning,
+                category: "knowledge",
+                message: "Could not run automatic recurring knowledge enrichment.",
+                details: BarnOwlErrorFormatter.message(for: error),
+                sessionID: artifact.session.id,
+                updatePreview: false
+            )
+        }
+    }
+
+    private func recurringConceptsEligibleForAutomaticEnrichment(
+        transcript: String,
+        ownerID: String,
+        database: BarnOwlDatabase,
+        now: Date
+    ) async throws -> [String] {
+        let candidates = Self.recurringConceptCandidates(in: transcript)
+        guard !candidates.isEmpty else { return [] }
+
+        let existingJobs = try await database.enrichmentJobs(ownerID: ownerID, limit: 200)
+        let cooldownCutoff = now.addingTimeInterval(-24 * 60 * 60)
+        var eligible: [(concept: String, meetingCount: Int)] = []
+
+        for candidate in candidates {
+            let normalized = BarnOwlKnowledgeEntityRecord.normalized(candidate)
+            guard !normalized.isEmpty else { continue }
+            let existingKnowledgeMatches = try await database.durableKnowledgeMatches(
+                ownerID: ownerID,
+                transcript: candidate,
+                limit: 1
+            )
+            guard existingKnowledgeMatches.isEmpty else {
+                continue
+            }
+            let hasRecentJob = existingJobs.contains {
+                BarnOwlKnowledgeEntityRecord.normalized($0.conceptKey) == normalized
+                    && $0.createdAt >= cooldownCutoff
+            }
+            guard !hasRecentJob else { continue }
+
+            let searchResults = try await database.searchLibrary(BarnOwlDatabaseSearchQuery(
+                text: candidate,
+                limit: 24
+            ))
+            let distinctMeetingCount = Set(searchResults.map(\.meeting.id)).count
+            guard distinctMeetingCount >= 3 else { continue }
+            eligible.append((candidate, distinctMeetingCount))
+        }
+
+        return eligible
+            .sorted {
+                if $0.meetingCount != $1.meetingCount { return $0.meetingCount > $1.meetingCount }
+                return $0.concept.localizedCaseInsensitiveCompare($1.concept) == .orderedAscending
+            }
+            .map(\.concept)
+    }
+
+    nonisolated static func recurringConceptCandidates(in transcript: String, limit: Int = 16) -> [String] {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"\b[A-Z][A-Za-z0-9&.-]{2,}(?:\s+[A-Z][A-Za-z0-9&.-]{2,}){0,2}\b"#
+        ) else {
+            return []
+        }
+
+        let transcriptWithoutSpeakerLabels = transcript
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { line -> String in
+                guard let colon = line.firstIndex(of: ":") else {
+                    return String(line)
+                }
+                return String(line[line.index(after: colon)...])
+            }
+            .joined(separator: "\n")
+        let nsRange = NSRange(transcriptWithoutSpeakerLabels.startIndex..<transcriptWithoutSpeakerLabels.endIndex, in: transcriptWithoutSpeakerLabels)
+        var ordered: [String] = []
+        var seen: Set<String> = []
+        for match in regex.matches(in: transcriptWithoutSpeakerLabels, range: nsRange) {
+            guard let range = Range(match.range, in: transcriptWithoutSpeakerLabels) else { continue }
+            let candidate = String(transcriptWithoutSpeakerLabels[range])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = BarnOwlKnowledgeEntityRecord.normalized(candidate)
+            guard !normalized.isEmpty,
+                  !Self.recurringConceptStopTerms.contains(normalized),
+                  seen.insert(normalized).inserted
+            else {
+                continue
+            }
+            ordered.append(candidate)
+            if ordered.count >= max(1, limit) {
+                break
+            }
+        }
+        return ordered
+    }
+
+    private nonisolated static let recurringConceptStopTerms: Set<String> = [
+        "barn owl",
+        "call speaker",
+        "room speaker",
+        "meeting",
+        "notes",
+        "pricing strategy",
+        "summary",
+        "transcript"
+    ]
 
     nonisolated static func defaultDatabaseURL() throws -> URL {
         let applicationSupport = FileManager.default.urls(

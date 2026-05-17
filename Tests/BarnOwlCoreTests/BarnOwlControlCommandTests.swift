@@ -42,6 +42,94 @@ func controlResponseEncodesMachineReadableStatus() throws {
 }
 
 @Test
+func controlResponseEncodesEnrichmentConceptHistory() throws {
+    let response = BarnOwlControlResponse(
+        ok: true,
+        message: "Barn Owl enrichment jobs.",
+        enrichmentConceptHistories: [
+            BarnOwlControlEnrichmentConceptHistory(
+                conceptKey: "Rosalind",
+                supportedCandidateJobs: 3,
+                conflictingJobs: 1,
+                negativeEvidenceItems: 2,
+                requiresConflictMemoryHold: true
+            )
+        ]
+    )
+
+    let data = try JSONEncoder().encode(response)
+    let decoded = try JSONDecoder().decode(BarnOwlControlResponse.self, from: data)
+
+    #expect(decoded == response)
+    #expect(decoded.enrichmentConceptHistories?.first?.requiresConflictMemoryHold == true)
+}
+
+@Test
+func controlResponseEncodesEnrichmentOnboardingMetadata() throws {
+    let response = BarnOwlControlResponse(
+        ok: true,
+        message: "Barn Owl enrichment sources.",
+        enrichmentAuthorityProfiles: [
+            BarnOwlControlEnrichmentAuthorityProfile(
+                id: "private_internal_reference",
+                displayName: "Private Internal Reference",
+                description: "User-authorized internal context.",
+                strongestEntityKinds: ["project", "person"],
+                weakestEntityKinds: ["public_event"],
+                defaultWeight: 0.93,
+                builtIn: true
+            )
+        ],
+        enrichmentPolicyPacks: [
+            BarnOwlControlEnrichmentPolicyPack(
+                id: "balanced_autonomous_default",
+                displayName: "Balanced autonomous default",
+                description: "Default autonomous thresholds.",
+                minimumSupportingEvidenceCount: 2,
+                minimumIndependentSourceCountAfterConflictMemory: 2,
+                active: true
+            )
+        ]
+    )
+
+    let data = try JSONEncoder().encode(response)
+    let decoded = try JSONDecoder().decode(BarnOwlControlResponse.self, from: data)
+
+    #expect(decoded == response)
+    #expect(decoded.enrichmentAuthorityProfiles?.first?.id == "private_internal_reference")
+    #expect(decoded.enrichmentPolicyPacks?.first?.active == true)
+}
+
+@Test
+func controlResponseEncodesDurableKnowledgeLifecycleState() throws {
+    let entityID = UUID(uuidString: "00000000-0000-0000-0000-00000000C123")!
+    let response = BarnOwlControlResponse(
+        ok: true,
+        message: "Suppressed durable knowledge entity.",
+        knowledgeEntities: [
+            BarnOwlControlKnowledgeEntity(
+                id: entityID,
+                kind: "project",
+                canonicalName: "Rosalind",
+                summary: "Internal project.",
+                confidence: 0.94,
+                lifecycleStatus: "suppressed",
+                lifecycleReason: "Operator correction.",
+                lifecycleUpdatedAt: Date(timeIntervalSince1970: 1_800_004_500),
+                createdAt: Date(timeIntervalSince1970: 1_800_004_000),
+                updatedAt: Date(timeIntervalSince1970: 1_800_004_500)
+            )
+        ]
+    )
+
+    let data = try JSONEncoder().encode(response)
+    let decoded = try JSONDecoder().decode(BarnOwlControlResponse.self, from: data)
+
+    #expect(decoded == response)
+    #expect(decoded.knowledgeEntities?.first?.lifecycleStatus == "suppressed")
+}
+
+@Test
 func readCommandsDecodeMeetingSearchPayload() throws {
     let data = Data(
         """
@@ -132,11 +220,128 @@ func controlCommandNameIncludesCodexPrimaryCases() {
     #expect(names.contains("context_accept"))
     #expect(names.contains("context_ignore"))
     #expect(names.contains("context_delete"))
+    #expect(names.contains("enrichment_sources_list"))
+    #expect(names.contains("enrichment_source_presets_list"))
+    #expect(names.contains("enrichment_source_setup_preset"))
+    #expect(names.contains("enrichment_source_health_check"))
+    #expect(names.contains("enrichment_source_upsert"))
+    #expect(names.contains("enrichment_source_enable"))
+    #expect(names.contains("enrichment_source_disable"))
+    #expect(names.contains("enrichment_authority_profiles_list"))
+    #expect(names.contains("enrichment_authority_profile_upsert"))
+    #expect(names.contains("enrichment_policy_packs_list"))
+    #expect(names.contains("enrichment_policy_pack_upsert"))
+    #expect(names.contains("enrichment_policy_pack_activate"))
+    #expect(names.contains("knowledge_enrich"))
+    #expect(names.contains("knowledge_jobs_list"))
+    #expect(names.contains("knowledge_entities_list"))
+    #expect(names.contains("knowledge_entity_suppress"))
+    #expect(names.contains("knowledge_entity_reactivate"))
     #expect(names.contains("meeting_delete"))
     #expect(names.contains("meeting_purge_temp_audio"))
     #expect(names.contains("diagnostics_export"))
     #expect(names.contains("permissions_check"))
     #expect(names.contains("permissions_test"))
+}
+
+@Test
+func enrichmentSourceUpsertCommandDecodesRegistryFields() throws {
+    let data = Data(
+        """
+        {
+          "command": "enrichment_source_upsert",
+          "sourceID": "collin_os",
+          "sourceDisplayName": "Collin OS",
+          "sourceType": "internal_memory",
+          "enabled": true,
+          "scope": "personal_private",
+          "authorityProfile": "collin_internal_reference",
+          "bestUsedFor": ["projects", "people"],
+          "configJSON": "{\\"root\\":\\"private\\"}",
+          "authState": "configured",
+          "healthStatus": "ready"
+        }
+        """.utf8
+    )
+
+    let command = try JSONDecoder().decode(BarnOwlControlCommand.self, from: data)
+
+    #expect(command.command == .enrichmentSourceUpsert)
+    #expect(command.sourceID == "collin_os")
+    #expect(command.scope == "personal_private")
+    #expect(command.bestUsedFor == ["projects", "people"])
+    #expect(command.authState == "configured")
+}
+
+@Test
+func knowledgeEnrichCommandDecodesConceptQuery() throws {
+    let command = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"knowledge_enrich","query":"Rosalind","limit":6}"#.utf8)
+    )
+
+    #expect(command.command == .knowledgeEnrich)
+    #expect(command.query == "Rosalind")
+    #expect(command.limit == 6)
+}
+
+@Test
+func enrichmentPolicyAndKnowledgeLifecycleCommandsDecodeManagementFields() throws {
+    let policy = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(
+            """
+            {
+              "command":"enrichment_policy_pack_upsert",
+              "policyPackID":"strict_private",
+              "displayName":"Strict private",
+              "description":"Require more corroboration.",
+              "minimumSupportingEvidenceCount":3,
+              "minimumIndependentSourceCountAfterConflictMemory":3,
+              "enabled":true
+            }
+            """.utf8
+        )
+    )
+    let suppress = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(
+            #"{"command":"knowledge_entity_suppress","knowledgeEntityID":"00000000-0000-0000-0000-00000000C099","reason":"Manual correction"}"#.utf8
+        )
+    )
+
+    #expect(policy.command == .enrichmentPolicyPackUpsert)
+    #expect(policy.policyPackID == "strict_private")
+    #expect(policy.minimumSupportingEvidenceCount == 3)
+    #expect(policy.enabled == true)
+    #expect(suppress.command == .knowledgeEntitySuppress)
+    #expect(suppress.knowledgeEntityID == UUID(uuidString: "00000000-0000-0000-0000-00000000C099"))
+    #expect(suppress.reason == "Manual correction")
+}
+
+@Test
+func enrichmentSourceSetupPresetCommandDecodesConnectorSetupFields() throws {
+    let command = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(
+            """
+            {
+              "command":"enrichment_source_setup_preset",
+              "presetID":"google_drive_reference",
+              "sourceID":"drive_reference",
+              "sourceDisplayName":"Drive Knowledge",
+              "authorityProfile":"private_internal_reference",
+              "bestUsedFor":["projects","people"]
+            }
+            """.utf8
+        )
+    )
+
+    #expect(command.command == .enrichmentSourceSetupPreset)
+    #expect(command.presetID == "google_drive_reference")
+    #expect(command.sourceID == "drive_reference")
+    #expect(command.sourceDisplayName == "Drive Knowledge")
+    #expect(command.bestUsedFor == ["projects", "people"])
 }
 
 @Test
@@ -315,4 +520,368 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
     #expect(decoded.feedbackSuggested == true)
     #expect(decoded.feedbackCommand == "barnowl feedback slack")
     #expect(decoded.feedbackPostCommand == "barnowl feedback slack --yes")
+}
+
+@Test
+func enrichmentOrchestratorPromotesSupportedCandidatesThroughInstalledAdapters() async {
+    let source = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "barnowl_memory",
+            displayName: "Barn Owl Memory",
+            sourceType: "local_memory",
+            scope: .localPrivate,
+            authorityProfile: "meeting_memory"
+        ),
+        enabled: true,
+        authState: .notRequired,
+        healthStatus: .ready
+    )
+    let orchestrator = BarnOwlEnrichmentOrchestrator(
+        adapters: [
+            StaticEnrichmentAdapter(
+                sourceID: "barnowl_memory",
+                evidence: [
+                    enrichmentEvidence(subject: "Rosalind", citation: "meeting:a"),
+                    enrichmentEvidence(subject: "Rosalind", citation: "meeting:b")
+                ]
+            )
+        ]
+    )
+
+    let result = await orchestrator.run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [source]
+    )
+
+    #expect(result.status == .supportedCandidate)
+    #expect(result.requestedSources == ["barnowl_memory"])
+    #expect(result.selectedSources == ["barnowl_memory"])
+    #expect(result.evidence.count == 2)
+}
+
+@Test
+func enrichmentOrchestratorOrdersEligibleSourcesByRoutingPriority() async {
+    let lowerPriority = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "public_web",
+            displayName: "Internet References",
+            sourceType: "public_reference",
+            scope: .publicReference,
+            authorityProfile: "public_reference"
+        ),
+        enabled: true,
+        authState: .notRequired,
+        healthStatus: .ready,
+        routingPriority: 0.1
+    )
+    let higherPriority = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "collin_os",
+            displayName: "Collin OS",
+            sourceType: "internal_memory",
+            scope: .personalPrivate,
+            authorityProfile: "collin_internal_reference"
+        ),
+        enabled: true,
+        authState: .configured,
+        healthStatus: .ready,
+        routingPriority: 4.5
+    )
+
+    let result = await BarnOwlEnrichmentOrchestrator(
+        adapters: [
+            StaticEnrichmentAdapter(
+                sourceID: "public_web",
+                evidence: [enrichmentEvidence(subject: "Rosalind", citation: "public:rosalind")]
+            ),
+            StaticEnrichmentAdapter(
+                sourceID: "collin_os",
+                evidence: [enrichmentEvidence(subject: "Rosalind", citation: "collin-os:rosalind")]
+            )
+        ]
+    ).run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [lowerPriority, higherPriority]
+    )
+
+    #expect(result.selectedSources == ["collin_os", "public_web"])
+}
+
+@Test
+func enrichmentOrchestratorConflictMemoryRequiresIndependentCorroboration() async {
+    let source = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "collin_os",
+            displayName: "Collin OS",
+            sourceType: "internal_memory",
+            scope: .personalPrivate,
+            authorityProfile: "collin_internal_reference"
+        ),
+        enabled: true,
+        authState: .configured,
+        healthStatus: .ready
+    )
+    let result = await BarnOwlEnrichmentOrchestrator(
+        adapters: [
+            StaticEnrichmentAdapter(
+                sourceID: "collin_os",
+                evidence: [
+                    enrichmentEvidence(subject: "Rosalind", citation: "collin-os:rosalind:1"),
+                    enrichmentEvidence(subject: "Rosalind", citation: "collin-os:rosalind:2")
+                ]
+            )
+        ]
+    ).run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [source],
+        conceptHistory: BarnOwlEnrichmentConceptHistory(conflictingJobs: 1)
+    )
+
+    #expect(result.status == .heldConflictingEvidence)
+    #expect(result.evidence.count == 2)
+    #expect(result.rationale.contains("prior conflicting job"))
+    #expect(result.rationale.contains("independent source adapters"))
+}
+
+@Test
+func enrichmentOrchestratorConflictMemoryAllowsIndependentCorroboration() async {
+    let collinSource = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "collin_os",
+            displayName: "Collin OS",
+            sourceType: "internal_memory",
+            scope: .personalPrivate,
+            authorityProfile: "collin_internal_reference"
+        ),
+        enabled: true,
+        authState: .configured,
+        healthStatus: .ready
+    )
+    let memorySource = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "barnowl_memory",
+            displayName: "Barn Owl Memory",
+            sourceType: "local_memory",
+            scope: .localPrivate,
+            authorityProfile: "meeting_memory"
+        ),
+        enabled: true,
+        authState: .notRequired,
+        healthStatus: .ready
+    )
+    let result = await BarnOwlEnrichmentOrchestrator(
+        adapters: [
+            StaticEnrichmentAdapter(
+                sourceID: "collin_os",
+                evidence: [enrichmentEvidence(
+                    subject: "Rosalind",
+                    citation: "collin-os:rosalind",
+                    sourceID: "collin_os",
+                    sourceDisplayName: "Collin OS",
+                    authorityProfile: "collin_internal_reference",
+                    scope: .personalPrivate
+                )]
+            ),
+            StaticEnrichmentAdapter(
+                sourceID: "barnowl_memory",
+                evidence: [enrichmentEvidence(subject: "Rosalind", citation: "meeting:rosalind")]
+            )
+        ]
+    ).run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [collinSource, memorySource],
+        conceptHistory: BarnOwlEnrichmentConceptHistory(conflictingJobs: 1, negativeEvidenceItems: 1)
+    )
+
+    #expect(result.status == .supportedCandidate)
+    #expect(Set(result.selectedSources) == Set(["barnowl_memory", "collin_os"]))
+}
+
+@Test
+func enrichmentOrchestratorHoldsWhenConfiguredSourcesLackEligibleAdapters() async {
+    let source = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "public_web",
+            displayName: "Internet References",
+            sourceType: "public_reference",
+            scope: .publicReference,
+            authorityProfile: "public_reference"
+        ),
+        enabled: true,
+        authState: .notRequired,
+        healthStatus: .ready
+    )
+
+    let result = await BarnOwlEnrichmentOrchestrator(adapters: []).run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [source]
+    )
+
+    #expect(result.status == .heldNoEligibleSources)
+    #expect(result.requestedSources == ["public_web"])
+    #expect(result.selectedSources.isEmpty)
+    #expect(result.evidence.isEmpty)
+}
+
+@Test
+func enrichmentOrchestratorHoldsWhenSemanticCandidatesConflict() async {
+    let collinSource = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "collin_os",
+            displayName: "Collin OS",
+            sourceType: "internal_memory",
+            scope: .personalPrivate,
+            authorityProfile: "collin_internal_reference"
+        ),
+        enabled: true,
+        authState: .configured,
+        healthStatus: .ready
+    )
+    let teamSource = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "workspace_glossary",
+            displayName: "Workspace Glossary",
+            sourceType: "internal_memory",
+            scope: .workspacePrivate,
+            authorityProfile: "workspace_reference"
+        ),
+        enabled: true,
+        authState: .configured,
+        healthStatus: .ready
+    )
+    let orchestrator = BarnOwlEnrichmentOrchestrator(
+        adapters: [
+            StaticEnrichmentAdapter(
+                sourceID: "collin_os",
+                evidence: [
+                    enrichmentEvidence(
+                        subject: "Rosalind",
+                        citation: "collin-os:project/rosalind",
+                        candidateKind: "project",
+                        canonicalName: "Rosalind"
+                    )
+                ]
+            ),
+            StaticEnrichmentAdapter(
+                sourceID: "workspace_glossary",
+                evidence: [
+                    enrichmentEvidence(
+                        subject: "Rosalind",
+                        citation: "workspace:people/rosalind",
+                        candidateKind: "person",
+                        canonicalName: "Rosalind Chen"
+                    )
+                ]
+            )
+        ]
+    )
+
+    let result = await orchestrator.run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [collinSource, teamSource]
+    )
+
+    #expect(result.status == .heldConflictingEvidence)
+    #expect(result.selectedSources == ["collin_os", "workspace_glossary"])
+    #expect(result.evidence.count == 2)
+    #expect(result.rationale.contains("blocked"))
+}
+
+@Test
+func enrichmentOrchestratorBlocksPublicOnlyPrivateTruth() async {
+    let publicSource = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "public_web",
+            displayName: "Internet References",
+            sourceType: "public_reference",
+            scope: .publicReference,
+            authorityProfile: "public_reference"
+        ),
+        enabled: true,
+        authState: .notRequired,
+        healthStatus: .ready
+    )
+    let evidence = [
+        BarnOwlEnrichmentEvidenceRecord(
+            subject: "Rosalind",
+            candidateKind: "project",
+            canonicalName: "Rosalind",
+            summary: "Public result claims Rosalind is a project.",
+            confidence: 0.84,
+            sourceID: "public_web",
+            sourceDisplayName: "Internet References",
+            authorityProfile: "public_reference",
+            freshness: .recent,
+            scope: .publicReference,
+            citations: ["public:rosalind:1"]
+        ),
+        BarnOwlEnrichmentEvidenceRecord(
+            subject: "Rosalind",
+            candidateKind: "project",
+            canonicalName: "Rosalind",
+            summary: "Another public result claims Rosalind is a project.",
+            confidence: 0.81,
+            sourceID: "public_web",
+            sourceDisplayName: "Internet References",
+            authorityProfile: "public_reference",
+            freshness: .recent,
+            scope: .publicReference,
+            citations: ["public:rosalind:2"]
+        )
+    ]
+
+    let result = await BarnOwlEnrichmentOrchestrator(
+        adapters: [StaticEnrichmentAdapter(sourceID: "public_web", evidence: evidence)]
+    ).run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        sources: [publicSource]
+    )
+
+    #expect(result.status == .heldInsufficientEvidence)
+    #expect(result.evidence.count == 2)
+    #expect(result.rationale.contains("public-only evidence"))
+}
+
+private struct StaticEnrichmentAdapter: BarnOwlEnrichmentSourceAdapter {
+    var sourceID: String
+    var evidence: [BarnOwlEnrichmentEvidenceRecord]
+
+    func healthSnapshot(
+        for source: BarnOwlEnrichmentSourceDescriptor
+    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
+        BarnOwlEnrichmentSourceHealthSnapshot(status: .ready, authState: .notRequired)
+    }
+
+    func enrich(
+        request: BarnOwlEnrichmentSourceRequest,
+        source: BarnOwlEnrichmentSourceDescriptor
+    ) async throws -> BarnOwlEnrichmentSourceResult {
+        BarnOwlEnrichmentSourceResult(sourceID: source.id, evidence: evidence)
+    }
+}
+
+private func enrichmentEvidence(
+    subject: String,
+    citation: String,
+    candidateKind: String = "project",
+    canonicalName: String? = nil,
+    sourceID: String = "barnowl_memory",
+    sourceDisplayName: String = "Barn Owl Memory",
+    authorityProfile: String = "meeting_memory",
+    scope: BarnOwlEnrichmentSourceScope = .localPrivate
+) -> BarnOwlEnrichmentEvidenceRecord {
+    BarnOwlEnrichmentEvidenceRecord(
+        subject: subject,
+        candidateKind: candidateKind,
+        canonicalName: canonicalName ?? subject,
+        summary: "Recurring evidence for \(subject).",
+        confidence: 0.9,
+        sourceID: sourceID,
+        sourceDisplayName: sourceDisplayName,
+        authorityProfile: authorityProfile,
+        freshness: .recent,
+        scope: scope,
+        citations: [citation],
+        observedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
 }

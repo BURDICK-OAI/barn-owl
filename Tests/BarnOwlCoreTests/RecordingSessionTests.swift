@@ -533,6 +533,1000 @@ func controlResponsesRedactUserVisibleErrorFields() async throws {
 }
 
 @Test
+@MainActor
+func controlEnrichmentSourcesManageUserScopedRegistry() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+
+    let initial = await model.controlEnrichmentSourcesListResponse()
+    #expect(initial.enrichmentSources?.map(\.id).contains("barnowl_memory") == true)
+    #expect(initial.enrichmentSources?.map(\.id).contains("public_web") == true)
+    #expect(initial.enrichmentAuthorityProfiles?.map(\.id).contains("private_internal_reference") == true)
+    #expect(initial.enrichmentPolicyPacks?.first?.id == "balanced_autonomous_default")
+
+    let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        bestUsedFor: ["projects", "people"],
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    #expect(created.ok)
+    #expect(created.enrichmentSources?.first?.id == "collin_os")
+    #expect(created.enrichmentSources?.first?.scope == "personal_private")
+
+    let disabled = await model.controlEnrichmentSourceEnabledResponse(sourceID: "collin_os", enabled: false)
+    #expect(disabled.enrichmentSources?.first?.enabled == false)
+    #expect(disabled.enrichmentSources?.first?.healthStatus == "disabled")
+
+    let teammateModel = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "teammate")
+    let teammateList = await teammateModel.controlEnrichmentSourcesListResponse()
+    #expect(teammateList.enrichmentSources?.map(\.id).contains("collin_os") == false)
+}
+
+@Test
+@MainActor
+func controlEnrichmentSourcePresetsConfigureConnectorBackedSourcesAndHealthChecks() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+
+    let presets = model.controlEnrichmentSourcePresetsListResponse()
+    let setup = await model.controlEnrichmentSourceSetupPresetResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceSetupPreset,
+        presetID: "google_drive_reference",
+        sourceID: "drive_reference",
+        sourceDisplayName: "Drive Knowledge"
+    ))
+    let health = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "drive_reference")
+    let stored = try #require(await database.enrichmentSource(ownerID: "collin", id: "drive_reference"))
+
+    #expect(presets.enrichmentSourcePresets?.map(\.id).contains("google_drive_reference") == true)
+    #expect(setup.enrichmentSources?.first?.connectorReference == "google-drive")
+    #expect(stored.scope == .personalPrivate)
+    #expect(stored.authState == .needsAuthentication)
+    #expect(stored.healthStatus == .needsAuth)
+    #expect(health.enrichmentSources?.first?.healthStatus == BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue)
+    #expect(health.enrichmentSources?.first?.lastCheckedAt != nil)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichUsesActivePolicyPackThresholds() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    try await database.seedDefaultEnrichmentSources(ownerID: "collin")
+    try await database.upsertEnrichmentPolicyPack(BarnOwlEnrichmentPolicyPackRecord(
+        id: "single_strong_internal_evidence",
+        ownerID: "collin",
+        displayName: "Single strong internal evidence",
+        description: "Used only in tests to prove orchestration reads active user policy.",
+        minimumSupportingEvidenceCount: 1,
+        minimumIndependentSourceCountAfterConflictMemory: 2,
+        active: true
+    ))
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "workspace_reference",
+        sourceDisplayName: "Workspace Reference",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "workspace_private",
+        authorityProfile: "private_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Aster"],
+              "candidateKind": "project",
+              "canonicalName": "Aster",
+              "summary": "Workspace project.",
+              "citations": ["workspace:projects/aster"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Aster", limit: 8)
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Aster"
+    ))
+
+    #expect(response.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(entity.canonicalName == "Aster")
+}
+
+@Test
+@MainActor
+func controlPlaneManagesAuthorityProfilesPolicyPacksAndKnowledgeSuppression() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let profileResponse = await model.controlEnrichmentAuthorityProfileUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentAuthorityProfileUpsert,
+        authorityProfileID: "workspace_reference",
+        displayName: "Workspace Reference",
+        description: "Workspace-scoped durable reference source.",
+        strongestEntityKinds: ["project", "person"],
+        weakestEntityKinds: ["public_event"],
+        defaultWeight: 0.88
+    ))
+    let policyResponse = await model.controlEnrichmentPolicyPackUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentPolicyPackUpsert,
+        policyPackID: "strict_workspace",
+        displayName: "Strict workspace",
+        description: "Require three evidence items.",
+        minimumSupportingEvidenceCount: 3,
+        minimumIndependentSourceCountAfterConflictMemory: 3,
+        enabled: false
+    ))
+    let activated = await model.controlEnrichmentPolicyPackActivateResponse(policyPackID: "strict_workspace")
+
+    #expect(profileResponse.enrichmentAuthorityProfiles?.first?.id == "workspace_reference")
+    #expect(policyResponse.enrichmentPolicyPacks?.first?.id == "strict_workspace")
+    #expect(activated.enrichmentPolicyPacks?.first(where: { $0.id == "strict_workspace" })?.active == true)
+
+    try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Aster",
+        summary: "Workspace project.",
+        confidence: 0.91
+    ))
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Aster"
+    ))
+    let suppressed = await model.controlKnowledgeEntityLifecycleResponse(
+        entityID: entity.id,
+        status: .suppressed,
+        reason: "Operator correction."
+    )
+    let entities = await model.controlKnowledgeEntitiesListResponse(limit: 10)
+    let reactivated = await model.controlKnowledgeEntityLifecycleResponse(
+        entityID: entity.id,
+        status: .active,
+        reason: "Operator restored."
+    )
+
+    #expect(suppressed.knowledgeEntities?.first?.lifecycleStatus == "suppressed")
+    #expect(entities.knowledgeEntities?.first(where: { $0.id == entity.id })?.lifecycleReason == "Operator correction.")
+    #expect(reactivated.knowledgeEntities?.first?.lifecycleStatus == "active")
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichRecordsSupportedMemoryEvidenceForRecurringConcept() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-00000000E101")!,
+        title: "Rosalind Planning",
+        summary: MeetingSummary(overview: "Rosalind launch planning and risk review.")
+    ))
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-00000000E102")!,
+        title: "Rosalind Pricing",
+        summary: MeetingSummary(overview: "Rosalind pricing discussion and next steps.")
+    ))
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let job = try #require(response.enrichmentJobs?.first)
+    let storedJobs = try await database.enrichmentJobs(ownerID: "collin")
+    let storedEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
+
+    #expect(response.ok)
+    #expect(job.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(job.selectedSources.contains("barnowl_memory"))
+    #expect(response.enrichmentEvidence?.allSatisfy { $0.sourceID == "barnowl_memory" } == true)
+    #expect(job.evidenceCount >= 2)
+    #expect(response.enrichmentEvidence?.count == job.evidenceCount)
+    #expect(storedJobs.first?.id == job.id)
+    #expect(storedEvidence.count == job.evidenceCount)
+    #expect(storedEvidence.filter(\.acceptedByAdjudicator).count == storedEvidence.count)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-00000000E201")!,
+        title: "Rosalind Launch",
+        summary: MeetingSummary(overview: "Rosalind launch review and customer sequencing.")
+    ))
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-00000000E202")!,
+        title: "Rosalind Pricing",
+        summary: MeetingSummary(overview: "Rosalind pricing review and launch timing.")
+    ))
+
+    let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        bestUsedFor: ["projects", "internal terminology"],
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal launch workstream referenced in account, product, and pricing discussions.",
+              "confidence": 0.97,
+              "citations": ["collin-os:projects/rosalind"],
+              "freshness": "current"
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    #expect(created.ok)
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let job = try #require(response.enrichmentJobs?.first)
+    let sourceIDs = Set(response.enrichmentEvidence?.map(\.sourceID) ?? [])
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Rosalind"
+    ))
+    let aliases = try await database.knowledgeAliases(entityID: entity.id)
+    let meetingLinks = try await database.knowledgeMeetingLinks(entityID: entity.id)
+
+    #expect(job.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(Set(job.selectedSources).isSuperset(of: ["barnowl_memory", "collin_os"]))
+    #expect(sourceIDs.contains("barnowl_memory"))
+    #expect(sourceIDs.contains("collin_os"))
+    #expect(entity.summary?.contains("Internal launch workstream") == true)
+    #expect(Set(aliases.map(\.alias)) == ["Rosalind"])
+    #expect(Set(meetingLinks.map(\.meetingID)) == Set([
+        UUID(uuidString: "00000000-0000-0000-0000-00000000E201")!,
+        UUID(uuidString: "00000000-0000-0000-0000-00000000E202")!
+    ]))
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-00000000E211")!,
+        title: "Moderna Account Review",
+        summary: MeetingSummary(overview: "Moderna coverage planning and follow-up.")
+    ))
+
+    let updatedPublicSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "public_web",
+        sourceDisplayName: "Internet References",
+        sourceType: "public_reference",
+        enabled: true,
+        scope: "public",
+        authorityProfile: "public_reference",
+        bestUsedFor: ["public companies", "public products"],
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Moderna"],
+              "candidateKind": "company",
+              "canonicalName": "Moderna",
+              "summary": "Public biotechnology company.",
+              "confidence": 0.91,
+              "citations": ["public:companies/moderna"],
+              "freshness": "recent"
+            }
+          ]
+        }
+        """,
+        authState: "not_required",
+        healthStatus: "ready"
+    ))
+    #expect(updatedPublicSource.ok)
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Moderna", limit: 8)
+    let job = try #require(response.enrichmentJobs?.first)
+    let evidenceSourceIDs = Set(response.enrichmentEvidence?.map(\.sourceID) ?? [])
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "company",
+        canonicalName: "Moderna"
+    ))
+
+    #expect(job.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(Set(job.selectedSources).isSuperset(of: ["barnowl_memory", "public_web"]))
+    #expect(evidenceSourceIDs.isSuperset(of: ["barnowl_memory", "public_web"]))
+    #expect(entity.summary?.contains("biotechnology") == true)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichHoldsPublicOnlyPrivateTruth() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let updatedPublicSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "public_web",
+        sourceDisplayName: "Internet References",
+        sourceType: "public_reference",
+        enabled: true,
+        scope: "public",
+        authorityProfile: "public_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Weak public result claims this is a project.",
+              "confidence": 0.83,
+              "citations": ["public:results/rosalind-1"]
+            },
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Another weak public result claims this is a project.",
+              "confidence": 0.81,
+              "citations": ["public:results/rosalind-2"]
+            }
+          ]
+        }
+        """,
+        authState: "not_required",
+        healthStatus: "ready"
+    ))
+    #expect(updatedPublicSource.ok)
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let job = try #require(response.enrichmentJobs?.first)
+    let entity = try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind")
+
+    #expect(job.status == BarnOwlEnrichmentJobStatus.heldInsufficientEvidence.rawValue)
+    #expect(job.rationale?.contains("public-only evidence") == true)
+    #expect(entity == nil)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let projectSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "citations": ["collin-os:projects/rosalind"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    let personSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "workspace_glossary",
+        sourceDisplayName: "Workspace Glossary",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "workspace_private",
+        authorityProfile: "workspace_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "person",
+              "canonicalName": "Rosalind Chen",
+              "summary": "Workspace directory person entry.",
+              "citations": ["workspace:people/rosalind-chen"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    #expect(projectSource.ok)
+    #expect(personSource.ok)
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let job = try #require(response.enrichmentJobs?.first)
+    let storedEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
+    let conflicts = try await database.enrichmentConflicts(ownerID: "collin")
+    let collinUsefulness = try #require(await database.enrichmentSourceUsefulness(ownerID: "collin", sourceID: "collin_os"))
+
+    #expect(job.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
+    #expect(job.rationale?.contains("blocked") == true)
+    #expect(storedEvidence.count == 2)
+    #expect(storedEvidence.filter(\.acceptedByAdjudicator).isEmpty)
+    #expect(conflicts.first?.jobID == job.id)
+    #expect(Set(conflicts.first?.conflictingSourceIDs ?? []) == Set(["collin_os", "workspace_glossary"]))
+    #expect(collinUsefulness.attempts == 1)
+    #expect(collinUsefulness.conflictingJobs == 1)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "citations": ["collin-os:projects/rosalind"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "workspace_glossary",
+        sourceDisplayName: "Workspace Glossary",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "workspace_private",
+        authorityProfile: "workspace_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "person",
+              "canonicalName": "Rosalind Chen",
+              "summary": "Workspace directory person entry.",
+              "citations": ["workspace:people/rosalind-chen"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    let initialConflict = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    #expect(initialConflict.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
+
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "citations": ["collin-os:projects/rosalind:a"]
+            },
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Same internal project corroborated by a second Collin OS record.",
+              "citations": ["collin-os:projects/rosalind:b"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    _ = await model.controlEnrichmentSourceEnabledResponse(sourceID: "workspace_glossary", enabled: false)
+
+    let followUp = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let followUpJob = try #require(followUp.enrichmentJobs?.first)
+    let conceptHistory = try #require(followUp.enrichmentConceptHistories?.first)
+    let entity = try await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Rosalind"
+    )
+
+    #expect(followUpJob.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
+    #expect(followUpJob.rationale?.contains("prior conflicting job") == true)
+    #expect(conceptHistory.conceptKey == "Rosalind")
+    #expect(conceptHistory.conflictingJobs >= 1)
+    #expect(conceptHistory.requiresConflictMemoryHold)
+    #expect(entity == nil)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurableKnowledge() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "confidence": 0.96,
+              "citations": ["collin-os:projects/rosalind:a"]
+            },
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Same project from a second private record.",
+              "confidence": 0.94,
+              "citations": ["collin-os:projects/rosalind:b"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+
+    let accepted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    #expect(accepted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Rosalind"
+    ))
+    let originalConfidence = entity.confidence
+
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "workspace_glossary",
+        sourceDisplayName: "Workspace Glossary",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "workspace_private",
+        authorityProfile: "workspace_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "person",
+              "canonicalName": "Rosalind Chen",
+              "summary": "Conflicting workspace people result.",
+              "confidence": 0.91,
+              "citations": ["workspace:people/rosalind-chen"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+
+    let conflicted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    #expect(conflicted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
+    let decayed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    #expect(decayed.lifecycleStatus == .active)
+    #expect(abs(decayed.confidence - max(0.05, originalConfidence - 0.15)) < 0.0001)
+
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "workspace_glossary",
+        sourceDisplayName: "Workspace Glossary",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "workspace_private",
+        authorityProfile: "workspace_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Explicit private correction rejecting this durable mapping.",
+              "confidence": 0.93,
+              "citations": ["workspace:corrections/rosalind"],
+              "negativeEvidence": true
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+
+    let reversed = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    #expect(reversed.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
+    let suppressed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    #expect(suppressed.lifecycleStatus == .suppressed)
+    #expect(suppressed.lifecycleReason?.contains("Automatically suppressed") == true)
+    #expect(try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind") == nil)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurableKnowledge() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "confidence": 0.96,
+              "citations": ["collin-os:projects/rosalind:a"]
+            },
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Same project from a second private record.",
+              "confidence": 0.94,
+              "citations": ["collin-os:projects/rosalind:b"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    let accepted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    #expect(accepted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Rosalind"
+    ))
+
+    _ = await model.controlEnrichmentSourceEnabledResponse(sourceID: "collin_os", enabled: false)
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "public_reference",
+        sourceDisplayName: "Public Reference",
+        sourceType: "public_reference",
+        enabled: true,
+        scope: "public",
+        authorityProfile: "public_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Weak public contradiction.",
+              "confidence": 0.82,
+              "citations": ["public:results/rosalind-contradiction"],
+              "negativeEvidence": true
+            }
+          ]
+        }
+        """,
+        authState: "not_required",
+        healthStatus: "ready"
+    ))
+
+    let contradicted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    #expect(contradicted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
+    let preserved = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    #expect(preserved.lifecycleStatus == .active)
+    #expect(try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind") != nil)
+}
+
+@Test
+@MainActor
+func controlKnowledgeJobsListIncludesRecentConceptHistory() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "citations": ["collin-os:projects/rosalind:a"]
+            },
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project duplicate evidence.",
+              "citations": ["collin-os:projects/rosalind:b"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+
+    _ = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let response = await model.controlKnowledgeJobsListResponse(limit: 10)
+    let history = try #require(response.enrichmentConceptHistories?.first)
+
+    #expect(response.enrichmentJobs?.isEmpty == false)
+    #expect(history.conceptKey == "Rosalind")
+    #expect(history.supportedCandidateJobs == 1)
+    #expect(history.requiresConflictMemoryHold == false)
+}
+
+@Test
+@MainActor
+func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "collin_os",
+        sourceDisplayName: "Collin OS",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "collin_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project.",
+              "confidence": 0.82,
+              "citations": ["collin-os:projects/rosalind:a"]
+            },
+            {
+              "matchTerms": ["Rosalind"],
+              "candidateKind": "project",
+              "canonicalName": "Rosalind",
+              "summary": "Internal project duplicate evidence.",
+              "confidence": 0.80,
+              "citations": ["collin-os:projects/rosalind:b"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    #expect(created.ok)
+
+    let first = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let firstEntity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Rosalind"
+    ))
+    let second = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let secondEntity = try #require(await database.knowledgeEntity(
+        ownerID: "collin",
+        kind: "project",
+        canonicalName: "Rosalind"
+    ))
+
+    #expect(first.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(second.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(firstEntity.confidence == 0.82)
+    #expect(secondEntity.confidence == 0.84)
+}
+
+@Test
+func publicReferenceResearchAdapterNormalizesLiveCompanyEvidence() async throws {
+    let transport = CapturingReferenceTransport(
+        body: """
+        {
+          "search": [
+            {
+              "id": "Q899",
+              "label": "Moderna",
+              "description": "American biotechnology company",
+              "concepturi": "https://www.wikidata.org/wiki/Q899"
+            }
+          ]
+        }
+        """
+    )
+    let adapter = BarnOwlPublicReferenceResearchAdapter(
+        sourceID: "public_web",
+        transport: transport,
+        baseURL: URL(string: "https://reference.example.test/w/api.php")!
+    )
+    let source = BarnOwlEnrichmentSourceDescriptor(
+        id: "public_web",
+        displayName: "Internet References",
+        sourceType: "public_reference",
+        scope: .publicReference,
+        authorityProfile: "public_reference"
+    )
+
+    let result = try await adapter.enrich(
+        request: BarnOwlEnrichmentSourceRequest(
+            conceptKey: "Moderna",
+            limit: 4,
+            requestedAt: Date(timeIntervalSince1970: 1_800_000_100)
+        ),
+        source: source
+    )
+    let request = try #require(await transport.latestRequest)
+    let evidence = try #require(result.evidence.first)
+
+    #expect(request.url?.absoluteString.contains("search=Moderna") == true)
+    #expect(evidence.candidateKind == "company")
+    #expect(evidence.canonicalName == "Moderna")
+    #expect(evidence.scope == .publicReference)
+    #expect(evidence.citations == ["https://www.wikidata.org/wiki/Q899"])
+}
+
+@Test
+func collinOSReferenceAdapterNormalizesLiveRecallEvidence() async throws {
+    let runner = CapturingCollinOSCommandRunner(
+        stdout: """
+        {
+          "status": "read",
+          "response": {
+            "answer_packet": {
+              "evidence": [
+                {
+                  "kind": "project",
+                  "title": "Rosalind",
+                  "summary": "Internal launch workstream for Life Sciences."
+                }
+              ]
+            },
+            "recall_digest": {
+              "source_health_state": "fresh"
+            },
+            "trust_summary": {
+              "posture": "ready",
+              "summary": "Scoped internal recall is source-backed."
+            },
+            "operator_decision": {
+              "downstream_reuse_allowed": true
+            }
+          }
+        }
+        """
+    )
+    let adapter = BarnOwlCollinOSReferenceAdapter(
+        sourceID: "collin_os",
+        commandRunner: runner
+    )
+    let source = BarnOwlEnrichmentSourceDescriptor(
+        id: "collin_os",
+        displayName: "Collin OS",
+        sourceType: "internal_memory",
+        scope: .personalPrivate,
+        authorityProfile: "collin_internal_reference"
+    )
+
+    let result = try await adapter.enrich(
+        request: BarnOwlEnrichmentSourceRequest(
+            conceptKey: "Rosalind",
+            limit: 3,
+            requestedAt: Date(timeIntervalSince1970: 1_800_000_200)
+        ),
+        source: source
+    )
+    let arguments = try #require(await runner.latestArguments)
+    let evidence = try #require(result.evidence.first)
+
+    #expect(arguments.contains("recall"))
+    #expect(arguments.contains("Rosalind"))
+    #expect(evidence.candidateKind == "project")
+    #expect(evidence.canonicalName == "Rosalind")
+    #expect(evidence.summary.contains("Internal launch workstream"))
+    #expect(evidence.scope == .personalPrivate)
+    #expect(result.caveats.isEmpty)
+}
+
+@Test
+func collinOSReferenceAdapterPreservesBlockedAuthAsCaveat() async throws {
+    let runner = CapturingCollinOSCommandRunner(
+        stdout: """
+        {
+          "status": "blocked",
+          "blocker": "missing environment variable COLLIN_CONTEXT_WRITE_TOKEN or authenticated user context"
+        }
+        """
+    )
+    let adapter = BarnOwlCollinOSReferenceAdapter(
+        sourceID: "collin_os",
+        commandRunner: runner
+    )
+    let source = BarnOwlEnrichmentSourceDescriptor(
+        id: "collin_os",
+        displayName: "Collin OS",
+        sourceType: "internal_memory",
+        scope: .personalPrivate,
+        authorityProfile: "collin_internal_reference"
+    )
+
+    let result = try await adapter.enrich(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 3),
+        source: source
+    )
+
+    #expect(result.evidence.isEmpty)
+    #expect(result.caveats.first?.contains("missing environment variable") == true)
+}
+
+@Test
 func controlResponseSuggestsSlackFeedbackOnlyForNonOwnerErrors() {
     #expect(BarnOwlAppModel.shouldSuggestSlackFeedback(
         ok: false,
@@ -576,6 +1570,48 @@ func controlResponseSuggestsSlackFeedbackOnlyForNonOwnerErrors() {
         currentUsername: "teammate",
         ownerUsername: "burdick"
     ))
+}
+
+private actor CapturingReferenceTransport: OpenAIHTTPTransport {
+    private let body: Data
+    private(set) var latestRequest: URLRequest?
+
+    init(body: String) {
+        self.body = Data(body.utf8)
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        latestRequest = request
+        let response = HTTPURLResponse(
+            url: request.url ?? URL(string: "https://reference.example.test")!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        return (body, response)
+    }
+}
+
+private actor CapturingCollinOSCommandRunner: BarnOwlCommandRunning {
+    private let stdout: Data
+    private(set) var latestArguments: [String]?
+
+    init(stdout: String) {
+        self.stdout = Data(stdout.utf8)
+    }
+
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]?
+    ) async throws -> BarnOwlCommandResult {
+        latestArguments = arguments
+        return BarnOwlCommandResult(
+            standardOutput: stdout,
+            standardError: Data(),
+            terminationStatus: 0
+        )
+    }
 }
 
 @Test
@@ -1653,6 +2689,34 @@ func meetingFactsExtractorIgnoresSpeakerLabelsAndLowercaseNoiseOrganizations() {
 }
 
 @Test
+func meetingFactsExtractorUsesAcceptedDurableKnowledgeMarkersForProjects() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: "Dana: Rosalind came up again in the pricing discussion.",
+        freeformContext: "Known project: Rosalind. Internal launch workstream referenced in account and pricing discussions."
+    )
+
+    #expect(facts.projects == ["Rosalind"])
+    #expect(facts.additionalContext.contains {
+        $0.contains("Known project: Rosalind")
+    })
+}
+
+@Test
+func recurringConceptCandidatesExtractStandaloneAndMultiwordConceptsWithoutSpeakerLabels() {
+    let candidates = BarnOwlAppModel.recurringConceptCandidates(
+        in: """
+        Room Speaker A: Rosalind came up again during pricing review.
+        Call Speaker B: We also revisited Moderna Life Sciences coverage.
+        """
+    )
+
+    #expect(candidates.contains("Rosalind"))
+    #expect(candidates.contains("Moderna Life Sciences"))
+    #expect(!candidates.contains("Room Speaker"))
+    #expect(!candidates.contains("Call Speaker"))
+}
+
+@Test
 func contextPromptGeneratorOnlyAsksUsefulQuestions() {
     let lowConfidenceFacts = MeetingFactsExtractor().extract(
         transcript: "SG came up again. SG needs an owner. someone should follow up."
@@ -1686,7 +2750,10 @@ private func makeActivityItem(message: String, timestamp: Date) -> BarnOwlActivi
 }
 
 @MainActor
-private func makeQuickCommandTestModel(database: BarnOwlDatabase) throws -> BarnOwlAppModel {
+private func makeQuickCommandTestModel(
+    database: BarnOwlDatabase,
+    enrichmentOwnerID: String = "test-user"
+) throws -> BarnOwlAppModel {
     let libraryRoot = FileManager.default.temporaryDirectory
         .appending(path: "BarnOwlQuickCommandTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
@@ -1702,6 +2769,7 @@ private func makeQuickCommandTestModel(database: BarnOwlDatabase) throws -> Barn
             FilesystemLocalLibraryStore(rootDirectory: libraryRoot)
         },
         makeDatabase: { database },
+        currentEnrichmentOwnerID: { enrichmentOwnerID },
         diagnosticsStore: DiagnosticsLogStore(rootDirectory: libraryRoot.appending(path: "Diagnostics", directoryHint: .isDirectory))
     )
 }

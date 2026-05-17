@@ -749,6 +749,435 @@ public struct BarnOwlExternalContextItemRecord: Equatable, Identifiable, Sendabl
     }
 }
 
+public struct BarnOwlEnrichmentSourceRecord: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var ownerID: String
+    public var displayName: String
+    public var sourceType: String
+    public var enabled: Bool
+    public var scope: BarnOwlEnrichmentSourceScope
+    public var authorityProfile: String
+    public var bestUsedFor: [String]
+    public var configJSON: String?
+    public var authState: BarnOwlEnrichmentSourceAuthState
+    public var healthStatus: BarnOwlEnrichmentSourceHealthStatus
+    public var healthDetail: String?
+    public var lastCheckedAt: Date?
+    public var lastSuccessfulCheckAt: Date?
+    public var lastFailedCheckAt: Date?
+    public var connectorReference: String?
+    public var privacyCopyPolicy: String?
+    public var queryBudgetPolicy: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: String,
+        ownerID: String,
+        displayName: String,
+        sourceType: String,
+        enabled: Bool = true,
+        scope: BarnOwlEnrichmentSourceScope,
+        authorityProfile: String,
+        bestUsedFor: [String] = [],
+        configJSON: String? = nil,
+        authState: BarnOwlEnrichmentSourceAuthState = .notRequired,
+        healthStatus: BarnOwlEnrichmentSourceHealthStatus = .ready,
+        healthDetail: String? = nil,
+        lastCheckedAt: Date? = nil,
+        lastSuccessfulCheckAt: Date? = nil,
+        lastFailedCheckAt: Date? = nil,
+        connectorReference: String? = nil,
+        privacyCopyPolicy: String? = nil,
+        queryBudgetPolicy: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.displayName = displayName
+        self.sourceType = sourceType
+        self.enabled = enabled
+        self.scope = scope
+        self.authorityProfile = authorityProfile
+        self.bestUsedFor = bestUsedFor
+        self.configJSON = configJSON
+        self.authState = authState
+        self.healthStatus = healthStatus
+        self.healthDetail = healthDetail
+        self.lastCheckedAt = lastCheckedAt
+        self.lastSuccessfulCheckAt = lastSuccessfulCheckAt
+        self.lastFailedCheckAt = lastFailedCheckAt
+        self.connectorReference = connectorReference
+        self.privacyCopyPolicy = privacyCopyPolicy
+        self.queryBudgetPolicy = queryBudgetPolicy
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public var descriptor: BarnOwlEnrichmentSourceDescriptor {
+        BarnOwlEnrichmentSourceDescriptor(
+            id: id,
+            displayName: displayName,
+            sourceType: sourceType,
+            scope: scope,
+            authorityProfile: authorityProfile,
+            bestUsedFor: bestUsedFor,
+            configJSON: configJSON
+        )
+    }
+
+    public static func encodeBestUsedFor(_ values: [String]) -> String? {
+        guard !values.isEmpty,
+              let data = try? JSONEncoder().encode(values),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
+    }
+
+    public static func decodeBestUsedFor(_ json: String?) -> [String] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return values
+    }
+}
+
+public struct BarnOwlEnrichmentAuthorityProfileRecord: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var ownerID: String
+    public var displayName: String
+    public var description: String
+    public var strongestEntityKinds: [String]
+    public var weakestEntityKinds: [String]
+    public var defaultWeight: Double
+    public var autoPersistPolicyJSON: String?
+    public var builtIn: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: String,
+        ownerID: String,
+        displayName: String,
+        description: String,
+        strongestEntityKinds: [String] = [],
+        weakestEntityKinds: [String] = [],
+        defaultWeight: Double,
+        autoPersistPolicyJSON: String? = nil,
+        builtIn: Bool = false,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.displayName = displayName
+        self.description = description
+        self.strongestEntityKinds = strongestEntityKinds
+        self.weakestEntityKinds = weakestEntityKinds
+        self.defaultWeight = defaultWeight
+        self.autoPersistPolicyJSON = autoPersistPolicyJSON
+        self.builtIn = builtIn
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func encodeEntityKinds(_ values: [String]) -> String? {
+        guard !values.isEmpty,
+              let data = try? JSONEncoder().encode(values),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
+    }
+
+    public static func decodeEntityKinds(_ json: String?) -> [String] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return values
+    }
+}
+
+public struct BarnOwlEnrichmentPolicyPackRecord: Equatable, Identifiable, Sendable {
+    public var id: String
+    public var ownerID: String
+    public var displayName: String
+    public var description: String
+    public var minimumSupportingEvidenceCount: Int
+    public var minimumIndependentSourceCountAfterConflictMemory: Int
+    public var active: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: String,
+        ownerID: String,
+        displayName: String,
+        description: String,
+        minimumSupportingEvidenceCount: Int,
+        minimumIndependentSourceCountAfterConflictMemory: Int,
+        active: Bool,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.displayName = displayName
+        self.description = description
+        self.minimumSupportingEvidenceCount = max(1, minimumSupportingEvidenceCount)
+        self.minimumIndependentSourceCountAfterConflictMemory = max(1, minimumIndependentSourceCountAfterConflictMemory)
+        self.active = active
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlEnrichmentJobRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var ownerID: String
+    public var conceptKey: String
+    public var requestedSources: [String]
+    public var selectedSources: [String]
+    public var status: BarnOwlEnrichmentJobStatus
+    public var summary: String
+    public var rationale: String?
+    public var failureReason: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+    public var startedAt: Date
+    public var finishedAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        ownerID: String,
+        conceptKey: String,
+        requestedSources: [String] = [],
+        selectedSources: [String] = [],
+        status: BarnOwlEnrichmentJobStatus,
+        summary: String,
+        rationale: String? = nil,
+        failureReason: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        startedAt: Date = Date(),
+        finishedAt: Date? = nil
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.conceptKey = conceptKey
+        self.requestedSources = requestedSources
+        self.selectedSources = selectedSources
+        self.status = status
+        self.summary = summary
+        self.rationale = rationale
+        self.failureReason = failureReason
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
+
+    public static func encodeSourceIDs(_ values: [String]) -> String? {
+        guard !values.isEmpty,
+              let data = try? JSONEncoder().encode(values),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
+    }
+
+    public static func decodeSourceIDs(_ json: String?) -> [String] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return values
+    }
+}
+
+public struct BarnOwlEnrichmentJobEvidenceRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var jobID: UUID
+    public var sourceID: String
+    public var evidenceJSON: String
+    public var acceptedByAdjudicator: Bool
+    public var createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        jobID: UUID,
+        sourceID: String,
+        evidenceJSON: String,
+        acceptedByAdjudicator: Bool,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.jobID = jobID
+        self.sourceID = sourceID
+        self.evidenceJSON = evidenceJSON
+        self.acceptedByAdjudicator = acceptedByAdjudicator
+        self.createdAt = createdAt
+    }
+
+    public var evidence: BarnOwlEnrichmentEvidenceRecord? {
+        Self.decodeEvidence(evidenceJSON)
+    }
+
+    public static func encodeEvidence(_ evidence: BarnOwlEnrichmentEvidenceRecord) -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try? encoder.encode(evidence)
+        return data.map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+    }
+
+    public static func decodeEvidence(_ json: String) -> BarnOwlEnrichmentEvidenceRecord? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return try? decoder.decode(BarnOwlEnrichmentEvidenceRecord.self, from: data)
+    }
+}
+
+public struct BarnOwlEnrichmentConflictRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var jobID: UUID
+    public var ownerID: String
+    public var conceptKey: String
+    public var summary: String
+    public var conflictingSourceIDs: [String]
+    public var createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        jobID: UUID,
+        ownerID: String,
+        conceptKey: String,
+        summary: String,
+        conflictingSourceIDs: [String],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.jobID = jobID
+        self.ownerID = ownerID
+        self.conceptKey = conceptKey
+        self.summary = summary
+        self.conflictingSourceIDs = conflictingSourceIDs
+        self.createdAt = createdAt
+    }
+
+    public static func encodeSourceIDs(_ values: [String]) -> String? {
+        guard !values.isEmpty,
+              let data = try? JSONEncoder().encode(values),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
+    }
+
+    public static func decodeSourceIDs(_ json: String?) -> [String] {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return values
+    }
+}
+
+public struct BarnOwlEnrichmentSourceUsefulnessRecord: Equatable, Identifiable, Sendable {
+    public var id: String { "\(ownerID):\(sourceID)" }
+    public var ownerID: String
+    public var sourceID: String
+    public var attempts: Int
+    public var evidenceItems: Int
+    public var acceptedEvidenceItems: Int
+    public var supportedJobs: Int
+    public var heldJobs: Int
+    public var conflictingJobs: Int
+    public var failedJobs: Int
+    public var lastOutcomeStatus: BarnOwlEnrichmentJobStatus?
+    public var lastContributedAt: Date?
+    public var updatedAt: Date
+
+    public init(
+        ownerID: String,
+        sourceID: String,
+        attempts: Int = 0,
+        evidenceItems: Int = 0,
+        acceptedEvidenceItems: Int = 0,
+        supportedJobs: Int = 0,
+        heldJobs: Int = 0,
+        conflictingJobs: Int = 0,
+        failedJobs: Int = 0,
+        lastOutcomeStatus: BarnOwlEnrichmentJobStatus? = nil,
+        lastContributedAt: Date? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.ownerID = ownerID
+        self.sourceID = sourceID
+        self.attempts = max(0, attempts)
+        self.evidenceItems = max(0, evidenceItems)
+        self.acceptedEvidenceItems = max(0, acceptedEvidenceItems)
+        self.supportedJobs = max(0, supportedJobs)
+        self.heldJobs = max(0, heldJobs)
+        self.conflictingJobs = max(0, conflictingJobs)
+        self.failedJobs = max(0, failedJobs)
+        self.lastOutcomeStatus = lastOutcomeStatus
+        self.lastContributedAt = lastContributedAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlKnowledgeApplicationRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var ownerID: String
+    public var entityID: UUID
+    public var meetingID: UUID
+    public var surface: String
+    public var usedInSummaryGeneration: Bool
+    public var usedInNoteGeneration: Bool
+    public var influencedMeetingFacts: Bool
+    public var createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        ownerID: String,
+        entityID: UUID,
+        meetingID: UUID,
+        surface: String,
+        usedInSummaryGeneration: Bool = false,
+        usedInNoteGeneration: Bool = false,
+        influencedMeetingFacts: Bool,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.entityID = entityID
+        self.meetingID = meetingID
+        self.surface = surface
+        self.usedInSummaryGeneration = usedInSummaryGeneration
+        self.usedInNoteGeneration = usedInNoteGeneration
+        self.influencedMeetingFacts = influencedMeetingFacts
+        self.createdAt = createdAt
+    }
+}
+
 public enum BarnOwlMeetingVersionActor: String, Codable, Equatable, Sendable {
     case user
     case ai
@@ -917,5 +1346,122 @@ public struct BarnOwlDatabaseSearchResult: Equatable, Identifiable, Sendable {
         self.score = score
         self.meetingType = meetingType
         self.status = status
+    }
+}
+
+public enum BarnOwlKnowledgeEntityLifecycleStatus: String, Codable, CaseIterable, Equatable, Sendable {
+    case active
+    case suppressed
+}
+
+public struct BarnOwlKnowledgeEntityRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var ownerID: String
+    public var kind: String
+    public var canonicalName: String
+    public var normalizedCanonicalName: String
+    public var summary: String?
+    public var confidence: Double
+    public var sourceJobID: UUID?
+    public var lifecycleStatus: BarnOwlKnowledgeEntityLifecycleStatus
+    public var lifecycleReason: String?
+    public var lifecycleUpdatedAt: Date?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        ownerID: String,
+        kind: String,
+        canonicalName: String,
+        normalizedCanonicalName: String? = nil,
+        summary: String? = nil,
+        confidence: Double,
+        sourceJobID: UUID? = nil,
+        lifecycleStatus: BarnOwlKnowledgeEntityLifecycleStatus = .active,
+        lifecycleReason: String? = nil,
+        lifecycleUpdatedAt: Date? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.kind = kind
+        self.canonicalName = canonicalName
+        self.normalizedCanonicalName = normalizedCanonicalName ?? Self.normalized(canonicalName)
+        self.summary = summary
+        self.confidence = min(max(confidence, 0), 1)
+        self.sourceJobID = sourceJobID
+        self.lifecycleStatus = lifecycleStatus
+        self.lifecycleReason = lifecycleReason
+        self.lifecycleUpdatedAt = lifecycleUpdatedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+}
+
+public struct BarnOwlKnowledgeAliasRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var ownerID: String
+    public var entityID: UUID
+    public var alias: String
+    public var normalizedAlias: String
+    public var confidence: Double
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        ownerID: String,
+        entityID: UUID,
+        alias: String,
+        normalizedAlias: String? = nil,
+        confidence: Double,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.entityID = entityID
+        self.alias = alias
+        self.normalizedAlias = normalizedAlias ?? BarnOwlKnowledgeEntityRecord.normalized(alias)
+        self.confidence = min(max(confidence, 0), 1)
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlKnowledgeMeetingLinkRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var ownerID: String
+    public var entityID: UUID
+    public var meetingID: UUID
+    public var evidenceJobID: UUID?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        ownerID: String,
+        entityID: UUID,
+        meetingID: UUID,
+        evidenceJobID: UUID? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.entityID = entityID
+        self.meetingID = meetingID
+        self.evidenceJobID = evidenceJobID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

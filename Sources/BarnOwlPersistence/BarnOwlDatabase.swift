@@ -24,7 +24,7 @@ public enum BarnOwlDatabaseError: Error, Equatable, Sendable {
 }
 
 public actor BarnOwlDatabase {
-    public static let latestSchemaVersion = 5
+    public static let latestSchemaVersion = 13
 
     private let url: URL
     private let database: SQLiteDatabaseHandle
@@ -969,6 +969,963 @@ public actor BarnOwlDatabase {
         }
     }
 
+    public func seedDefaultEnrichmentSources(ownerID: String, now: Date = Date()) throws {
+        let defaults = Self.defaultEnrichmentSources(ownerID: ownerID, now: now)
+        for source in defaults where try enrichmentSource(ownerID: ownerID, id: source.id) == nil {
+            try upsertEnrichmentSource(source)
+        }
+        try seedDefaultEnrichmentAuthorityProfiles(ownerID: ownerID, now: now)
+        try seedDefaultEnrichmentPolicyPacks(ownerID: ownerID, now: now)
+    }
+
+    public func upsertEnrichmentSource(_ source: BarnOwlEnrichmentSourceRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO enrichment_sources (
+                owner_id, id, display_name, source_type, enabled, scope, authority_profile,
+                best_used_for_json, config_json, auth_state, health_status, health_detail,
+                last_checked_at, last_successful_check_at, last_failed_check_at,
+                connector_reference, privacy_copy_policy, query_budget_policy,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, id) DO UPDATE SET
+                display_name = excluded.display_name,
+                source_type = excluded.source_type,
+                enabled = excluded.enabled,
+                scope = excluded.scope,
+                authority_profile = excluded.authority_profile,
+                best_used_for_json = excluded.best_used_for_json,
+                config_json = excluded.config_json,
+                auth_state = excluded.auth_state,
+                health_status = excluded.health_status,
+                health_detail = excluded.health_detail,
+                last_checked_at = excluded.last_checked_at,
+                last_successful_check_at = excluded.last_successful_check_at,
+                last_failed_check_at = excluded.last_failed_check_at,
+                connector_reference = excluded.connector_reference,
+                privacy_copy_policy = excluded.privacy_copy_policy,
+                query_budget_policy = excluded.query_budget_policy,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(source.ownerID, at: 1, in: statement, sql: sql)
+            try bind(source.id, at: 2, in: statement, sql: sql)
+            try bind(source.displayName, at: 3, in: statement, sql: sql)
+            try bind(source.sourceType, at: 4, in: statement, sql: sql)
+            try bind(source.enabled ? 1 : 0, at: 5, in: statement, sql: sql)
+            try bind(source.scope.rawValue, at: 6, in: statement, sql: sql)
+            try bind(source.authorityProfile, at: 7, in: statement, sql: sql)
+            try bind(BarnOwlEnrichmentSourceRecord.encodeBestUsedFor(source.bestUsedFor), at: 8, in: statement, sql: sql)
+            try bind(source.configJSON, at: 9, in: statement, sql: sql)
+            try bind(source.authState.rawValue, at: 10, in: statement, sql: sql)
+            try bind(source.healthStatus.rawValue, at: 11, in: statement, sql: sql)
+            try bind(source.healthDetail, at: 12, in: statement, sql: sql)
+            try bind(source.lastCheckedAt, at: 13, in: statement, sql: sql)
+            try bind(source.lastSuccessfulCheckAt, at: 14, in: statement, sql: sql)
+            try bind(source.lastFailedCheckAt, at: 15, in: statement, sql: sql)
+            try bind(source.connectorReference, at: 16, in: statement, sql: sql)
+            try bind(source.privacyCopyPolicy, at: 17, in: statement, sql: sql)
+            try bind(source.queryBudgetPolicy, at: 18, in: statement, sql: sql)
+            try bind(source.createdAt, at: 19, in: statement, sql: sql)
+            try bind(source.updatedAt, at: 20, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func enrichmentSource(ownerID: String, id: String) throws -> BarnOwlEnrichmentSourceRecord? {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, source_type, enabled, scope, authority_profile,
+                   best_used_for_json, config_json, auth_state, health_status, health_detail,
+                   last_checked_at, last_successful_check_at, last_failed_check_at,
+                   connector_reference, privacy_copy_policy, query_budget_policy,
+                   created_at, updated_at
+            FROM enrichment_sources
+            WHERE owner_id = ? AND id = ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(id, at: 2, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readEnrichmentSource(statement)
+        }
+    }
+
+    public func enrichmentSources(ownerID: String) throws -> [BarnOwlEnrichmentSourceRecord] {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, source_type, enabled, scope, authority_profile,
+                   best_used_for_json, config_json, auth_state, health_status, health_detail,
+                   last_checked_at, last_successful_check_at, last_failed_check_at,
+                   connector_reference, privacy_copy_policy, query_budget_policy,
+                   created_at, updated_at
+            FROM enrichment_sources
+            WHERE owner_id = ?
+            ORDER BY display_name COLLATE NOCASE ASC, id ASC
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentSource)
+        }
+    }
+
+    public func setEnrichmentSourceEnabled(
+        ownerID: String,
+        id: String,
+        enabled: Bool,
+        updatedAt: Date = Date()
+    ) throws -> BarnOwlEnrichmentSourceRecord? {
+        guard var source = try enrichmentSource(ownerID: ownerID, id: id) else {
+            return nil
+        }
+        source.enabled = enabled
+        if enabled, source.healthStatus == .disabled {
+            source.healthStatus = source.authState == .needsAuthentication ? .needsAuth : .ready
+        } else if !enabled {
+            source.healthStatus = .disabled
+        }
+        source.updatedAt = updatedAt
+        try upsertEnrichmentSource(source)
+        return source
+    }
+
+    public func deleteEnrichmentSource(ownerID: String, id: String) throws {
+        try withStatement("DELETE FROM enrichment_sources WHERE owner_id = ? AND id = ?") { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(id, at: 2, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func seedDefaultEnrichmentAuthorityProfiles(ownerID: String, now: Date = Date()) throws {
+        let defaults = Self.defaultEnrichmentAuthorityProfiles(ownerID: ownerID, now: now)
+        for profile in defaults where try enrichmentAuthorityProfile(ownerID: ownerID, id: profile.id) == nil {
+            try upsertEnrichmentAuthorityProfile(profile)
+        }
+    }
+
+    public func upsertEnrichmentAuthorityProfile(_ profile: BarnOwlEnrichmentAuthorityProfileRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO enrichment_authority_profiles (
+                owner_id, id, display_name, description, strongest_entity_kinds_json,
+                weakest_entity_kinds_json, default_weight, auto_persist_policy_json,
+                built_in, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, id) DO UPDATE SET
+                display_name = excluded.display_name,
+                description = excluded.description,
+                strongest_entity_kinds_json = excluded.strongest_entity_kinds_json,
+                weakest_entity_kinds_json = excluded.weakest_entity_kinds_json,
+                default_weight = excluded.default_weight,
+                auto_persist_policy_json = excluded.auto_persist_policy_json,
+                built_in = excluded.built_in,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(profile.ownerID, at: 1, in: statement, sql: sql)
+            try bind(profile.id, at: 2, in: statement, sql: sql)
+            try bind(profile.displayName, at: 3, in: statement, sql: sql)
+            try bind(profile.description, at: 4, in: statement, sql: sql)
+            try bind(BarnOwlEnrichmentAuthorityProfileRecord.encodeEntityKinds(profile.strongestEntityKinds), at: 5, in: statement, sql: sql)
+            try bind(BarnOwlEnrichmentAuthorityProfileRecord.encodeEntityKinds(profile.weakestEntityKinds), at: 6, in: statement, sql: sql)
+            try bind(profile.defaultWeight, at: 7, in: statement, sql: sql)
+            try bind(profile.autoPersistPolicyJSON, at: 8, in: statement, sql: sql)
+            try bind(profile.builtIn ? 1 : 0, at: 9, in: statement, sql: sql)
+            try bind(profile.createdAt, at: 10, in: statement, sql: sql)
+            try bind(profile.updatedAt, at: 11, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func enrichmentAuthorityProfile(ownerID: String, id: String) throws -> BarnOwlEnrichmentAuthorityProfileRecord? {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, description, strongest_entity_kinds_json,
+                   weakest_entity_kinds_json, default_weight, auto_persist_policy_json,
+                   built_in, created_at, updated_at
+            FROM enrichment_authority_profiles
+            WHERE owner_id = ? AND id = ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(id, at: 2, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readEnrichmentAuthorityProfile(statement)
+        }
+    }
+
+    public func enrichmentAuthorityProfiles(ownerID: String) throws -> [BarnOwlEnrichmentAuthorityProfileRecord] {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, description, strongest_entity_kinds_json,
+                   weakest_entity_kinds_json, default_weight, auto_persist_policy_json,
+                   built_in, created_at, updated_at
+            FROM enrichment_authority_profiles
+            WHERE owner_id = ?
+            ORDER BY built_in DESC, display_name COLLATE NOCASE ASC, id ASC
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentAuthorityProfile)
+        }
+    }
+
+    public func seedDefaultEnrichmentPolicyPacks(ownerID: String, now: Date = Date()) throws {
+        let defaults = Self.defaultEnrichmentPolicyPacks(ownerID: ownerID, now: now)
+        for pack in defaults where try enrichmentPolicyPack(ownerID: ownerID, id: pack.id) == nil {
+            try upsertEnrichmentPolicyPack(pack)
+        }
+    }
+
+    public func upsertEnrichmentPolicyPack(_ pack: BarnOwlEnrichmentPolicyPackRecord) throws {
+        if pack.active {
+            try withStatement(
+                "UPDATE enrichment_policy_packs SET active = 0, updated_at = ? WHERE owner_id = ? AND id <> ?"
+            ) { statement, sql in
+                try bind(pack.updatedAt, at: 1, in: statement, sql: sql)
+                try bind(pack.ownerID, at: 2, in: statement, sql: sql)
+                try bind(pack.id, at: 3, in: statement, sql: sql)
+                try stepDone(statement, sql: sql)
+            }
+        }
+        try withStatement(
+            """
+            INSERT INTO enrichment_policy_packs (
+                owner_id, id, display_name, description, minimum_supporting_evidence_count,
+                minimum_independent_source_count_after_conflict_memory, active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, id) DO UPDATE SET
+                display_name = excluded.display_name,
+                description = excluded.description,
+                minimum_supporting_evidence_count = excluded.minimum_supporting_evidence_count,
+                minimum_independent_source_count_after_conflict_memory = excluded.minimum_independent_source_count_after_conflict_memory,
+                active = excluded.active,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(pack.ownerID, at: 1, in: statement, sql: sql)
+            try bind(pack.id, at: 2, in: statement, sql: sql)
+            try bind(pack.displayName, at: 3, in: statement, sql: sql)
+            try bind(pack.description, at: 4, in: statement, sql: sql)
+            try bind(pack.minimumSupportingEvidenceCount, at: 5, in: statement, sql: sql)
+            try bind(pack.minimumIndependentSourceCountAfterConflictMemory, at: 6, in: statement, sql: sql)
+            try bind(pack.active ? 1 : 0, at: 7, in: statement, sql: sql)
+            try bind(pack.createdAt, at: 8, in: statement, sql: sql)
+            try bind(pack.updatedAt, at: 9, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func enrichmentPolicyPack(ownerID: String, id: String) throws -> BarnOwlEnrichmentPolicyPackRecord? {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, description, minimum_supporting_evidence_count,
+                   minimum_independent_source_count_after_conflict_memory, active, created_at, updated_at
+            FROM enrichment_policy_packs
+            WHERE owner_id = ? AND id = ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(id, at: 2, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readEnrichmentPolicyPack(statement)
+        }
+    }
+
+    public func enrichmentPolicyPacks(ownerID: String) throws -> [BarnOwlEnrichmentPolicyPackRecord] {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, description, minimum_supporting_evidence_count,
+                   minimum_independent_source_count_after_conflict_memory, active, created_at, updated_at
+            FROM enrichment_policy_packs
+            WHERE owner_id = ?
+            ORDER BY active DESC, display_name COLLATE NOCASE ASC, id ASC
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentPolicyPack)
+        }
+    }
+
+    public func activeEnrichmentPolicyPack(ownerID: String) throws -> BarnOwlEnrichmentPolicyPackRecord? {
+        try withStatement(
+            """
+            SELECT owner_id, id, display_name, description, minimum_supporting_evidence_count,
+                   minimum_independent_source_count_after_conflict_memory, active, created_at, updated_at
+            FROM enrichment_policy_packs
+            WHERE owner_id = ? AND active = 1
+            ORDER BY updated_at DESC, id ASC
+            LIMIT 1
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readEnrichmentPolicyPack(statement)
+        }
+    }
+
+    public func upsertEnrichmentJob(_ job: BarnOwlEnrichmentJobRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO enrichment_jobs (
+                id, owner_id, concept_key, requested_sources_json, selected_sources_json,
+                status, summary, rationale, failure_reason, created_at, updated_at, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                owner_id = excluded.owner_id,
+                concept_key = excluded.concept_key,
+                requested_sources_json = excluded.requested_sources_json,
+                selected_sources_json = excluded.selected_sources_json,
+                status = excluded.status,
+                summary = excluded.summary,
+                rationale = excluded.rationale,
+                failure_reason = excluded.failure_reason,
+                updated_at = excluded.updated_at,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at
+            """
+        ) { statement, sql in
+            try bind(job.id, at: 1, in: statement, sql: sql)
+            try bind(job.ownerID, at: 2, in: statement, sql: sql)
+            try bind(job.conceptKey, at: 3, in: statement, sql: sql)
+            try bind(BarnOwlEnrichmentJobRecord.encodeSourceIDs(job.requestedSources), at: 4, in: statement, sql: sql)
+            try bind(BarnOwlEnrichmentJobRecord.encodeSourceIDs(job.selectedSources), at: 5, in: statement, sql: sql)
+            try bind(job.status.rawValue, at: 6, in: statement, sql: sql)
+            try bind(job.summary, at: 7, in: statement, sql: sql)
+            try bind(job.rationale, at: 8, in: statement, sql: sql)
+            try bind(job.failureReason, at: 9, in: statement, sql: sql)
+            try bind(job.createdAt, at: 10, in: statement, sql: sql)
+            try bind(job.updatedAt, at: 11, in: statement, sql: sql)
+            try bind(job.startedAt, at: 12, in: statement, sql: sql)
+            try bind(job.finishedAt, at: 13, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func enrichmentJob(id: UUID) throws -> BarnOwlEnrichmentJobRecord? {
+        try withStatement("SELECT * FROM enrichment_jobs WHERE id = ?") { statement, sql in
+            try bind(id, at: 1, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readEnrichmentJob(statement)
+        }
+    }
+
+    public func enrichmentJobs(ownerID: String, limit: Int = 50) throws -> [BarnOwlEnrichmentJobRecord] {
+        try withStatement(
+            """
+            SELECT * FROM enrichment_jobs
+            WHERE owner_id = ?
+            ORDER BY updated_at DESC, created_at DESC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentJob)
+        }
+    }
+
+    public func enrichmentJobs(
+        ownerID: String,
+        conceptKey: String,
+        limit: Int = 50
+    ) throws -> [BarnOwlEnrichmentJobRecord] {
+        try withStatement(
+            """
+            SELECT * FROM enrichment_jobs
+            WHERE owner_id = ? AND concept_key = ? COLLATE NOCASE
+            ORDER BY updated_at DESC, created_at DESC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(conceptKey, at: 2, in: statement, sql: sql)
+            try bind(max(0, limit), at: 3, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentJob)
+        }
+    }
+
+    public func upsertEnrichmentJobEvidence(_ evidence: BarnOwlEnrichmentJobEvidenceRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO enrichment_job_evidence (
+                id, job_id, source_id, normalized_evidence_json, accepted_by_adjudicator, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                job_id = excluded.job_id,
+                source_id = excluded.source_id,
+                normalized_evidence_json = excluded.normalized_evidence_json,
+                accepted_by_adjudicator = excluded.accepted_by_adjudicator,
+                created_at = excluded.created_at
+            """
+        ) { statement, sql in
+            try bind(evidence.id, at: 1, in: statement, sql: sql)
+            try bind(evidence.jobID, at: 2, in: statement, sql: sql)
+            try bind(evidence.sourceID, at: 3, in: statement, sql: sql)
+            try bind(evidence.evidenceJSON, at: 4, in: statement, sql: sql)
+            try bind(evidence.acceptedByAdjudicator ? 1 : 0, at: 5, in: statement, sql: sql)
+            try bind(evidence.createdAt, at: 6, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func enrichmentJobEvidence(jobID: UUID) throws -> [BarnOwlEnrichmentJobEvidenceRecord] {
+        try withStatement(
+            """
+            SELECT * FROM enrichment_job_evidence
+            WHERE job_id = ?
+            ORDER BY created_at ASC, id ASC
+            """
+        ) { statement, sql in
+            try bind(jobID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentJobEvidence)
+        }
+    }
+
+    public func upsertEnrichmentConflict(_ conflict: BarnOwlEnrichmentConflictRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO enrichment_conflicts (
+                id, job_id, owner_id, concept_key, summary, conflicting_source_ids_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                job_id = excluded.job_id,
+                owner_id = excluded.owner_id,
+                concept_key = excluded.concept_key,
+                summary = excluded.summary,
+                conflicting_source_ids_json = excluded.conflicting_source_ids_json,
+                created_at = excluded.created_at
+            """
+        ) { statement, sql in
+            try bind(conflict.id, at: 1, in: statement, sql: sql)
+            try bind(conflict.jobID, at: 2, in: statement, sql: sql)
+            try bind(conflict.ownerID, at: 3, in: statement, sql: sql)
+            try bind(conflict.conceptKey, at: 4, in: statement, sql: sql)
+            try bind(conflict.summary, at: 5, in: statement, sql: sql)
+            try bind(BarnOwlEnrichmentConflictRecord.encodeSourceIDs(conflict.conflictingSourceIDs), at: 6, in: statement, sql: sql)
+            try bind(conflict.createdAt, at: 7, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func enrichmentConflicts(ownerID: String, limit: Int = 50) throws -> [BarnOwlEnrichmentConflictRecord] {
+        try withStatement(
+            """
+            SELECT * FROM enrichment_conflicts
+            WHERE owner_id = ?
+            ORDER BY created_at DESC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentConflict)
+        }
+    }
+
+    public func enrichmentSourceUsefulness(
+        ownerID: String,
+        sourceID: String
+    ) throws -> BarnOwlEnrichmentSourceUsefulnessRecord? {
+        try withStatement(
+            """
+            SELECT * FROM enrichment_source_usefulness
+            WHERE owner_id = ? AND source_id = ?
+            LIMIT 1
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(sourceID, at: 2, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readEnrichmentSourceUsefulness(statement)
+        }
+    }
+
+    public func enrichmentSourceUsefulness(ownerID: String) throws -> [BarnOwlEnrichmentSourceUsefulnessRecord] {
+        try withStatement(
+            """
+            SELECT * FROM enrichment_source_usefulness
+            WHERE owner_id = ?
+            ORDER BY updated_at DESC, source_id ASC
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readEnrichmentSourceUsefulness)
+        }
+    }
+
+    public func recordEnrichmentSourceUsefulness(
+        ownerID: String,
+        sourceID: String,
+        status: BarnOwlEnrichmentJobStatus,
+        evidenceItemCount: Int,
+        acceptedEvidenceItemCount: Int,
+        contributedAt: Date? = nil,
+        updatedAt: Date = Date()
+    ) throws {
+        let existing = try enrichmentSourceUsefulness(ownerID: ownerID, sourceID: sourceID)
+            ?? BarnOwlEnrichmentSourceUsefulnessRecord(ownerID: ownerID, sourceID: sourceID, updatedAt: updatedAt)
+        let heldIncrement = status == .heldInsufficientEvidence
+            || status == .heldNoEligibleSources
+            || status == .heldConflictingEvidence
+        let next = BarnOwlEnrichmentSourceUsefulnessRecord(
+            ownerID: ownerID,
+            sourceID: sourceID,
+            attempts: existing.attempts + 1,
+            evidenceItems: existing.evidenceItems + max(0, evidenceItemCount),
+            acceptedEvidenceItems: existing.acceptedEvidenceItems + max(0, acceptedEvidenceItemCount),
+            supportedJobs: existing.supportedJobs + (status == .supportedCandidate ? 1 : 0),
+            heldJobs: existing.heldJobs + (heldIncrement ? 1 : 0),
+            conflictingJobs: existing.conflictingJobs + (status == .heldConflictingEvidence ? 1 : 0),
+            failedJobs: existing.failedJobs + (status == .failed ? 1 : 0),
+            lastOutcomeStatus: status,
+            lastContributedAt: contributedAt ?? existing.lastContributedAt,
+            updatedAt: updatedAt
+        )
+        try withStatement(
+            """
+            INSERT INTO enrichment_source_usefulness (
+                owner_id, source_id, attempts, evidence_items, accepted_evidence_items,
+                supported_jobs, held_jobs, conflicting_jobs, failed_jobs,
+                last_outcome_status, last_contributed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, source_id) DO UPDATE SET
+                attempts = excluded.attempts,
+                evidence_items = excluded.evidence_items,
+                accepted_evidence_items = excluded.accepted_evidence_items,
+                supported_jobs = excluded.supported_jobs,
+                held_jobs = excluded.held_jobs,
+                conflicting_jobs = excluded.conflicting_jobs,
+                failed_jobs = excluded.failed_jobs,
+                last_outcome_status = excluded.last_outcome_status,
+                last_contributed_at = excluded.last_contributed_at,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(next.ownerID, at: 1, in: statement, sql: sql)
+            try bind(next.sourceID, at: 2, in: statement, sql: sql)
+            try bind(next.attempts, at: 3, in: statement, sql: sql)
+            try bind(next.evidenceItems, at: 4, in: statement, sql: sql)
+            try bind(next.acceptedEvidenceItems, at: 5, in: statement, sql: sql)
+            try bind(next.supportedJobs, at: 6, in: statement, sql: sql)
+            try bind(next.heldJobs, at: 7, in: statement, sql: sql)
+            try bind(next.conflictingJobs, at: 8, in: statement, sql: sql)
+            try bind(next.failedJobs, at: 9, in: statement, sql: sql)
+            try bind(next.lastOutcomeStatus?.rawValue, at: 10, in: statement, sql: sql)
+            try bind(next.lastContributedAt, at: 11, in: statement, sql: sql)
+            try bind(next.updatedAt, at: 12, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func upsertKnowledgeEntity(_ entity: BarnOwlKnowledgeEntityRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO knowledge_entities (
+                id, owner_id, kind, canonical_name, normalized_canonical_name,
+                summary, confidence, source_job_id, lifecycle_status, lifecycle_reason,
+                lifecycle_updated_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, kind, normalized_canonical_name) DO UPDATE SET
+                canonical_name = excluded.canonical_name,
+                summary = excluded.summary,
+                confidence = MAX(knowledge_entities.confidence, excluded.confidence),
+                source_job_id = excluded.source_job_id,
+                lifecycle_status = CASE
+                    WHEN knowledge_entities.lifecycle_status = 'suppressed'
+                    THEN knowledge_entities.lifecycle_status
+                    ELSE excluded.lifecycle_status
+                END,
+                lifecycle_reason = CASE
+                    WHEN knowledge_entities.lifecycle_status = 'suppressed'
+                    THEN knowledge_entities.lifecycle_reason
+                    ELSE excluded.lifecycle_reason
+                END,
+                lifecycle_updated_at = CASE
+                    WHEN knowledge_entities.lifecycle_status = 'suppressed'
+                    THEN knowledge_entities.lifecycle_updated_at
+                    ELSE excluded.lifecycle_updated_at
+                END,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(entity.id, at: 1, in: statement, sql: sql)
+            try bind(entity.ownerID, at: 2, in: statement, sql: sql)
+            try bind(entity.kind, at: 3, in: statement, sql: sql)
+            try bind(entity.canonicalName, at: 4, in: statement, sql: sql)
+            try bind(entity.normalizedCanonicalName, at: 5, in: statement, sql: sql)
+            try bind(entity.summary, at: 6, in: statement, sql: sql)
+            try bind(entity.confidence, at: 7, in: statement, sql: sql)
+            try bind(entity.sourceJobID, at: 8, in: statement, sql: sql)
+            try bind(entity.lifecycleStatus.rawValue, at: 9, in: statement, sql: sql)
+            try bind(entity.lifecycleReason, at: 10, in: statement, sql: sql)
+            try bind(entity.lifecycleUpdatedAt, at: 11, in: statement, sql: sql)
+            try bind(entity.createdAt, at: 12, in: statement, sql: sql)
+            try bind(entity.updatedAt, at: 13, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func knowledgeEntity(
+        ownerID: String,
+        kind: String,
+        canonicalName: String
+    ) throws -> BarnOwlKnowledgeEntityRecord? {
+        let normalized = BarnOwlKnowledgeEntityRecord.normalized(canonicalName)
+        return try withStatement(
+            """
+            SELECT * FROM knowledge_entities
+            WHERE owner_id = ? AND kind = ? AND normalized_canonical_name = ? AND lifecycle_status = 'active'
+            LIMIT 1
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(kind, at: 2, in: statement, sql: sql)
+            try bind(normalized, at: 3, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readKnowledgeEntity(statement)
+        }
+    }
+
+    public func knowledgeEntities(ownerID: String, limit: Int = 200) throws -> [BarnOwlKnowledgeEntityRecord] {
+        try withStatement(
+            """
+            SELECT * FROM knowledge_entities
+            WHERE owner_id = ? AND lifecycle_status = 'active'
+            ORDER BY updated_at DESC, canonical_name COLLATE NOCASE ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readKnowledgeEntity)
+        }
+    }
+
+    public func knowledgeEntitiesIncludingSuppressed(ownerID: String, limit: Int = 200) throws -> [BarnOwlKnowledgeEntityRecord] {
+        try withStatement(
+            """
+            SELECT * FROM knowledge_entities
+            WHERE owner_id = ?
+            ORDER BY updated_at DESC, canonical_name COLLATE NOCASE ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readKnowledgeEntity)
+        }
+    }
+
+    public func knowledgeEntity(id: UUID, ownerID: String) throws -> BarnOwlKnowledgeEntityRecord? {
+        try withStatement(
+            """
+            SELECT * FROM knowledge_entities
+            WHERE id = ? AND owner_id = ?
+            LIMIT 1
+            """
+        ) { statement, sql in
+            try bind(id, at: 1, in: statement, sql: sql)
+            try bind(ownerID, at: 2, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readKnowledgeEntity(statement)
+        }
+    }
+
+    public func knowledgeEntitiesMatchingConcept(
+        ownerID: String,
+        concept: String,
+        limit: Int = 20
+    ) throws -> [BarnOwlKnowledgeEntityRecord] {
+        let normalizedConcept = BarnOwlKnowledgeEntityRecord.normalized(concept)
+        guard !normalizedConcept.isEmpty else {
+            return []
+        }
+
+        return try withStatement(
+            """
+            SELECT DISTINCT knowledge_entities.*
+            FROM knowledge_entities
+            LEFT JOIN knowledge_aliases
+                ON knowledge_aliases.owner_id = knowledge_entities.owner_id
+               AND knowledge_aliases.entity_id = knowledge_entities.id
+            WHERE knowledge_entities.owner_id = ?
+              AND knowledge_entities.lifecycle_status = 'active'
+              AND (
+                    knowledge_entities.normalized_canonical_name = ?
+                 OR knowledge_aliases.normalized_alias = ?
+              )
+            ORDER BY knowledge_entities.confidence DESC,
+                     knowledge_entities.updated_at DESC,
+                     knowledge_entities.canonical_name COLLATE NOCASE ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            try bind(normalizedConcept, at: 2, in: statement, sql: sql)
+            try bind(normalizedConcept, at: 3, in: statement, sql: sql)
+            try bind(max(0, limit), at: 4, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readKnowledgeEntity)
+        }
+    }
+
+    public func setKnowledgeEntityConfidence(
+        id: UUID,
+        ownerID: String,
+        confidence: Double,
+        updatedAt: Date = Date()
+    ) throws -> BarnOwlKnowledgeEntityRecord? {
+        guard var entity = try knowledgeEntity(id: id, ownerID: ownerID) else {
+            return nil
+        }
+        entity.confidence = min(max(confidence, 0), 1)
+        entity.updatedAt = updatedAt
+        try withStatement(
+            """
+            UPDATE knowledge_entities
+            SET confidence = ?, updated_at = ?
+            WHERE id = ? AND owner_id = ?
+            """
+        ) { statement, sql in
+            try bind(entity.confidence, at: 1, in: statement, sql: sql)
+            try bind(updatedAt, at: 2, in: statement, sql: sql)
+            try bind(id, at: 3, in: statement, sql: sql)
+            try bind(ownerID, at: 4, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+        return entity
+    }
+
+    public func setKnowledgeEntityLifecycleStatus(
+        id: UUID,
+        ownerID: String,
+        status: BarnOwlKnowledgeEntityLifecycleStatus,
+        reason: String?,
+        updatedAt: Date = Date()
+    ) throws -> BarnOwlKnowledgeEntityRecord? {
+        guard var entity = try knowledgeEntity(id: id, ownerID: ownerID) else {
+            return nil
+        }
+        entity.lifecycleStatus = status
+        entity.lifecycleReason = reason
+        entity.lifecycleUpdatedAt = updatedAt
+        entity.updatedAt = updatedAt
+        try withStatement(
+            """
+            UPDATE knowledge_entities
+            SET lifecycle_status = ?, lifecycle_reason = ?, lifecycle_updated_at = ?, updated_at = ?
+            WHERE id = ? AND owner_id = ?
+            """
+        ) { statement, sql in
+            try bind(status.rawValue, at: 1, in: statement, sql: sql)
+            try bind(reason, at: 2, in: statement, sql: sql)
+            try bind(updatedAt, at: 3, in: statement, sql: sql)
+            try bind(updatedAt, at: 4, in: statement, sql: sql)
+            try bind(id, at: 5, in: statement, sql: sql)
+            try bind(ownerID, at: 6, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+        return entity
+    }
+
+    public func upsertKnowledgeAlias(_ alias: BarnOwlKnowledgeAliasRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO knowledge_aliases (
+                id, owner_id, entity_id, alias, normalized_alias,
+                confidence, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, entity_id, normalized_alias) DO UPDATE SET
+                alias = excluded.alias,
+                confidence = MAX(knowledge_aliases.confidence, excluded.confidence),
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(alias.id, at: 1, in: statement, sql: sql)
+            try bind(alias.ownerID, at: 2, in: statement, sql: sql)
+            try bind(alias.entityID, at: 3, in: statement, sql: sql)
+            try bind(alias.alias, at: 4, in: statement, sql: sql)
+            try bind(alias.normalizedAlias, at: 5, in: statement, sql: sql)
+            try bind(alias.confidence, at: 6, in: statement, sql: sql)
+            try bind(alias.createdAt, at: 7, in: statement, sql: sql)
+            try bind(alias.updatedAt, at: 8, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func knowledgeAliases(entityID: UUID) throws -> [BarnOwlKnowledgeAliasRecord] {
+        try withStatement(
+            """
+            SELECT * FROM knowledge_aliases
+            WHERE entity_id = ?
+            ORDER BY confidence DESC, alias COLLATE NOCASE ASC
+            """
+        ) { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readKnowledgeAlias)
+        }
+    }
+
+    public func upsertKnowledgeMeetingLink(_ link: BarnOwlKnowledgeMeetingLinkRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO knowledge_meeting_links (
+                id, owner_id, entity_id, meeting_id, evidence_job_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(owner_id, entity_id, meeting_id) DO UPDATE SET
+                evidence_job_id = excluded.evidence_job_id,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(link.id, at: 1, in: statement, sql: sql)
+            try bind(link.ownerID, at: 2, in: statement, sql: sql)
+            try bind(link.entityID, at: 3, in: statement, sql: sql)
+            try bind(link.meetingID, at: 4, in: statement, sql: sql)
+            try bind(link.evidenceJobID, at: 5, in: statement, sql: sql)
+            try bind(link.createdAt, at: 6, in: statement, sql: sql)
+            try bind(link.updatedAt, at: 7, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func knowledgeMeetingLinks(entityID: UUID) throws -> [BarnOwlKnowledgeMeetingLinkRecord] {
+        try withStatement(
+            """
+            SELECT * FROM knowledge_meeting_links
+            WHERE entity_id = ?
+            ORDER BY updated_at DESC, meeting_id ASC
+            """
+        ) { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readKnowledgeMeetingLink)
+        }
+    }
+
+    public func upsertKnowledgeApplication(_ application: BarnOwlKnowledgeApplicationRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO knowledge_applications (
+                id, owner_id, entity_id, meeting_id, surface,
+                influenced_meeting_facts, created_at,
+                used_in_summary_generation, used_in_note_generation
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                owner_id = excluded.owner_id,
+                entity_id = excluded.entity_id,
+                meeting_id = excluded.meeting_id,
+                surface = excluded.surface,
+                influenced_meeting_facts = excluded.influenced_meeting_facts,
+                created_at = excluded.created_at,
+                used_in_summary_generation = excluded.used_in_summary_generation,
+                used_in_note_generation = excluded.used_in_note_generation
+            """
+        ) { statement, sql in
+            try bind(application.id, at: 1, in: statement, sql: sql)
+            try bind(application.ownerID, at: 2, in: statement, sql: sql)
+            try bind(application.entityID, at: 3, in: statement, sql: sql)
+            try bind(application.meetingID, at: 4, in: statement, sql: sql)
+            try bind(application.surface, at: 5, in: statement, sql: sql)
+            try bind(application.influencedMeetingFacts ? 1 : 0, at: 6, in: statement, sql: sql)
+            try bind(application.createdAt, at: 7, in: statement, sql: sql)
+            try bind(application.usedInSummaryGeneration ? 1 : 0, at: 8, in: statement, sql: sql)
+            try bind(application.usedInNoteGeneration ? 1 : 0, at: 9, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func knowledgeApplications(
+        ownerID: String,
+        meetingID: UUID? = nil,
+        limit: Int = 100
+    ) throws -> [BarnOwlKnowledgeApplicationRecord] {
+        let sql = meetingID == nil
+            ? """
+              SELECT * FROM knowledge_applications
+              WHERE owner_id = ?
+              ORDER BY created_at DESC, id ASC
+              LIMIT ?
+              """
+            : """
+              SELECT * FROM knowledge_applications
+              WHERE owner_id = ? AND meeting_id = ?
+              ORDER BY created_at DESC, id ASC
+              LIMIT ?
+              """
+        return try withStatement(sql) { statement, sql in
+            try bind(ownerID, at: 1, in: statement, sql: sql)
+            var index: Int32 = 2
+            if let meetingID {
+                try bind(meetingID, at: index, in: statement, sql: sql)
+                index += 1
+            }
+            try bind(max(0, limit), at: index, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readKnowledgeApplication)
+        }
+    }
+
+    public func durableKnowledgeMatches(
+        ownerID: String,
+        transcript: String,
+        limit: Int = 8
+    ) throws -> [BarnOwlKnowledgeEntityRecord] {
+        let normalizedTranscript = BarnOwlKnowledgeEntityRecord.normalized(transcript)
+        guard !normalizedTranscript.isEmpty else {
+            return []
+        }
+
+        let entities = try knowledgeEntities(ownerID: ownerID, limit: 500)
+        var matches: [(BarnOwlKnowledgeEntityRecord, Double)] = []
+        for entity in entities {
+            let aliases = try knowledgeAliases(entityID: entity.id)
+            let candidateTerms = [entity.normalizedCanonicalName] + aliases.map(\.normalizedAlias)
+            guard candidateTerms.contains(where: { !$0.isEmpty && normalizedTranscript.contains($0) }) else {
+                continue
+            }
+            matches.append((entity, entity.confidence))
+        }
+
+        return matches
+            .sorted {
+                if $0.1 != $1.1 { return $0.1 > $1.1 }
+                return $0.0.canonicalName.localizedCaseInsensitiveCompare($1.0.canonicalName) == .orderedAscending
+            }
+            .prefix(max(0, limit))
+            .map(\.0)
+    }
+
+    public func durableKnowledgeContextLines(
+        ownerID: String,
+        transcript: String,
+        limit: Int = 8
+    ) throws -> [String] {
+        try durableKnowledgeMatches(ownerID: ownerID, transcript: transcript, limit: limit)
+            .map { entity in
+                let summary = entity.summary
+                    .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+                if let summary {
+                    return "Known \(entity.kind): \(entity.canonicalName). \(summary)"
+                }
+                return "Known \(entity.kind): \(entity.canonicalName)."
+            }
+    }
+
     public func recordMeetingVersion(
         meetingID: UUID,
         actor: BarnOwlMeetingVersionActor,
@@ -1262,6 +2219,94 @@ private extension BarnOwlDatabase {
             try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
             do {
                 try execute(schemaV5SQL, database: database)
+                try execute("PRAGMA user_version = 5", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 6 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV6SQL, database: database)
+                try execute("PRAGMA user_version = 6", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 7 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV7SQL, database: database)
+                try execute("PRAGMA user_version = 7", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 8 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV8SQL, database: database)
+                try execute("PRAGMA user_version = 8", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 9 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV9SQL, database: database)
+                try execute("PRAGMA user_version = 9", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 10 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV10SQL, database: database)
+                try execute("PRAGMA user_version = 10", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 11 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV11SQL, database: database)
+                try execute("PRAGMA user_version = 11", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 12 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV12SQL, database: database)
+                try execute("PRAGMA user_version = 12", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 13 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV13SQL, database: database)
                 try execute("PRAGMA user_version = \(latestSchemaVersion)", database: database)
                 try execute("COMMIT", database: database)
             } catch {
@@ -1340,6 +2385,54 @@ private extension BarnOwlDatabase {
         if version < 5 {
             try transaction {
                 try execute(Self.schemaV5SQL)
+                try execute("PRAGMA user_version = 5")
+            }
+        }
+        if version < 6 {
+            try transaction {
+                try execute(Self.schemaV6SQL)
+                try execute("PRAGMA user_version = 6")
+            }
+        }
+        if version < 7 {
+            try transaction {
+                try execute(Self.schemaV7SQL)
+                try execute("PRAGMA user_version = 7")
+            }
+        }
+        if version < 8 {
+            try transaction {
+                try execute(Self.schemaV8SQL)
+                try execute("PRAGMA user_version = 8")
+            }
+        }
+        if version < 9 {
+            try transaction {
+                try execute(Self.schemaV9SQL)
+                try execute("PRAGMA user_version = 9")
+            }
+        }
+        if version < 10 {
+            try transaction {
+                try execute(Self.schemaV10SQL)
+                try execute("PRAGMA user_version = 10")
+            }
+        }
+        if version < 11 {
+            try transaction {
+                try execute(Self.schemaV11SQL)
+                try execute("PRAGMA user_version = 11")
+            }
+        }
+        if version < 12 {
+            try transaction {
+                try execute(Self.schemaV12SQL)
+                try execute("PRAGMA user_version = 12")
+            }
+        }
+        if version < 13 {
+            try transaction {
+                try execute(Self.schemaV13SQL)
                 try execute("PRAGMA user_version = \(Self.latestSchemaVersion)")
             }
         }
@@ -1643,6 +2736,281 @@ private extension BarnOwlDatabase {
             usedInNoteGeneration: sqlite3_column_int(statement, 8) != 0,
             metadataJSON: columnString(statement, 7)
         )
+    }
+
+    func readEnrichmentSource(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentSourceRecord {
+        BarnOwlEnrichmentSourceRecord(
+            id: columnRequiredString(statement, 1),
+            ownerID: columnRequiredString(statement, 0),
+            displayName: columnRequiredString(statement, 2),
+            sourceType: columnRequiredString(statement, 3),
+            enabled: sqlite3_column_int(statement, 4) != 0,
+            scope: BarnOwlEnrichmentSourceScope(rawValue: columnRequiredString(statement, 5)) ?? .localPrivate,
+            authorityProfile: columnRequiredString(statement, 6),
+            bestUsedFor: BarnOwlEnrichmentSourceRecord.decodeBestUsedFor(columnString(statement, 7)),
+            configJSON: columnString(statement, 8),
+            authState: BarnOwlEnrichmentSourceAuthState(rawValue: columnRequiredString(statement, 9)) ?? .notRequired,
+            healthStatus: BarnOwlEnrichmentSourceHealthStatus(rawValue: columnRequiredString(statement, 10)) ?? .error,
+            healthDetail: columnString(statement, 11),
+            lastCheckedAt: columnDate(statement, 12),
+            lastSuccessfulCheckAt: columnDate(statement, 13),
+            lastFailedCheckAt: columnDate(statement, 14),
+            connectorReference: columnString(statement, 15),
+            privacyCopyPolicy: columnString(statement, 16),
+            queryBudgetPolicy: columnString(statement, 17),
+            createdAt: columnRequiredDate(statement, 18),
+            updatedAt: columnRequiredDate(statement, 19)
+        )
+    }
+
+    func readEnrichmentAuthorityProfile(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentAuthorityProfileRecord {
+        BarnOwlEnrichmentAuthorityProfileRecord(
+            id: columnRequiredString(statement, 1),
+            ownerID: columnRequiredString(statement, 0),
+            displayName: columnRequiredString(statement, 2),
+            description: columnRequiredString(statement, 3),
+            strongestEntityKinds: BarnOwlEnrichmentAuthorityProfileRecord.decodeEntityKinds(columnString(statement, 4)),
+            weakestEntityKinds: BarnOwlEnrichmentAuthorityProfileRecord.decodeEntityKinds(columnString(statement, 5)),
+            defaultWeight: columnDouble(statement, 6) ?? 0,
+            autoPersistPolicyJSON: columnString(statement, 7),
+            builtIn: sqlite3_column_int(statement, 8) != 0,
+            createdAt: columnRequiredDate(statement, 9),
+            updatedAt: columnRequiredDate(statement, 10)
+        )
+    }
+
+    func readEnrichmentPolicyPack(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentPolicyPackRecord {
+        BarnOwlEnrichmentPolicyPackRecord(
+            id: columnRequiredString(statement, 1),
+            ownerID: columnRequiredString(statement, 0),
+            displayName: columnRequiredString(statement, 2),
+            description: columnRequiredString(statement, 3),
+            minimumSupportingEvidenceCount: Int(sqlite3_column_int(statement, 4)),
+            minimumIndependentSourceCountAfterConflictMemory: Int(sqlite3_column_int(statement, 5)),
+            active: sqlite3_column_int(statement, 6) != 0,
+            createdAt: columnRequiredDate(statement, 7),
+            updatedAt: columnRequiredDate(statement, 8)
+        )
+    }
+
+    func readEnrichmentJob(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentJobRecord {
+        BarnOwlEnrichmentJobRecord(
+            id: try columnRequiredUUID(statement, 0),
+            ownerID: columnRequiredString(statement, 1),
+            conceptKey: columnRequiredString(statement, 2),
+            requestedSources: BarnOwlEnrichmentJobRecord.decodeSourceIDs(columnString(statement, 3)),
+            selectedSources: BarnOwlEnrichmentJobRecord.decodeSourceIDs(columnString(statement, 4)),
+            status: BarnOwlEnrichmentJobStatus(rawValue: columnRequiredString(statement, 5)) ?? .failed,
+            summary: columnRequiredString(statement, 6),
+            rationale: columnString(statement, 7),
+            failureReason: columnString(statement, 8),
+            createdAt: columnRequiredDate(statement, 9),
+            updatedAt: columnRequiredDate(statement, 10),
+            startedAt: columnRequiredDate(statement, 11),
+            finishedAt: columnDate(statement, 12)
+        )
+    }
+
+    func readEnrichmentJobEvidence(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentJobEvidenceRecord {
+        BarnOwlEnrichmentJobEvidenceRecord(
+            id: try columnRequiredUUID(statement, 0),
+            jobID: try columnRequiredUUID(statement, 1),
+            sourceID: columnRequiredString(statement, 2),
+            evidenceJSON: columnRequiredString(statement, 3),
+            acceptedByAdjudicator: sqlite3_column_int(statement, 4) != 0,
+            createdAt: columnRequiredDate(statement, 5)
+        )
+    }
+
+    func readEnrichmentConflict(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentConflictRecord {
+        BarnOwlEnrichmentConflictRecord(
+            id: try columnRequiredUUID(statement, 0),
+            jobID: try columnRequiredUUID(statement, 1),
+            ownerID: columnRequiredString(statement, 2),
+            conceptKey: columnRequiredString(statement, 3),
+            summary: columnRequiredString(statement, 4),
+            conflictingSourceIDs: BarnOwlEnrichmentConflictRecord.decodeSourceIDs(columnString(statement, 5)),
+            createdAt: columnRequiredDate(statement, 6)
+        )
+    }
+
+    func readEnrichmentSourceUsefulness(_ statement: OpaquePointer) throws -> BarnOwlEnrichmentSourceUsefulnessRecord {
+        BarnOwlEnrichmentSourceUsefulnessRecord(
+            ownerID: columnRequiredString(statement, 0),
+            sourceID: columnRequiredString(statement, 1),
+            attempts: Int(sqlite3_column_int64(statement, 2)),
+            evidenceItems: Int(sqlite3_column_int64(statement, 3)),
+            acceptedEvidenceItems: Int(sqlite3_column_int64(statement, 4)),
+            supportedJobs: Int(sqlite3_column_int64(statement, 5)),
+            heldJobs: Int(sqlite3_column_int64(statement, 6)),
+            conflictingJobs: Int(sqlite3_column_int64(statement, 7)),
+            failedJobs: Int(sqlite3_column_int64(statement, 8)),
+            lastOutcomeStatus: columnString(statement, 9).flatMap(BarnOwlEnrichmentJobStatus.init(rawValue:)),
+            lastContributedAt: columnDate(statement, 10),
+            updatedAt: columnRequiredDate(statement, 11)
+        )
+    }
+
+    func readKnowledgeEntity(_ statement: OpaquePointer) throws -> BarnOwlKnowledgeEntityRecord {
+        BarnOwlKnowledgeEntityRecord(
+            id: try columnRequiredUUID(statement, 0),
+            ownerID: columnRequiredString(statement, 1),
+            kind: columnRequiredString(statement, 2),
+            canonicalName: columnRequiredString(statement, 3),
+            normalizedCanonicalName: columnRequiredString(statement, 4),
+            summary: columnString(statement, 5),
+            confidence: sqlite3_column_double(statement, 6),
+            sourceJobID: try columnUUID(statement, 7),
+            lifecycleStatus: BarnOwlKnowledgeEntityLifecycleStatus(rawValue: columnRequiredString(statement, 10)) ?? .active,
+            lifecycleReason: columnString(statement, 11),
+            lifecycleUpdatedAt: columnDate(statement, 12),
+            createdAt: columnRequiredDate(statement, 8),
+            updatedAt: columnRequiredDate(statement, 9)
+        )
+    }
+
+    func readKnowledgeAlias(_ statement: OpaquePointer) throws -> BarnOwlKnowledgeAliasRecord {
+        BarnOwlKnowledgeAliasRecord(
+            id: try columnRequiredUUID(statement, 0),
+            ownerID: columnRequiredString(statement, 1),
+            entityID: try columnRequiredUUID(statement, 2),
+            alias: columnRequiredString(statement, 3),
+            normalizedAlias: columnRequiredString(statement, 4),
+            confidence: sqlite3_column_double(statement, 5),
+            createdAt: columnRequiredDate(statement, 6),
+            updatedAt: columnRequiredDate(statement, 7)
+        )
+    }
+
+    func readKnowledgeMeetingLink(_ statement: OpaquePointer) throws -> BarnOwlKnowledgeMeetingLinkRecord {
+        BarnOwlKnowledgeMeetingLinkRecord(
+            id: try columnRequiredUUID(statement, 0),
+            ownerID: columnRequiredString(statement, 1),
+            entityID: try columnRequiredUUID(statement, 2),
+            meetingID: try columnRequiredUUID(statement, 3),
+            evidenceJobID: try columnUUID(statement, 4),
+            createdAt: columnRequiredDate(statement, 5),
+            updatedAt: columnRequiredDate(statement, 6)
+        )
+    }
+
+    func readKnowledgeApplication(_ statement: OpaquePointer) throws -> BarnOwlKnowledgeApplicationRecord {
+        BarnOwlKnowledgeApplicationRecord(
+            id: try columnRequiredUUID(statement, 0),
+            ownerID: columnRequiredString(statement, 1),
+            entityID: try columnRequiredUUID(statement, 2),
+            meetingID: try columnRequiredUUID(statement, 3),
+            surface: columnRequiredString(statement, 4),
+            usedInSummaryGeneration: sqlite3_column_int(statement, 7) != 0,
+            usedInNoteGeneration: sqlite3_column_int(statement, 8) != 0,
+            influencedMeetingFacts: sqlite3_column_int(statement, 5) != 0,
+            createdAt: columnRequiredDate(statement, 6)
+        )
+    }
+
+    static func defaultEnrichmentSources(ownerID: String, now: Date) -> [BarnOwlEnrichmentSourceRecord] {
+        [
+            BarnOwlEnrichmentSourceRecord(
+                id: "barnowl_memory",
+                ownerID: ownerID,
+                displayName: "Barn Owl Memory",
+                sourceType: "local_memory",
+                scope: .localPrivate,
+                authorityProfile: "meeting_memory",
+                bestUsedFor: ["recurrence", "transcript mentions", "meeting links"],
+                authState: .notRequired,
+                healthStatus: .ready,
+                lastCheckedAt: now,
+                lastSuccessfulCheckAt: now,
+                privacyCopyPolicy: "local_only",
+                queryBudgetPolicy: "local_unmetered",
+                createdAt: now,
+                updatedAt: now
+            ),
+            BarnOwlEnrichmentSourceRecord(
+                id: "public_web",
+                ownerID: ownerID,
+                displayName: "Internet References",
+                sourceType: "public_reference",
+                scope: .publicReference,
+                authorityProfile: "public_reference",
+                bestUsedFor: ["public companies", "public products", "industry acronyms", "public events"],
+                authState: .notRequired,
+                healthStatus: .ready,
+                lastCheckedAt: now,
+                lastSuccessfulCheckAt: now,
+                privacyCopyPolicy: "public_query_subject_only",
+                queryBudgetPolicy: "policy_controlled",
+                createdAt: now,
+                updatedAt: now
+            )
+        ]
+    }
+
+    static func defaultEnrichmentAuthorityProfiles(
+        ownerID: String,
+        now: Date
+    ) -> [BarnOwlEnrichmentAuthorityProfileRecord] {
+        [
+            BarnOwlEnrichmentAuthorityProfileRecord(
+                id: "meeting_memory",
+                ownerID: ownerID,
+                displayName: "Meeting Memory",
+                description: "Local Barn Owl meeting recurrence and linked transcript evidence.",
+                strongestEntityKinds: ["project", "person", "company", "event"],
+                weakestEntityKinds: ["public_company_facts"],
+                defaultWeight: 0.85,
+                autoPersistPolicyJSON: #"{"publicOnlyPrivateTruth":"blocked","requiresFreshEvidence":false}"#,
+                builtIn: true,
+                createdAt: now,
+                updatedAt: now
+            ),
+            BarnOwlEnrichmentAuthorityProfileRecord(
+                id: "private_internal_reference",
+                ownerID: ownerID,
+                displayName: "Private Internal Reference",
+                description: "User-authorized internal reference systems such as notes, docs, or custom knowledge stores.",
+                strongestEntityKinds: ["project", "person", "customer", "account", "internal_term"],
+                weakestEntityKinds: ["public_events"],
+                defaultWeight: 0.93,
+                autoPersistPolicyJSON: #"{"publicOnlyPrivateTruth":"not_applicable","requiresFreshEvidence":true}"#,
+                builtIn: true,
+                createdAt: now,
+                updatedAt: now
+            ),
+            BarnOwlEnrichmentAuthorityProfileRecord(
+                id: "public_reference",
+                ownerID: ownerID,
+                displayName: "Public Reference",
+                description: "Public reference research for entities that are legitimately verifiable outside the user's private context.",
+                strongestEntityKinds: ["company", "public_product", "public_event", "industry_acronym"],
+                weakestEntityKinds: ["internal_project", "customer", "account", "internal_term"],
+                defaultWeight: 0.68,
+                autoPersistPolicyJSON: #"{"publicOnlyPrivateTruth":"blocked","requiresFreshEvidence":true}"#,
+                builtIn: true,
+                createdAt: now,
+                updatedAt: now
+            )
+        ]
+    }
+
+    static func defaultEnrichmentPolicyPacks(
+        ownerID: String,
+        now: Date
+    ) -> [BarnOwlEnrichmentPolicyPackRecord] {
+        [
+            BarnOwlEnrichmentPolicyPackRecord(
+                id: "balanced_autonomous_default",
+                ownerID: ownerID,
+                displayName: "Balanced autonomous default",
+                description: "Auto-persists only after at least two normalized evidence items and requires independent corroboration after conflict memory.",
+                minimumSupportingEvidenceCount: 2,
+                minimumIndependentSourceCountAfterConflictMemory: 2,
+                active: true,
+                createdAt: now,
+                updatedAt: now
+            )
+        ]
     }
 
     func readMeetingVersion(_ statement: OpaquePointer) throws -> BarnOwlMeetingVersionRecord {
@@ -2034,5 +3402,205 @@ private extension BarnOwlDatabase {
     );
 
     CREATE INDEX IF NOT EXISTS idx_rolling_transcription_session ON rolling_transcription_chunks(session_id, status, sequence_number);
+    """
+
+    static let schemaV6SQL = """
+    CREATE TABLE IF NOT EXISTS enrichment_sources (
+        owner_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        scope TEXT NOT NULL,
+        authority_profile TEXT NOT NULL,
+        best_used_for_json TEXT,
+        config_json TEXT,
+        auth_state TEXT NOT NULL,
+        health_status TEXT NOT NULL,
+        health_detail TEXT,
+        last_checked_at REAL,
+        last_successful_check_at REAL,
+        last_failed_check_at REAL,
+        connector_reference TEXT,
+        privacy_copy_policy TEXT,
+        query_budget_policy TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY(owner_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_enrichment_sources_owner ON enrichment_sources(owner_id, enabled, display_name);
+    CREATE INDEX IF NOT EXISTS idx_enrichment_sources_health ON enrichment_sources(owner_id, health_status, updated_at);
+    """
+
+    static let schemaV7SQL = """
+    CREATE TABLE IF NOT EXISTS enrichment_jobs (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        concept_key TEXT NOT NULL,
+        requested_sources_json TEXT,
+        selected_sources_json TEXT,
+        status TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        rationale TEXT,
+        failure_reason TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        started_at REAL NOT NULL,
+        finished_at REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS enrichment_job_evidence (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL REFERENCES enrichment_jobs(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL,
+        normalized_evidence_json TEXT NOT NULL,
+        accepted_by_adjudicator INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_owner ON enrichment_jobs(owner_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_concept ON enrichment_jobs(owner_id, concept_key, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_enrichment_job_evidence_job ON enrichment_job_evidence(job_id, created_at);
+    """
+
+    static let schemaV8SQL = """
+    CREATE TABLE IF NOT EXISTS knowledge_entities (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        canonical_name TEXT NOT NULL,
+        normalized_canonical_name TEXT NOT NULL,
+        summary TEXT,
+        confidence REAL NOT NULL,
+        source_job_id TEXT REFERENCES enrichment_jobs(id) ON DELETE SET NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE(owner_id, kind, normalized_canonical_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS knowledge_aliases (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL REFERENCES knowledge_entities(id) ON DELETE CASCADE,
+        alias TEXT NOT NULL,
+        normalized_alias TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE(owner_id, entity_id, normalized_alias)
+    );
+
+    CREATE TABLE IF NOT EXISTS knowledge_meeting_links (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL REFERENCES knowledge_entities(id) ON DELETE CASCADE,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        evidence_job_id TEXT REFERENCES enrichment_jobs(id) ON DELETE SET NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE(owner_id, entity_id, meeting_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_entities_owner ON knowledge_entities(owner_id, kind, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_aliases_entity ON knowledge_aliases(entity_id, confidence DESC);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_links_entity ON knowledge_meeting_links(entity_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_links_meeting ON knowledge_meeting_links(meeting_id, updated_at);
+    """
+
+    static let schemaV9SQL = """
+    CREATE TABLE IF NOT EXISTS enrichment_conflicts (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL REFERENCES enrichment_jobs(id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL,
+        concept_key TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        conflicting_source_ids_json TEXT,
+        created_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS enrichment_source_usefulness (
+        owner_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        evidence_items INTEGER NOT NULL DEFAULT 0,
+        accepted_evidence_items INTEGER NOT NULL DEFAULT 0,
+        supported_jobs INTEGER NOT NULL DEFAULT 0,
+        held_jobs INTEGER NOT NULL DEFAULT 0,
+        conflicting_jobs INTEGER NOT NULL DEFAULT 0,
+        failed_jobs INTEGER NOT NULL DEFAULT 0,
+        last_outcome_status TEXT,
+        last_contributed_at REAL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY(owner_id, source_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_enrichment_conflicts_owner ON enrichment_conflicts(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_enrichment_usefulness_owner ON enrichment_source_usefulness(owner_id, updated_at);
+    """
+
+    static let schemaV10SQL = """
+    CREATE TABLE IF NOT EXISTS knowledge_applications (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL REFERENCES knowledge_entities(id) ON DELETE CASCADE,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        surface TEXT NOT NULL,
+        influenced_meeting_facts INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_applications_owner ON knowledge_applications(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_applications_meeting ON knowledge_applications(meeting_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_applications_entity ON knowledge_applications(entity_id, created_at);
+    """
+
+    static let schemaV11SQL = """
+    ALTER TABLE knowledge_applications ADD COLUMN used_in_summary_generation INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE knowledge_applications ADD COLUMN used_in_note_generation INTEGER NOT NULL DEFAULT 0;
+    """
+
+    static let schemaV12SQL = """
+    CREATE TABLE IF NOT EXISTS enrichment_authority_profiles (
+        owner_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        strongest_entity_kinds_json TEXT,
+        weakest_entity_kinds_json TEXT,
+        default_weight REAL NOT NULL,
+        auto_persist_policy_json TEXT,
+        built_in INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY(owner_id, id)
+    );
+
+    CREATE TABLE IF NOT EXISTS enrichment_policy_packs (
+        owner_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        minimum_supporting_evidence_count INTEGER NOT NULL,
+        minimum_independent_source_count_after_conflict_memory INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY(owner_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_enrichment_authority_profiles_owner
+        ON enrichment_authority_profiles(owner_id, built_in, display_name);
+    CREATE INDEX IF NOT EXISTS idx_enrichment_policy_packs_owner
+        ON enrichment_policy_packs(owner_id, active, display_name);
+    """
+
+    static let schemaV13SQL = """
+    ALTER TABLE knowledge_entities ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE knowledge_entities ADD COLUMN lifecycle_reason TEXT;
+    ALTER TABLE knowledge_entities ADD COLUMN lifecycle_updated_at REAL;
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_entities_lifecycle
+        ON knowledge_entities(owner_id, lifecycle_status, updated_at);
     """
 }

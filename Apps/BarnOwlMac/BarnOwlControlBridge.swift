@@ -1,4 +1,5 @@
 import BarnOwlCore
+import BarnOwlPersistence
 import Darwin
 import Foundation
 import Security
@@ -290,6 +291,69 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 return model.controlStatusResponse(ok: false, message: "context_delete requires contextItemID.", error: "missing_context_item_id")
             }
             return await model.controlContextDeleteResponse(itemID: contextItemID)
+        case .enrichmentSourcesList:
+            return await model.controlEnrichmentSourcesListResponse()
+        case .enrichmentSourcePresetsList:
+            return model.controlEnrichmentSourcePresetsListResponse()
+        case .enrichmentSourceSetupPreset:
+            return await model.controlEnrichmentSourceSetupPresetResponse(command)
+        case .enrichmentSourceHealthCheck:
+            guard let sourceID = command.sourceID else {
+                return model.controlStatusResponse(ok: false, message: "enrichment_source_health_check requires sourceID.", error: "missing_source_id")
+            }
+            return await model.controlEnrichmentSourceHealthCheckResponse(sourceID: sourceID)
+        case .enrichmentSourceUpsert:
+            return await model.controlEnrichmentSourceUpsertResponse(command)
+        case .enrichmentSourceEnable:
+            guard let sourceID = command.sourceID else {
+                return model.controlStatusResponse(ok: false, message: "enrichment_source_enable requires sourceID.", error: "missing_source_id")
+            }
+            return await model.controlEnrichmentSourceEnabledResponse(sourceID: sourceID, enabled: true)
+        case .enrichmentSourceDisable:
+            guard let sourceID = command.sourceID else {
+                return model.controlStatusResponse(ok: false, message: "enrichment_source_disable requires sourceID.", error: "missing_source_id")
+            }
+            return await model.controlEnrichmentSourceEnabledResponse(sourceID: sourceID, enabled: false)
+        case .enrichmentAuthorityProfilesList:
+            return await model.controlEnrichmentAuthorityProfilesListResponse()
+        case .enrichmentAuthorityProfileUpsert:
+            return await model.controlEnrichmentAuthorityProfileUpsertResponse(command)
+        case .enrichmentPolicyPacksList:
+            return await model.controlEnrichmentPolicyPacksListResponse()
+        case .enrichmentPolicyPackUpsert:
+            return await model.controlEnrichmentPolicyPackUpsertResponse(command)
+        case .enrichmentPolicyPackActivate:
+            guard let policyPackID = command.policyPackID else {
+                return model.controlStatusResponse(ok: false, message: "enrichment_policy_pack_activate requires policyPackID.", error: "missing_policy_pack_id")
+            }
+            return await model.controlEnrichmentPolicyPackActivateResponse(policyPackID: policyPackID)
+        case .knowledgeEnrich:
+            return await model.controlKnowledgeEnrichResponse(
+                concept: command.query ?? command.prompt ?? "",
+                limit: command.limit
+            )
+        case .knowledgeJobsList:
+            return await model.controlKnowledgeJobsListResponse(limit: command.limit)
+        case .knowledgeEntitiesList:
+            return await model.controlKnowledgeEntitiesListResponse(limit: command.limit)
+        case .knowledgeEntitySuppress:
+            guard let entityID = command.knowledgeEntityID else {
+                return model.controlStatusResponse(ok: false, message: "knowledge_entity_suppress requires knowledgeEntityID.", error: "missing_knowledge_entity_id")
+            }
+            return await model.controlKnowledgeEntityLifecycleResponse(
+                entityID: entityID,
+                status: .suppressed,
+                reason: command.reason
+            )
+        case .knowledgeEntityReactivate:
+            guard let entityID = command.knowledgeEntityID else {
+                return model.controlStatusResponse(ok: false, message: "knowledge_entity_reactivate requires knowledgeEntityID.", error: "missing_knowledge_entity_id")
+            }
+            return await model.controlKnowledgeEntityLifecycleResponse(
+                entityID: entityID,
+                status: .active,
+                reason: command.reason
+            )
         case .chat:
             return await model.controlChatResponse(question: command.query ?? command.prompt ?? "")
         case .diagnosticsExport:

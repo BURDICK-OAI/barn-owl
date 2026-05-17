@@ -203,10 +203,17 @@ public struct PlaceholderMeetingSummaryGenerator: MeetingSummaryGenerator {
 }
 
 public struct FinalTranscriptionPipeline: FinalDiarizer {
+    public typealias SummaryContextProvider = @Sendable (
+        _ session: RecordingSession,
+        _ segments: [TranscriptSegment],
+        _ baseContext: [String]
+    ) async -> [String]
+
     private let transcriptionClient: any AudioFileTranscriptionClient
     private let audioFileProvider: (any RecordedAudioFileProviding)?
     private let qualityReviewer: any TranscriptQualityReviewer
     private let summaryGenerator: any MeetingSummaryGenerator
+    private let summaryContextProvider: SummaryContextProvider?
     private let overlapRepairClient: (any TranscriptOverlapRepairClient)?
     private let maxConcurrentTranscriptions: Int
 
@@ -215,6 +222,7 @@ public struct FinalTranscriptionPipeline: FinalDiarizer {
         audioFileProvider: (any RecordedAudioFileProviding)? = nil,
         qualityReviewer: any TranscriptQualityReviewer = NoOpTranscriptQualityReviewer(),
         summaryGenerator: any MeetingSummaryGenerator = PlaceholderMeetingSummaryGenerator(),
+        summaryContextProvider: SummaryContextProvider? = nil,
         overlapRepairClient: (any TranscriptOverlapRepairClient)? = nil,
         maxConcurrentTranscriptions: Int = 4
     ) {
@@ -222,6 +230,7 @@ public struct FinalTranscriptionPipeline: FinalDiarizer {
         self.audioFileProvider = audioFileProvider
         self.qualityReviewer = qualityReviewer
         self.summaryGenerator = summaryGenerator
+        self.summaryContextProvider = summaryContextProvider
         self.overlapRepairClient = overlapRepairClient
         self.maxConcurrentTranscriptions = max(1, maxConcurrentTranscriptions)
     }
@@ -247,10 +256,15 @@ public struct FinalTranscriptionPipeline: FinalDiarizer {
         )
 
         let sortedSegments = Self.sortChronologically(reviewedSegments)
+        let summaryContext = await summaryContextProvider?(
+            session,
+            sortedSegments,
+            context
+        ) ?? context
         let summary = try await summaryGenerator.generateSummary(
             session: session,
             segments: sortedSegments,
-            context: context
+            context: summaryContext
         )
 
         return FinalTranscriptionResult(segments: sortedSegments, summary: summary)

@@ -461,7 +461,15 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
         ))
 
         let configuration = try makeOpenAIConfiguration()
-        let context = await MeetingContextBuilder.context(for: session, contextRoot: try? BarnOwlMeetingProcessor.defaultContextRoot())
+        let baseContext = await MeetingContextBuilder.context(for: session, contextRoot: try? BarnOwlMeetingProcessor.defaultContextRoot())
+        let transcriptForFacts = segments
+            .map { "\($0.speakerLabel): \($0.text)" }
+            .joined(separator: "\n")
+        let durableKnowledge = await MeetingContextBuilder.withDurableKnowledge(
+            baseContext,
+            transcript: transcriptForFacts
+        )
+        let context = durableKnowledge.context
         let summary = try await ChunkingMeetingSummaryGenerator(
             wrapped: OpenAIMeetingSummaryGeneratorAdapter(
                 client: OpenAIMeetingSummaryClient(configuration: configuration)
@@ -477,9 +485,6 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
             segments: segments,
             context: context
         )
-        let transcriptForFacts = segments
-            .map { "\($0.speakerLabel): \($0.text)" }
-            .joined(separator: "\n")
         var meetingFacts = MeetingFactsExtractor().extract(
             transcript: transcriptForFacts,
             freeformContext: MeetingContextBuilder.factsContext(from: context),
@@ -490,6 +495,17 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
         } else {
             meetingFacts.title = finalSession.title
         }
+        try? await MeetingContextBuilder.recordDurableKnowledgeApplications(
+            durableKnowledge.matches,
+            ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+            meetingID: meetingID,
+            meetingFacts: meetingFacts,
+            surface: "summary_repair",
+            usedInSummaryGeneration: true,
+            usedInNoteGeneration: true,
+            database: database,
+            createdAt: Date()
+        )
 
         let markdown = MarkdownMeetingRenderer().render(
             session: finalSession,
@@ -698,12 +714,29 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             transcriptionClient: transcriptionClient,
             qualityReviewer: TranscriptSanitizingQualityReviewer(),
             summaryGenerator: summaryGenerator,
+            summaryContextProvider: { _, segments, context in
+                let transcript = segments
+                    .map { "\($0.speakerLabel): \($0.text)" }
+                    .joined(separator: "\n")
+                return await MeetingContextBuilder.withDurableKnowledge(
+                    context,
+                    transcript: transcript
+                ).context
+            },
             overlapRepairClient: OpenAITranscriptOverlapRepairClient(configuration: configuration)
         )
-        let context = await MeetingContextBuilder.context(for: session, contextRoot: try? Self.defaultContextRoot())
-        let result = try await pipeline.run(session: session, audioFiles: audioFiles, context: context)
+        let baseContext = await MeetingContextBuilder.context(for: session, contextRoot: try? Self.defaultContextRoot())
+        let result = try await pipeline.run(session: session, audioFiles: audioFiles, context: baseContext)
         BarnOwlAPIKeyStore.markAPIKeyVerified(configuration.apiKey)
         var finalSession = session
+        let transcriptForFacts = result.segments
+            .map { "\($0.speakerLabel): \($0.text)" }
+            .joined(separator: "\n")
+        let durableKnowledge = await MeetingContextBuilder.withDurableKnowledge(
+            baseContext,
+            transcript: transcriptForFacts
+        )
+        let context = durableKnowledge.context
         finalSession.title = MeetingTitleSuggester.title(
             currentTitle: session.title,
             summary: result.summary,
@@ -716,9 +749,6 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
                 progressFraction: 0.87
             ))
         }
-        let transcriptForFacts = result.segments
-            .map { "\($0.speakerLabel): \($0.text)" }
-            .joined(separator: "\n")
         var meetingFacts = MeetingFactsExtractor().extract(
             transcript: transcriptForFacts,
             freeformContext: MeetingContextBuilder.factsContext(from: context),
@@ -728,6 +758,19 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             finalSession.title = factTitle
         } else {
             meetingFacts.title = finalSession.title
+        }
+        if let database = try? makeDatabase() {
+            try? await MeetingContextBuilder.recordDurableKnowledgeApplications(
+                durableKnowledge.matches,
+                ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+                meetingID: session.id,
+                meetingFacts: meetingFacts,
+                surface: "final_processing",
+                usedInSummaryGeneration: true,
+                usedInNoteGeneration: true,
+                database: database,
+                createdAt: Date()
+            )
         }
         BarnOwlRealtimeTranscriptionHintsStore.learn(
             meetingFacts: meetingFacts,
@@ -1656,6 +1699,11 @@ struct TempAudioRecordedFileProvider: RecordedAudioFileProviding {
 }
 
 private enum MeetingContextBuilder {
+    struct DurableKnowledgeContext: Sendable {
+        var context: [String]
+        var matches: [BarnOwlKnowledgeEntityRecord]
+    }
+
     static func context(for session: RecordingSession, contextRoot: URL?) async -> [String] {
         var items: [String] = []
 
@@ -1686,6 +1734,78 @@ private enum MeetingContextBuilder {
                     && !lowercased.hasPrefix("audio sources:")
                     && !lowercased.hasPrefix("local context")
             }
+    }
+
+    static func withDurableKnowledge(_ context: [String], transcript: String) async -> DurableKnowledgeContext {
+        do {
+            let database = try BarnOwlDatabase(url: try defaultDatabaseURL())
+            let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
+            let matches = try await database.durableKnowledgeMatches(
+                ownerID: ownerID,
+                transcript: transcript,
+                limit: 8
+            )
+            let durableLines = matches.map(Self.contextLine(for:))
+            return DurableKnowledgeContext(context: context + durableLines, matches: matches)
+        } catch {
+            return DurableKnowledgeContext(context: context, matches: [])
+        }
+    }
+
+    static func recordDurableKnowledgeApplications(
+        _ matches: [BarnOwlKnowledgeEntityRecord],
+        ownerID: String,
+        meetingID: UUID,
+        meetingFacts: MeetingFacts,
+        surface: String,
+        usedInSummaryGeneration: Bool = false,
+        usedInNoteGeneration: Bool = false,
+        database: BarnOwlDatabase,
+        createdAt: Date
+    ) async throws {
+        for entity in matches {
+            try await database.upsertKnowledgeApplication(BarnOwlKnowledgeApplicationRecord(
+                ownerID: ownerID,
+                entityID: entity.id,
+                meetingID: meetingID,
+                surface: surface,
+                usedInSummaryGeneration: usedInSummaryGeneration,
+                usedInNoteGeneration: usedInNoteGeneration,
+                influencedMeetingFacts: entityInfluencedMeetingFacts(entity, meetingFacts: meetingFacts),
+                createdAt: createdAt
+            ))
+        }
+    }
+
+    private static func contextLine(for entity: BarnOwlKnowledgeEntityRecord) -> String {
+        let summary = entity.summary
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        if let summary {
+            return "Known \(entity.kind): \(entity.canonicalName). \(summary)"
+        }
+        return "Known \(entity.kind): \(entity.canonicalName)."
+    }
+
+    private static func entityInfluencedMeetingFacts(
+        _ entity: BarnOwlKnowledgeEntityRecord,
+        meetingFacts: MeetingFacts
+    ) -> Bool {
+        let normalizedCanonical = BarnOwlKnowledgeEntityRecord.normalized(entity.canonicalName)
+        guard !normalizedCanonical.isEmpty else { return false }
+
+        let searchableValues = [
+            meetingFacts.title ?? "",
+            meetingFacts.meetingType ?? ""
+        ] + meetingFacts.participants
+            + meetingFacts.customers
+            + meetingFacts.organizations
+            + meetingFacts.projects
+            + Array(meetingFacts.glossary.keys)
+            + Array(meetingFacts.glossary.values)
+
+        return searchableValues.contains {
+            BarnOwlKnowledgeEntityRecord.normalized($0).contains(normalizedCanonical)
+        }
     }
 
     private static func externalContext(for meetingID: UUID) async -> [String] {

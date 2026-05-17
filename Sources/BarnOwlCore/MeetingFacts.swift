@@ -319,6 +319,7 @@ public struct MeetingFactsExtractor: Sendable {
         var names: [String] = []
         names += firstMatches(in: text, pattern: #"\b(?:about|for|with|related to|customer|account)\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
         names += firstMatches(in: text, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:renewal|rollout|pricing|implementation|workshop|pitch|account)\b"#)
+        names += firstMatches(in: text, pattern: #"(?im)^\s*Known (?:organization|company):\s+([^\n.]+)"#)
         return names.filter(Self.isLikelyOrganizationName)
     }
 
@@ -331,7 +332,14 @@ public struct MeetingFactsExtractor: Sendable {
     }
 
     private func projectsFrom(_ text: String) -> [String] {
-        firstMatches(in: text, pattern: #"(?i)\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Za-z0-9&.-]+){0,3}\s+(?:rollout|launch|migration|planning|project))\b"#)
+        let inferredProjects = firstMatches(
+            in: text,
+            pattern: #"(?i)\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Za-z0-9&.-]+){0,3}\s+(?:rollout|launch|migration|planning|project))\b"#
+        ).filter { !$0.contains(". ") }
+        return Self.merge(
+            inferredProjects,
+            firstMatches(in: text, pattern: #"(?im)^\s*Known project:\s+([^\n.]+)"#)
+        )
     }
 
     private func goalsFrom(_ text: String) -> [String] {
