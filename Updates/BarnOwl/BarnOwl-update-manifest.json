@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
-  "build": "19",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.19/BarnOwl.app.zip",
-  "sha256": "2988f7799a1c4cd270d792e64ee34c586c48e21282c792521e732a5ffeb58993",
-  "notes": "Made explicit Barn Owl update checks refresh the live feed before deciding no newer build exists. Prevents stale cached up-to-date state from hiding a newly published release."
+  "build": "20",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.20/BarnOwl.app.zip",
+  "sha256": "1c690cadae3849717488f360cffa94cc11b92cc73c16f3d337f909030bea6504",
+  "notes": "Added structured meeting fact imports so trusted Codex context can populate titles, participants, customer accounts, projects, glossary terms, and goals without losing review gating. Expanded the Context Library with entry lookup, confirmation, aliases, evidence, meeting links, and reconcile flows that propagate durable mappings across related meetings. Introduced recurring knowledge discovery, brief/enrichment commands, and automatic resolver-backed reconciliation for repeated high-confidence concepts."
 }
