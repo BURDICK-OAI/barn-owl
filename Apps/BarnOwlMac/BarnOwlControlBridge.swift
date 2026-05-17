@@ -292,6 +292,16 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 return model.controlStatusResponse(ok: false, message: "meeting_context requires meetingID.", error: "missing_meeting_id")
             }
             return await model.controlMeetingContextResponse(meetingID: meetingID)
+        case .meetingStructuredContextImport:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_structured_context_import requires meetingID.", error: "missing_meeting_id")
+            }
+            return await model.controlStructuredMeetingContextImportResponse(
+                meetingID: meetingID,
+                importedFacts: command.meetingFacts,
+                source: command.source,
+                confidence: command.confidence
+            )
         case .meetingContextReview:
             guard let meetingID = command.meetingID ?? command.sessionID else {
                 return model.controlStatusResponse(ok: false, message: "meeting_context_review requires meetingID.", error: "missing_meeting_id")
@@ -401,6 +411,11 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 kind: command.contextKind,
                 query: command.query
             )
+        case .contextLibraryGet:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "context_library_get requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            return await model.controlContextLibraryGetResponse(entryID: entryID)
         case .contextLibraryUpsert:
             return await model.controlContextLibraryUpsertResponse(
                 entryID: command.contextLibraryEntryID,
@@ -408,11 +423,82 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 canonicalName: command.canonicalName,
                 aliases: command.aliases
             )
+        case .contextLibraryConfirm, .contextLibraryUnconfirm:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "\(command.command.rawValue) requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            return await model.controlContextLibraryConfirmationResponse(
+                entryID: entryID,
+                isConfirmed: command.command == .contextLibraryConfirm
+            )
+        case .contextLibraryAliasAdd, .contextLibraryAliasRemove:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "\(command.command.rawValue) requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            guard let alias = command.alias else {
+                return model.controlStatusResponse(ok: false, message: "\(command.command.rawValue) requires alias.", error: "missing_context_library_alias")
+            }
+            return await model.controlContextLibraryAliasResponse(
+                entryID: entryID,
+                alias: alias,
+                add: command.command == .contextLibraryAliasAdd
+            )
+        case .contextLibraryEvidenceAdd:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "context_library_evidence_add requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            return await model.controlContextLibraryEvidenceAddResponse(
+                entryID: entryID,
+                meetingID: command.meetingID ?? command.sessionID,
+                source: command.source,
+                observedValue: command.observedValue,
+                metadataJSON: command.metadataJSON
+            )
+        case .contextLibraryEvidenceList:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "context_library_evidence_list requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            return await model.controlContextLibraryEvidenceResponse(entryID: entryID)
+        case .contextLibraryLinksList:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "context_library_links_list requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            return await model.controlContextLibraryLinksResponse(entryID: entryID)
+        case .contextLibraryReconcile:
+            return await model.controlContextLibraryReconcileResponse(
+                kind: command.contextKind,
+                canonicalName: command.canonicalName,
+                observedValue: command.observedValue ?? command.alias,
+                source: command.source,
+                confidence: command.confidence,
+                meetingID: command.meetingID ?? command.sessionID,
+                isConfirmed: command.confirmed,
+                role: command.role
+            )
         case .contextLibraryDelete:
+            guard command.confirmed == true else {
+                return model.controlStatusResponse(ok: false, message: "context_library_delete requires confirmation.", error: "confirmation_required")
+            }
             guard let entryID = command.contextLibraryEntryID else {
                 return model.controlStatusResponse(ok: false, message: "context_library_delete requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
             }
             return await model.controlContextLibraryDeleteResponse(entryID: entryID)
+        case .knowledgeRecurringConcepts:
+            return await model.controlRecurringKnowledgeConceptsResponse(limit: command.limit ?? 20)
+        case .knowledgeUnresolvedConcepts:
+            return await model.controlUnresolvedKnowledgeConceptsResponse(limit: command.limit ?? 20)
+        case .knowledgeConceptBrief:
+            return await model.controlKnowledgeConceptBriefResponse(
+                query: command.query ?? command.canonicalName ?? command.observedValue,
+                limit: command.limit ?? 12
+            )
+        case .knowledgeEnrichConcept:
+            return await model.controlKnowledgeEnrichConceptResponse(
+                query: command.query ?? command.canonicalName ?? command.observedValue,
+                limit: command.limit ?? 12
+            )
+        case .knowledgeAutoReconcile:
+            return await model.controlKnowledgeAutoReconcileResponse(limit: command.limit ?? 20)
         case .chat:
             return await model.controlChatResponse(question: command.query ?? command.prompt ?? "")
         case .diagnosticsExport:

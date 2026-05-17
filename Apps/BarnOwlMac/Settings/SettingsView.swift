@@ -142,6 +142,8 @@ private func contextLibraryKindTitle(_ kind: ContextEntityKind) -> String {
         "Product"
     case .project:
         "Project"
+    case .event:
+        "Event"
     case .glossaryTerm:
         "Glossary Term"
     }

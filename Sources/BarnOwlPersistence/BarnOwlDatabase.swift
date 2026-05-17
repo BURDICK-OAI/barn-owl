@@ -1011,6 +1011,13 @@ public actor BarnOwlDatabase {
         }
     }
 
+    public func contextEntity(id: UUID) throws -> BarnOwlContextEntityRecord? {
+        try withStatement("SELECT * FROM context_entities WHERE id = ? LIMIT 1") { statement, sql in
+            try bind(id, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readContextEntity).first
+        }
+    }
+
     public func upsertContextEntityAlias(_ alias: BarnOwlContextEntityAliasRecord) throws {
         try withStatement(
             """
@@ -1052,6 +1059,14 @@ public actor BarnOwlDatabase {
         }
     }
 
+    public func deleteContextEntityAlias(entityID: UUID, alias: String) throws {
+        try withStatement("DELETE FROM context_entity_aliases WHERE entity_id = ? AND lower(alias) = lower(?)") { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            try bind(alias, at: 2, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
     public func deleteContextEntity(id: UUID) throws {
         try withStatement("DELETE FROM context_entities WHERE id = ?") { statement, sql in
             try bind(id, at: 1, in: statement, sql: sql)
@@ -1081,6 +1096,16 @@ public actor BarnOwlDatabase {
             try bind(evidence.metadataJSON, at: 6, in: statement, sql: sql)
             try bind(evidence.createdAt, at: 7, in: statement, sql: sql)
             try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func contextEntityEvidence(entityID: UUID, limit: Int = 500) throws -> [BarnOwlContextEntityEvidenceRecord] {
+        try withStatement(
+            "SELECT * FROM context_entity_evidence WHERE entity_id = ? ORDER BY created_at DESC LIMIT ?"
+        ) { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readContextEntityEvidence)
         }
     }
 
@@ -1155,6 +1180,16 @@ public actor BarnOwlDatabase {
             try bind(link.createdAt, at: 6, in: statement, sql: sql)
             try bind(link.updatedAt, at: 7, in: statement, sql: sql)
             try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func meetingContextEntityLinks(entityID: UUID, limit: Int = 500) throws -> [BarnOwlMeetingContextEntityLinkRecord] {
+        try withStatement(
+            "SELECT * FROM meeting_context_entity_links WHERE entity_id = ? ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+        ) { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readMeetingContextEntityLink)
         }
     }
 
@@ -1935,6 +1970,30 @@ private extension BarnOwlDatabase {
             metadataJSON: columnString(statement, 7),
             createdAt: columnRequiredDate(statement, 8),
             updatedAt: columnRequiredDate(statement, 9)
+        )
+    }
+
+    func readContextEntityEvidence(_ statement: OpaquePointer) throws -> BarnOwlContextEntityEvidenceRecord {
+        BarnOwlContextEntityEvidenceRecord(
+            id: try columnRequiredUUID(statement, 0),
+            entityID: try columnRequiredUUID(statement, 1),
+            meetingID: try columnUUID(statement, 2),
+            source: columnRequiredString(statement, 3),
+            observedValue: columnRequiredString(statement, 4),
+            metadataJSON: columnString(statement, 5),
+            createdAt: columnRequiredDate(statement, 6)
+        )
+    }
+
+    func readMeetingContextEntityLink(_ statement: OpaquePointer) throws -> BarnOwlMeetingContextEntityLinkRecord {
+        BarnOwlMeetingContextEntityLinkRecord(
+            id: try columnRequiredUUID(statement, 0),
+            meetingID: try columnRequiredUUID(statement, 1),
+            entityID: try columnRequiredUUID(statement, 2),
+            role: columnRequiredString(statement, 3),
+            confidence: sqlite3_column_double(statement, 4),
+            createdAt: columnRequiredDate(statement, 5),
+            updatedAt: columnRequiredDate(statement, 6)
         )
     }
 

@@ -118,6 +118,7 @@
 		C07F51CB12BB33901BED65A1 /* BarnOwlControlCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = C617C07F443B4A065420DE6A /* BarnOwlControlCommand.swift */; };
 		C1D9B79750BE620DA83DCEE8 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8274B42169281F5C854E660F /* AudioToolbox.framework */; };
 		C1F12F64BA9AB05B993327FF /* BarnOwlTranscription.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 60CE37E8F56337AD03E5EA70 /* BarnOwlTranscription.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		C3012226E18FC7817350D090 /* OpenAIKnowledgeResolutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7650CEA46DF1C39FD7F44623 /* OpenAIKnowledgeResolutionClient.swift */; };
 		C32131DB7960586E4BEDA5B0 /* DiagnosticsLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7326559E4B983D7F0BE3A965 /* DiagnosticsLogStore.swift */; };
 		C3E9E83ED575868ADDAE3BE5 /* BarnOwlPersistence.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 991B1FD80769407D70097F3C /* BarnOwlPersistence.framework */; };
 		C4712AEF77000CA54F85EBE0 /* MeetingProcessingComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = F859F73F27C2776B81CAC9FF /* MeetingProcessingComposition.swift */; };
@@ -613,6 +614,7 @@
 		735D19B64478F23FAE2AD729 /* RecordingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingModels.swift; sourceTree = "<group>"; };
 		740910F7AE992B12BF6CCF0A /* BarnOwlDatabaseModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlDatabaseModels.swift; sourceTree = "<group>"; };
 		75A3AD4CAC969ADF14D99B41 /* BarnOwlAPIKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlAPIKeyStoreTests.swift; sourceTree = "<group>"; };
+		7650CEA46DF1C39FD7F44623 /* OpenAIKnowledgeResolutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIKnowledgeResolutionClient.swift; sourceTree = "<group>"; };
 		7A2EEEDB0255B0F1CFD07298 /* BarnOwl.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BarnOwl.entitlements; sourceTree = "<group>"; };
 		7C8C880CB040C63DD2CFF37E /* BarnOwlApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlApp.swift; sourceTree = "<group>"; };
 		7E0AB09E6402DC4365D969E6 /* BarnOwlAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlAppDelegate.swift; sourceTree = "<group>"; };
@@ -1059,6 +1061,7 @@
 			children = (
 				CBD06484CDECA0EC1EEB120E /* OpenAIConfiguration.swift */,
 				B43A1AA68B64197242057114 /* OpenAIKeyValidationClient.swift */,
+				7650CEA46DF1C39FD7F44623 /* OpenAIKnowledgeResolutionClient.swift */,
 				B0AB9F18FAEA0D10F2AF755C /* OpenAIMeetingSummaryClient.swift */,
 				2DBE49865D3818B92BE6F3D0 /* OpenAIModelCatalog.swift */,
 				FBC9C044701DA6B4ACD39716 /* OpenAINoteEditingClient.swift */,
@@ -1624,6 +1627,7 @@
 			files = (
 				BA30A31AE91DE21978887A72 /* OpenAIConfiguration.swift in Sources */,
 				402AC25076D23E028734FA8D /* OpenAIKeyValidationClient.swift in Sources */,
+				C3012226E18FC7817350D090 /* OpenAIKnowledgeResolutionClient.swift in Sources */,
 				D88EFA0DBB9AF0A9113CDC80 /* OpenAIMeetingSummaryClient.swift in Sources */,
 				4A7E84EFB1F6129A2A13953F /* OpenAIModelCatalog.swift in Sources */,
 				E69E624F34794C61CC3E069D /* OpenAINoteEditingClient.swift in Sources */,

@@ -1,6 +1,17 @@
 [
   {
     "version": "0.1.0",
+    "build": "20",
+    "date": "2026-05-17",
+    "title": "Durable knowledge reconciliation",
+    "highlights": [
+      "Added structured meeting fact imports so trusted Codex context can populate titles, participants, customer accounts, projects, glossary terms, and goals without losing review gating.",
+      "Expanded the Context Library with entry lookup, confirmation, aliases, evidence, meeting links, and reconcile flows that propagate durable mappings across related meetings.",
+      "Introduced recurring knowledge discovery, brief/enrichment commands, and automatic resolver-backed reconciliation for repeated high-confidence concepts."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "19",
     "date": "2026-05-17",
     "title": "Reliable update refresh",

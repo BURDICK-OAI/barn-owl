@@ -59,9 +59,13 @@ func barnOwlDatabaseStoresLearnedContextEntitiesAliasesEvidenceAndMeetingLinks()
 
     let entities = try await database.contextEntities(kind: .person)
     let aliases = try await database.contextEntityAliases(entityID: entity.id)
+    let evidence = try await database.contextEntityEvidence(entityID: entity.id)
+    let links = try await database.meetingContextEntityLinks(entityID: entity.id)
 
     #expect(entities.map(\.canonicalName) == ["Collin Burdick"])
     #expect(aliases.map(\.alias) == ["Colin Burdick"])
+    #expect(evidence.map(\.observedValue) == ["Colin Burdick"])
+    #expect(links.map(\.meetingID) == [meetingID])
 }
 
 @Test

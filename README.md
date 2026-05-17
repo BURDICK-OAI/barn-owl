@@ -199,6 +199,7 @@ retrieve Markdown notes or query meeting memory.
 ```sh
 scripts/barnowl status
 scripts/barnowl start --title "Design Review"
+scripts/barnowl meeting import-context MEETING_ID --source codex --confidence 0.95 --participant "Collin Burdick" --customer "Moderna" --project "Rosalind"
 scripts/barnowl context add --session SESSION_ID --source codex --confidence 0.95 "Relevant context from calendar, Slack, local files, or prior notes."
 scripts/barnowl context-library add --type person --name "Collin Burdick" --alias "Colin Burdick"
 scripts/barnowl context-library list --type person --query "Collin"

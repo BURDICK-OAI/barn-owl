@@ -1331,6 +1331,78 @@ func quickCommandMediumConfidenceCodexContextRequiresReview() async throws {
 
 @Test
 @MainActor
+func structuredMeetingContextImportAutoAppliesTrustedCodexFacts() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000070A")!
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(id: meetingID, title: "Untitled Meeting"))
+
+    let response = await model.controlStructuredMeetingContextImportResponse(
+        meetingID: meetingID,
+        importedFacts: MeetingFacts(
+            title: "Moderna: Rosalind Pricing",
+            meetingType: "Customer Review",
+            participants: ["Collin Burdick"],
+            organizations: ["OpenAI"],
+            customers: ["Moderna"],
+            projects: ["Rosalind"],
+            glossary: ["API": "Application Programming Interface"],
+            goals: ["Confirm next steps"],
+            additionalContext: ["Imported from Codex enrichment."]
+        ),
+        source: "codex",
+        confidence: 0.97
+    )
+
+    #expect(response.ok)
+    #expect(response.message == "Structured context imported and applied automatically.")
+    let contextItems = try await database.externalContextItems(meetingID: meetingID, limit: 10)
+    let item = try #require(contextItems.first)
+    #expect(item.state == .accepted)
+    #expect(item.confidence == 0.97)
+    #expect(item.metadataJSON?.contains(#""surface":"structured-import""#) == true)
+
+    let state = try #require(await database.meetingState(id: meetingID))
+    #expect(state.title == "Moderna: Rosalind Pricing")
+    #expect(state.meetingFacts?.meetingType == "Customer Review")
+    #expect(state.meetingFacts?.participants.contains("Collin Burdick") == true)
+    #expect(state.meetingFacts?.customers.contains("Moderna") == true)
+    #expect(state.meetingFacts?.organizations.contains("OpenAI") == true)
+    #expect(state.meetingFacts?.projects.contains("Rosalind") == true)
+    #expect(state.meetingFacts?.glossary["API"] == "Application Programming Interface")
+    #expect(state.generatedNotes.contains("Rosalind"))
+}
+
+@Test
+@MainActor
+func structuredMeetingContextImportQueuesLowerConfidenceCodexFactsForReview() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000070B")!
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(id: meetingID, title: "Untitled Meeting"))
+
+    let response = await model.controlStructuredMeetingContextImportResponse(
+        meetingID: meetingID,
+        importedFacts: MeetingFacts(
+            title: "Maybe Moderna",
+            participants: ["Possibly Dana"]
+        ),
+        source: "codex",
+        confidence: 0.62
+    )
+
+    #expect(response.ok)
+    #expect(response.message == "Structured context imported and queued for review.")
+    let contextItems = try await database.externalContextItems(meetingID: meetingID, limit: 10)
+    #expect(contextItems.first?.state == .pending)
+    let state = try #require(await database.meetingState(id: meetingID))
+    #expect(state.title == "Untitled Meeting")
+    #expect(state.meetingFacts?.title == "Untitled Meeting")
+    #expect(state.meetingFacts?.participants == ["Dana"])
+}
+
+@Test
+@MainActor
 func postRecordingContextReviewAutoSavesHighConfidenceSuggestionsAndLeavesLowerConfidenceForReview() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let libraryRoot = FileManager.default.temporaryDirectory
@@ -1461,6 +1533,338 @@ func controlContextLibraryResponsesSupportCreateSearchUpdateAndDelete() async th
 
     let finalList = await model.controlContextLibraryListResponse()
     #expect(finalList.contextLibraryEntries?.isEmpty == true)
+}
+
+@Test
+@MainActor
+func controlContextLibraryResponsesManageConfirmationAliasesEvidenceAndLinks() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-0000000007A1")!
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(id: meetingID, title: "Rosalind Review"))
+
+    let create = await model.controlContextLibraryUpsertResponse(
+        entryID: nil,
+        kind: .project,
+        canonicalName: "Rosalind",
+        aliases: []
+    )
+    let entryID = try #require(create.contextLibraryEntryID)
+
+    let unconfirm = await model.controlContextLibraryConfirmationResponse(entryID: entryID, isConfirmed: false)
+    #expect(unconfirm.ok)
+    #expect(unconfirm.contextLibraryEntries?.first?.isConfirmed == false)
+
+    let confirm = await model.controlContextLibraryConfirmationResponse(entryID: entryID, isConfirmed: true)
+    #expect(confirm.ok)
+    #expect(confirm.contextLibraryEntries?.first?.isConfirmed == true)
+
+    let addAlias = await model.controlContextLibraryAliasResponse(entryID: entryID, alias: "Project Rosalind", add: true)
+    #expect(addAlias.ok)
+    #expect(addAlias.contextLibraryEntries?.first?.aliases == ["Project Rosalind"])
+
+    let evidenceAdd = await model.controlContextLibraryEvidenceAddResponse(
+        entryID: entryID,
+        meetingID: meetingID,
+        source: "codex",
+        observedValue: "Rosalind",
+        metadataJSON: #"{"reason":"recurring project reference"}"#
+    )
+    #expect(evidenceAdd.ok)
+    #expect(evidenceAdd.contextLibraryEvidence?.first?.meetingID == meetingID)
+    #expect(evidenceAdd.contextLibraryEvidence?.first?.source == "codex")
+
+    try await database.upsertMeetingContextEntityLink(BarnOwlMeetingContextEntityLinkRecord(
+        meetingID: meetingID,
+        entityID: entryID,
+        role: "project",
+        confidence: 0.97
+    ))
+
+    let evidenceList = await model.controlContextLibraryEvidenceResponse(entryID: entryID)
+    #expect(evidenceList.ok)
+    #expect(evidenceList.contextLibraryEvidence?.count == 1)
+
+    let links = await model.controlContextLibraryLinksResponse(entryID: entryID)
+    #expect(links.ok)
+    #expect(links.contextLibraryLinks?.first?.meetingID == meetingID)
+    #expect(links.contextLibraryLinks?.first?.role == "project")
+
+    let get = await model.controlContextLibraryGetResponse(entryID: entryID)
+    #expect(get.ok)
+    #expect(get.contextLibraryEntries?.first?.canonicalName == "Rosalind")
+
+    let removeAlias = await model.controlContextLibraryAliasResponse(entryID: entryID, alias: "Project Rosalind", add: false)
+    #expect(removeAlias.ok)
+    #expect(removeAlias.contextLibraryEntries?.first?.aliases == [])
+}
+
+@Test
+@MainActor
+func controlKnowledgeConceptsExposeRecurringUnresolvedTermsAndReconcileThem() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let firstMeetingID = UUID(uuidString: "00000000-0000-0000-0000-0000000007B1")!
+    let secondMeetingID = UUID(uuidString: "00000000-0000-0000-0000-0000000007B2")!
+
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: firstMeetingID,
+        title: "Rosalind GTM",
+        meetingFacts: MeetingFacts(
+            title: "Rosalind GTM",
+            meetingType: "Planning / Review",
+            projects: ["Rosalind"]
+        )
+    ))
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: secondMeetingID,
+        title: "Rosalind Pricing",
+        meetingFacts: MeetingFacts(
+            title: "Rosalind Pricing",
+            meetingType: "Planning / Review",
+            projects: ["Rosalind"]
+        )
+    ))
+
+    let recurring = await model.controlRecurringKnowledgeConceptsResponse(limit: 10)
+    let recurringRosalind = try #require(recurring.knowledgeConcepts?.first {
+        $0.value == "Rosalind"
+    })
+    #expect(recurringRosalind.distinctMeetingCount == 2)
+    #expect(recurringRosalind.suggestedKinds == [.project])
+    #expect(recurringRosalind.isResolved == false)
+
+    let unresolvedBefore = await model.controlUnresolvedKnowledgeConceptsResponse(limit: 10)
+    #expect(unresolvedBefore.knowledgeConcepts?.contains { $0.value == "Rosalind" } == true)
+
+    let reconcile = await model.controlContextLibraryReconcileResponse(
+        kind: .project,
+        canonicalName: "Rosalind",
+        observedValue: "Rosalind",
+        source: "codex",
+        confidence: 0.97,
+        meetingID: firstMeetingID,
+        isConfirmed: true,
+        role: "project"
+    )
+    let entryID = try #require(reconcile.contextLibraryEntryID)
+    #expect(reconcile.ok)
+    #expect(reconcile.contextLibraryEntries?.first?.canonicalName == "Rosalind")
+    #expect(reconcile.contextLibraryEntries?.first?.isConfirmed == true)
+
+    let evidence = await model.controlContextLibraryEvidenceResponse(entryID: entryID)
+    #expect(evidence.contextLibraryEvidence?.first?.source == "codex")
+    #expect(evidence.contextLibraryEvidence?.contains { $0.meetingID == firstMeetingID } == true)
+    #expect(evidence.contextLibraryEvidence?.contains { $0.meetingID == secondMeetingID } == true)
+
+    let links = await model.controlContextLibraryLinksResponse(entryID: entryID)
+    #expect(links.contextLibraryLinks?.contains { $0.meetingID == firstMeetingID && $0.role == "project" } == true)
+    #expect(links.contextLibraryLinks?.contains { $0.meetingID == secondMeetingID && $0.role == "project" } == true)
+
+    let unresolvedAfter = await model.controlUnresolvedKnowledgeConceptsResponse(limit: 10)
+    #expect(unresolvedAfter.knowledgeConcepts?.contains { $0.value == "Rosalind" } != true)
+}
+
+@Test
+@MainActor
+func recurringTranscriptConceptsSurfaceSalienceBeforeMeaningAndReconcileAcrossMeetings() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingIDs = [
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007C1")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007C2")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007C3")!
+    ]
+
+    for (index, meetingID) in meetingIDs.enumerated() {
+        let segment = BarnOwlTranscriptSegmentRecord(
+            meetingID: meetingID,
+            sequence: index,
+            speakerLabel: "Dana",
+            text: "Rosalind needs pricing follow-up. Rosalind also affects the launch plan.",
+            startTime: 0,
+            endTime: 4
+        )
+        try await database.upsertMeetingState(makeQuickCommandMeetingState(
+            id: meetingID,
+            title: "Transcript-only concept \(index)",
+            meetingFacts: MeetingFacts(title: "Transcript-only concept \(index)", meetingType: "Planning / Review"),
+            transcriptSegments: [segment]
+        ))
+    }
+
+    let recurring = await model.controlRecurringKnowledgeConceptsResponse(limit: 10)
+    let rosalind = try #require(recurring.knowledgeConcepts?.first { $0.value == "Rosalind" })
+    #expect(rosalind.distinctMeetingCount == 3)
+    #expect(rosalind.mentionCount == 6)
+    #expect(rosalind.suggestedKinds.isEmpty)
+    #expect(rosalind.salienceConfidence > rosalind.semanticConfidence)
+    #expect(rosalind.evidenceSources.contains("transcript.recurring_term"))
+
+    let brief = await model.controlKnowledgeConceptBriefResponse(query: "Rosalind", limit: 10)
+    let knowledgeBrief = try #require(brief.knowledgeBrief)
+    #expect(brief.ok)
+    #expect(knowledgeBrief.concept.value == "Rosalind")
+    #expect(Set(knowledgeBrief.relatedMeetings.map(\.id)) == Set(meetingIDs))
+    #expect(knowledgeBrief.transcriptExcerpts.count == 3)
+    #expect(knowledgeBrief.transcriptExcerpts.allSatisfy { $0.text.contains("Rosalind") })
+
+    let automatic = await model.controlKnowledgeAutoReconcileResponse(limit: 10)
+    #expect(automatic.ok)
+    #expect(automatic.contextLibraryEntries?.isEmpty != false)
+    let unresolvedAfterAutomaticPass = await model.controlUnresolvedKnowledgeConceptsResponse(limit: 10)
+    #expect(unresolvedAfterAutomaticPass.knowledgeConcepts?.contains { $0.value == "Rosalind" } == true)
+
+    let reconcile = await model.controlContextLibraryReconcileResponse(
+        kind: .project,
+        canonicalName: "Rosalind",
+        observedValue: "Rosalind",
+        source: "codex",
+        confidence: 0.97,
+        meetingID: nil,
+        isConfirmed: true,
+        role: "project"
+    )
+    let entryID = try #require(reconcile.contextLibraryEntryID)
+    #expect(reconcile.ok)
+
+    let evidence = await model.controlContextLibraryEvidenceResponse(entryID: entryID)
+    #expect(Set(evidence.contextLibraryEvidence?.compactMap(\.meetingID) ?? []) == Set(meetingIDs))
+
+    let links = await model.controlContextLibraryLinksResponse(entryID: entryID)
+    #expect(Set(links.contextLibraryLinks?.map(\.meetingID) ?? []) == Set(meetingIDs))
+    #expect(links.contextLibraryLinks?.allSatisfy { $0.role == "project" } == true)
+}
+
+@Test
+@MainActor
+func strongRecurringStructuredConceptsAutoReconcileWithoutReview() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingIDs = [
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007D1")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007D2")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007D3")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007D4")!
+    ]
+
+    for (index, meetingID) in meetingIDs.enumerated() {
+        try await database.upsertMeetingState(makeQuickCommandMeetingState(
+            id: meetingID,
+            title: "Structured Rosalind \(index)",
+            meetingFacts: MeetingFacts(
+                title: "Structured Rosalind \(index)",
+                meetingType: "Planning / Review",
+                projects: ["Rosalind"]
+            )
+        ))
+    }
+
+    let automatic = await model.controlKnowledgeAutoReconcileResponse(limit: 10)
+    let entry = try #require(automatic.contextLibraryEntries?.first)
+    #expect(automatic.ok)
+    #expect(entry.kind == .project)
+    #expect(entry.canonicalName == "Rosalind")
+    #expect(entry.isConfirmed)
+
+    let unresolvedAfter = await model.controlUnresolvedKnowledgeConceptsResponse(limit: 10)
+    #expect(unresolvedAfter.knowledgeConcepts?.contains { $0.value == "Rosalind" } != true)
+
+    let evidence = await model.controlContextLibraryEvidenceResponse(entryID: entry.id)
+    #expect(Set(evidence.contextLibraryEvidence?.compactMap(\.meetingID) ?? []) == Set(meetingIDs))
+    #expect(evidence.contextLibraryEvidence?.allSatisfy { $0.source == "barnowl_auto_enrichment" } == true)
+}
+
+@Test
+@MainActor
+func modelKnowledgeEnrichmentPersistsDefensibleRecurringConceptsWithoutReview() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(
+        database: database,
+        makeKnowledgeResolver: {
+            StaticKnowledgeResolver(resolution: BarnOwlKnowledgeResolution(
+                shouldPersist: true,
+                kind: .project,
+                canonicalName: "Rosalind",
+                aliases: ["Project Rosalind"],
+                confidence: 0.96,
+                rationale: "The supplied transcript excerpts describe Rosalind as an ongoing launch and pricing workstream."
+            ))
+        }
+    )
+    let meetingIDs = [
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007E1")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007E2")!,
+        UUID(uuidString: "00000000-0000-0000-0000-0000000007E3")!
+    ]
+
+    for (index, meetingID) in meetingIDs.enumerated() {
+        try await database.upsertMeetingState(makeQuickCommandMeetingState(
+            id: meetingID,
+            title: "Ambiguous Rosalind \(index)",
+            meetingFacts: MeetingFacts(title: "Ambiguous Rosalind \(index)", meetingType: "Planning / Review"),
+            transcriptSegments: [
+                BarnOwlTranscriptSegmentRecord(
+                    meetingID: meetingID,
+                    sequence: index,
+                    speakerLabel: "Dana",
+                    text: "Rosalind needs a launch decision and pricing follow-up.",
+                    startTime: 0,
+                    endTime: 4
+                )
+            ]
+        ))
+    }
+
+    let response = await model.controlKnowledgeEnrichConceptResponse(query: "Rosalind", limit: 10)
+    let entry = try #require(response.contextLibraryEntries?.first)
+    #expect(response.ok)
+    #expect(entry.kind == .project)
+    #expect(entry.canonicalName == "Rosalind")
+    #expect(entry.aliases.contains("Project Rosalind"))
+    #expect(entry.isConfirmed)
+
+    let evidence = await model.controlContextLibraryEvidenceResponse(entryID: entry.id)
+    #expect(Set(evidence.contextLibraryEvidence?.compactMap(\.meetingID) ?? []) == Set(meetingIDs))
+    #expect(evidence.contextLibraryEvidence?.allSatisfy { $0.source == "barnowl_model_enrichment" } == true)
+}
+
+@Test
+@MainActor
+func modelKnowledgeEnrichmentHoldsWhenResolutionIsNotDefensibleEnough() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(
+        database: database,
+        makeKnowledgeResolver: {
+            StaticKnowledgeResolver(resolution: BarnOwlKnowledgeResolution(
+                shouldPersist: false,
+                confidence: 0.74,
+                rationale: "The evidence shows recurrence, but not whether Rosalind is a person, product, or project."
+            ))
+        }
+    )
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-0000000007F1")!
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: meetingID,
+        title: "Unresolved Rosalind",
+        meetingFacts: MeetingFacts(title: "Unresolved Rosalind", meetingType: "Planning / Review"),
+        transcriptSegments: [
+            BarnOwlTranscriptSegmentRecord(
+                meetingID: meetingID,
+                sequence: 0,
+                speakerLabel: "Dana",
+                text: "Rosalind came up again, but the transcript does not say what it is.",
+                startTime: 0,
+                endTime: 4
+            )
+        ]
+    ))
+
+    let response = await model.controlKnowledgeEnrichConceptResponse(query: "Rosalind", limit: 10)
+    #expect(response.ok)
+    #expect(response.contextLibraryEntries == nil)
+    let entries = await model.controlContextLibraryListResponse(query: "Rosalind")
+    #expect(entries.contextLibraryEntries?.isEmpty != false)
 }
 
 @Test
@@ -1930,6 +2334,29 @@ func contextEntitySuggestionGeneratorFindsPersonOrganizationAndGlossaryCorrectio
 }
 
 @Test
+func meetingFactsKnowledgeReconcilerCanonicalizesConfirmedDurableAliases() {
+    let facts = MeetingFacts(
+        participants: ["Colin"],
+        organizations: ["Anthropic"],
+        customers: ["Moderna"],
+        projects: ["Roslyn"]
+    )
+    let reconciled = MeetingFactsKnowledgeReconciler().reconcile(
+        facts: facts,
+        resolutions: [
+            DurableContextAliasResolution(kind: .person, canonicalValue: "Collin", alias: "Colin", confidence: 0.95, isConfirmed: true),
+            DurableContextAliasResolution(kind: .project, canonicalValue: "Rosalind", alias: "Roslyn", confidence: 0.98, isConfirmed: true),
+            DurableContextAliasResolution(kind: .organization, canonicalValue: "Anthropic", alias: "Anthropik", confidence: 0.99, isConfirmed: true)
+        ]
+    )
+
+    #expect(reconciled.participants == ["Collin"])
+    #expect(reconciled.projects == ["Rosalind"])
+    #expect(reconciled.customers == ["Moderna"])
+    #expect(reconciled.organizations == ["Anthropic"])
+}
+
+@Test
 @MainActor
 func meetingFactsMarkdownSectionIsReplacedInsteadOfDuplicated() {
     let session = RecordingSession(
@@ -1972,6 +2399,22 @@ func meetingFactsExtractorParsesMessyFreeformContext() {
     #expect(facts.participants.contains("Alex"))
     #expect(facts.customers.contains("Acme"))
     #expect(facts.glossary["SG"] == "Strategic Growth")
+}
+
+@Test
+func meetingFactsExtractorPreservesAuthoritativeStructuredMeetingType() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: "This feels like a planning review.",
+        freeformContext: "Planning review for the account team.",
+        existingFacts: MeetingFacts(
+            meetingType: "Customer Review",
+            confidence: MeetingFactsConfidence(meetingType: 0.97),
+            sources: ["meetingType": "structured_import:codex"]
+        )
+    )
+
+    #expect(facts.meetingType == "Customer Review")
+    #expect(facts.sources["meetingType"] == "structured_import:codex")
 }
 
 @Test
@@ -2024,7 +2467,14 @@ private func makeActivityItem(message: String, timestamp: Date) -> BarnOwlActivi
 @MainActor
 private func makeQuickCommandTestModel(
     database: BarnOwlDatabase,
-    libraryRoot requestedLibraryRoot: URL? = nil
+    libraryRoot requestedLibraryRoot: URL? = nil,
+    makeKnowledgeResolver: @escaping @Sendable () throws -> any BarnOwlKnowledgeResolving = {
+        StaticKnowledgeResolver(resolution: BarnOwlKnowledgeResolution(
+            shouldPersist: false,
+            confidence: 0,
+            rationale: "Knowledge resolver was not configured for this test."
+        ))
+    }
 ) throws -> BarnOwlAppModel {
     let libraryRoot = requestedLibraryRoot ?? FileManager.default.temporaryDirectory
         .appending(path: "BarnOwlQuickCommandTests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -2041,15 +2491,26 @@ private func makeQuickCommandTestModel(
             FilesystemLocalLibraryStore(rootDirectory: libraryRoot)
         },
         makeDatabase: { database },
+        makeKnowledgeResolver: makeKnowledgeResolver,
         diagnosticsStore: DiagnosticsLogStore(rootDirectory: libraryRoot.appending(path: "Diagnostics", directoryHint: .isDirectory))
     )
+}
+
+private struct StaticKnowledgeResolver: BarnOwlKnowledgeResolving {
+    var resolution: BarnOwlKnowledgeResolution
+
+    func resolve(request: BarnOwlKnowledgeResolutionRequest) async throws -> BarnOwlKnowledgeResolution {
+        resolution
+    }
 }
 
 private func makeQuickCommandMeetingState(
     id: UUID,
     title: String,
     startedAt: Date = Date(timeIntervalSince1970: 1_800_000_100),
-    summary: MeetingSummary = MeetingSummary(overview: "Reviewed Barn Owl quick commands.")
+    summary: MeetingSummary = MeetingSummary(overview: "Reviewed Barn Owl quick commands."),
+    meetingFacts: MeetingFacts? = nil,
+    transcriptSegments: [BarnOwlTranscriptSegmentRecord] = []
 ) -> BarnOwlMeetingState {
     let meeting = BarnOwlMeetingRecord(
         id: id,
@@ -2062,7 +2523,8 @@ private func makeQuickCommandMeetingState(
     return BarnOwlMeetingState(
         meeting: meeting,
         status: .completed,
-        meetingFacts: MeetingFacts(title: title, meetingType: "Planning / Review", participants: ["Dana"]),
+        transcriptSegments: transcriptSegments,
+        meetingFacts: meetingFacts ?? MeetingFacts(title: title, meetingType: "Planning / Review", participants: ["Dana"]),
         generatedNotes: [
             "# \(title)",
             "## Summary\n\(summary.overview)",

@@ -26,6 +26,7 @@ CONTEXT_LIBRARY_TYPES = [
     "internal_function",
     "product",
     "project",
+    "event",
     "glossary_term",
 ]
 FEEDBACK_WEBHOOK_ENV = "BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL"
@@ -41,6 +42,7 @@ NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
     "meeting_not_found",
     "missing_context",
     "missing_context_item_id",
+    "missing_context_library_alias",
     "missing_context_kind",
     "missing_context_library_entry_id",
     "missing_canonical_name",
@@ -49,6 +51,8 @@ NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
     "missing_meeting_type",
     "missing_prompt",
     "missing_query",
+    "missing_observed_value",
+    "missing_source",
     "missing_question",
     "missing_slack_webhook",
     "missing_title",
@@ -760,6 +764,72 @@ def markdown_response(response: dict) -> str:
                 lines.append("")
             lines.append(item.get("body", ""))
         return "\n".join(lines).rstrip()
+    if response.get("contextLibraryEvidence"):
+        lines = ["# Context Library Evidence"]
+        for item in response["contextLibraryEvidence"]:
+            lines.append("")
+            lines.append(f"## Evidence `{item.get('id')}`")
+            lines.append(f"- Entity: `{item.get('entityID')}`")
+            if item.get("meetingID"):
+                lines.append(f"- Meeting: `{item['meetingID']}`")
+            lines.append(f"- Source: {item.get('source', 'unknown')}")
+            lines.append(f"- Observed: {item.get('observedValue', '')}")
+        return "\n".join(lines).rstrip()
+    if response.get("contextLibraryLinks"):
+        lines = ["# Context Library Meeting Links"]
+        for item in response["contextLibraryLinks"]:
+            lines.append("")
+            lines.append(f"- Meeting `{item.get('meetingID')}` role={item.get('role', 'unknown')} confidence={item.get('confidence', 'unknown')}")
+        return "\n".join(lines).rstrip()
+    if response.get("knowledgeConcepts"):
+        lines = ["# Knowledge Concepts"]
+        for item in response["knowledgeConcepts"]:
+            kinds = ", ".join(item.get("suggestedKinds", [])) or "unknown"
+            lines.append("")
+            lines.append(f"## {item.get('value', 'Unknown')}")
+            lines.append(f"- Resolved: {item.get('isResolved', False)}")
+            lines.append(f"- Suggested kinds: {kinds}")
+            lines.append(f"- Distinct meetings: {item.get('distinctMeetingCount', 0)}")
+            lines.append(f"- Mentions: {item.get('mentionCount', 0)}")
+            meeting_ids = item.get("meetingIDs") or []
+            if meeting_ids:
+                lines.append(f"- Meetings: {', '.join(f'`{meeting_id}`' for meeting_id in meeting_ids)}")
+        return "\n".join(lines).rstrip()
+    if response.get("knowledgeBrief"):
+        brief = response["knowledgeBrief"]
+        concept = brief.get("concept") or {}
+        kinds = ", ".join(concept.get("suggestedKinds", [])) or "unknown"
+        lines = [f"# Knowledge Brief: {concept.get('value', 'Unknown')}"]
+        lines.append("")
+        lines.append(f"- Resolved: {concept.get('isResolved', False)}")
+        lines.append(f"- Suggested kinds: {kinds}")
+        lines.append(f"- Salience confidence: {concept.get('salienceConfidence', 'unknown')}")
+        lines.append(f"- Semantic confidence: {concept.get('semanticConfidence', 'unknown')}")
+        lines.append(f"- Distinct meetings: {concept.get('distinctMeetingCount', 0)}")
+        lines.append(f"- Mentions: {concept.get('mentionCount', 0)}")
+
+        meetings = brief.get("relatedMeetings") or []
+        if meetings:
+            lines.append("")
+            lines.append("## Related Meetings")
+            for meeting in meetings:
+                lines.append(f"- {meeting.get('title', 'Untitled Meeting')} `{meeting.get('id')}`")
+
+        excerpts = brief.get("transcriptExcerpts") or []
+        if excerpts:
+            lines.append("")
+            lines.append("## Transcript Excerpts")
+            for excerpt in excerpts:
+                speaker = excerpt.get("speakerLabel") or "Speaker"
+                lines.append(f"- `{excerpt.get('meetingID')}` {speaker}: {excerpt.get('text', '')}")
+
+        entries = brief.get("matchingContextLibraryEntries") or []
+        if entries:
+            lines.append("")
+            lines.append("## Matching Context Library Entries")
+            for entry in entries:
+                lines.append(f"- {entry.get('kind', 'unknown')}: {entry.get('canonicalName', 'Unknown')} `{entry.get('id')}`")
+        return "\n".join(lines).rstrip()
     if response.get("meetings"):
         lines = ["# Meetings"]
         for meeting in response["meetings"]:
@@ -872,6 +942,20 @@ def build_parser() -> argparse.ArgumentParser:
     meeting_review.add_argument("suggestion_id", nargs="?")
     meeting_review.add_argument("--context", help="Optional reviewed freeform context to apply before accepting the review.")
     add_format(meeting_review)
+    meeting_structured_import = meeting_subparsers.add_parser("import-context")
+    meeting_structured_import.add_argument("meeting_id")
+    meeting_structured_import.add_argument("--source", default="cli")
+    meeting_structured_import.add_argument("--confidence", type=float, required=True, help="Confidence for structured imports, from 0.0 to 1.0.")
+    meeting_structured_import.add_argument("--title")
+    meeting_structured_import.add_argument("--type", dest="meeting_type")
+    meeting_structured_import.add_argument("--participant", dest="participants", action="append", default=[])
+    meeting_structured_import.add_argument("--organization", dest="organizations", action="append", default=[])
+    meeting_structured_import.add_argument("--customer", dest="customers", action="append", default=[])
+    meeting_structured_import.add_argument("--project", dest="projects", action="append", default=[])
+    meeting_structured_import.add_argument("--goal", dest="goals", action="append", default=[])
+    meeting_structured_import.add_argument("--context", dest="additional_context", action="append", default=[])
+    meeting_structured_import.add_argument("--glossary", dest="glossary_pairs", action="append", default=[], help="Glossary item as TERM=Definition.")
+    add_format(meeting_structured_import)
     meeting_delete = meeting_subparsers.add_parser("delete")
     meeting_delete.add_argument("meeting_id")
     meeting_delete.add_argument("--yes", action="store_true")
@@ -937,6 +1021,13 @@ def build_parser() -> argparse.ArgumentParser:
     context_library_list.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES)
     context_library_list.add_argument("--query")
     add_format(context_library_list)
+    context_library_search = context_library_subparsers.add_parser("search")
+    context_library_search.add_argument("query")
+    context_library_search.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES)
+    add_format(context_library_search)
+    context_library_get = context_library_subparsers.add_parser("get")
+    context_library_get.add_argument("entry_id")
+    add_format(context_library_get)
     context_library_add = context_library_subparsers.add_parser("add")
     context_library_add.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES, required=True)
     context_library_add.add_argument("--name", dest="canonical_name", required=True)
@@ -953,6 +1044,62 @@ def build_parser() -> argparse.ArgumentParser:
     context_library_delete.add_argument("entry_id")
     context_library_delete.add_argument("--yes", action="store_true")
     add_format(context_library_delete)
+    for name in ["confirm", "unconfirm"]:
+        leaf = context_library_subparsers.add_parser(name)
+        leaf.add_argument("entry_id")
+        add_format(leaf)
+    context_library_alias = context_library_subparsers.add_parser("alias")
+    context_library_alias_subparsers = context_library_alias.add_subparsers(dest="context_library_alias_command", required=True)
+    for name in ["add", "remove"]:
+        leaf = context_library_alias_subparsers.add_parser(name)
+        leaf.add_argument("entry_id")
+        leaf.add_argument("alias")
+        add_format(leaf)
+    context_library_evidence = context_library_subparsers.add_parser("evidence")
+    context_library_evidence_subparsers = context_library_evidence.add_subparsers(dest="context_library_evidence_command", required=True)
+    context_library_evidence_list = context_library_evidence_subparsers.add_parser("list")
+    context_library_evidence_list.add_argument("entry_id")
+    add_format(context_library_evidence_list)
+    context_library_evidence_add = context_library_evidence_subparsers.add_parser("add")
+    context_library_evidence_add.add_argument("entry_id")
+    context_library_evidence_add.add_argument("--meeting")
+    context_library_evidence_add.add_argument("--source", required=True)
+    context_library_evidence_add.add_argument("--observed", dest="observed_value", required=True)
+    context_library_evidence_add.add_argument("--metadata-json", dest="metadata_json")
+    add_format(context_library_evidence_add)
+    context_library_links = context_library_subparsers.add_parser("links")
+    context_library_links.add_argument("entry_id")
+    add_format(context_library_links)
+    context_library_reconcile = context_library_subparsers.add_parser("reconcile")
+    context_library_reconcile.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES, required=True)
+    context_library_reconcile.add_argument("--name", dest="canonical_name", required=True)
+    context_library_reconcile.add_argument("--observed", dest="observed_value")
+    context_library_reconcile.add_argument("--source", required=True)
+    context_library_reconcile.add_argument("--confidence", type=float)
+    context_library_reconcile.add_argument("--meeting")
+    context_library_reconcile.add_argument("--role")
+    context_library_reconcile.add_argument("--confirmed", action="store_true")
+    add_format(context_library_reconcile)
+
+    knowledge = subparsers.add_parser("knowledge")
+    knowledge_subparsers = knowledge.add_subparsers(dest="knowledge_command", required=True)
+    knowledge_recurring = knowledge_subparsers.add_parser("recurring")
+    knowledge_recurring.add_argument("--limit", type=int, default=20)
+    add_format(knowledge_recurring)
+    knowledge_unresolved = knowledge_subparsers.add_parser("unresolved")
+    knowledge_unresolved.add_argument("--limit", type=int, default=20)
+    add_format(knowledge_unresolved)
+    knowledge_brief = knowledge_subparsers.add_parser("brief")
+    knowledge_brief.add_argument("query")
+    knowledge_brief.add_argument("--limit", type=int, default=12)
+    add_format(knowledge_brief)
+    knowledge_enrich = knowledge_subparsers.add_parser("enrich")
+    knowledge_enrich.add_argument("query")
+    knowledge_enrich.add_argument("--limit", type=int, default=12)
+    add_format(knowledge_enrich)
+    knowledge_auto_reconcile = knowledge_subparsers.add_parser("auto-reconcile")
+    knowledge_auto_reconcile.add_argument("--limit", type=int, default=20)
+    add_format(knowledge_auto_reconcile)
 
     diagnostics = subparsers.add_parser("diagnostics")
     diagnostics_subparsers = diagnostics.add_subparsers(dest="diagnostics_command", required=True)
@@ -1082,6 +1229,7 @@ def main(argv: list[str]) -> int:
             "summary": "meeting_summary",
             "context": "meeting_context",
             "actions": "meeting_actions",
+            "import-context": "meeting_structured_context_import",
             "delete": "meeting_delete",
             "purge-temp-audio": "meeting_purge_temp_audio",
         }
@@ -1114,6 +1262,40 @@ def main(argv: list[str]) -> int:
                 "format": output_format,
             }
             payload = {key: value for key, value in payload.items() if value is not None}
+            return print_response(post(payload, args.url, launch=launch), output_format, human)
+        if args.meeting_command == "import-context":
+            glossary = {}
+            for pair in args.glossary_pairs:
+                if "=" not in pair:
+                    raise SystemExit("barnowl meeting import-context --glossary expects TERM=Definition.")
+                term, definition = pair.split("=", 1)
+                term = term.strip()
+                definition = definition.strip()
+                if not term or not definition:
+                    raise SystemExit("barnowl meeting import-context --glossary expects non-empty TERM=Definition.")
+                glossary[term] = definition
+            meeting_facts = {
+                "title": args.title,
+                "meetingType": args.meeting_type,
+                "participants": args.participants,
+                "organizations": args.organizations,
+                "customers": args.customers,
+                "projects": args.projects,
+                "glossary": glossary,
+                "goals": args.goals,
+                "additionalContext": args.additional_context,
+            }
+            meeting_facts = {key: value for key, value in meeting_facts.items() if value not in (None, [], {})}
+            if not meeting_facts:
+                raise SystemExit("barnowl meeting import-context requires at least one structured field.")
+            payload = {
+                "command": "meeting_structured_context_import",
+                "meetingID": args.meeting_id,
+                "source": args.source,
+                "confidence": args.confidence,
+                "meetingFacts": meeting_facts,
+                "format": output_format,
+            }
             return print_response(post(payload, args.url, launch=launch), output_format, human)
         if args.meeting_command in {"delete", "purge-temp-audio"} and not args.yes:
             response = {
@@ -1199,6 +1381,19 @@ def main(argv: list[str]) -> int:
             "query": args.query,
             "format": output_format,
         }
+    elif args.command == "context-library" and args.context_library_command == "search":
+        payload = {
+            "command": "context_library_list",
+            "contextKind": args.context_kind,
+            "query": args.query,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "get":
+        payload = {
+            "command": "context_library_get",
+            "contextLibraryEntryID": args.entry_id,
+            "format": output_format,
+        }
     elif args.command == "context-library" and args.context_library_command == "add":
         payload = {
             "command": "context_library_upsert",
@@ -1232,6 +1427,84 @@ def main(argv: list[str]) -> int:
         payload = {
             "command": "context_library_delete",
             "contextLibraryEntryID": args.entry_id,
+            "confirmed": True,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command in {"confirm", "unconfirm"}:
+        payload = {
+            "command": f"context_library_{args.context_library_command}",
+            "contextLibraryEntryID": args.entry_id,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "alias":
+        payload = {
+            "command": f"context_library_alias_{args.context_library_alias_command}",
+            "contextLibraryEntryID": args.entry_id,
+            "alias": args.alias,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "evidence":
+        if args.context_library_evidence_command == "list":
+            payload = {
+                "command": "context_library_evidence_list",
+                "contextLibraryEntryID": args.entry_id,
+                "format": output_format,
+            }
+        elif args.context_library_evidence_command == "add":
+            payload = {
+                "command": "context_library_evidence_add",
+                "contextLibraryEntryID": args.entry_id,
+                "meetingID": args.meeting,
+                "source": args.source,
+                "observedValue": args.observed_value,
+                "metadataJSON": args.metadata_json,
+                "format": output_format,
+            }
+        else:
+            raise AssertionError(f"unhandled context-library evidence command: {args.context_library_evidence_command}")
+    elif args.command == "context-library" and args.context_library_command == "links":
+        payload = {
+            "command": "context_library_links_list",
+            "contextLibraryEntryID": args.entry_id,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "reconcile":
+        payload = {
+            "command": "context_library_reconcile",
+            "contextKind": args.context_kind,
+            "canonicalName": args.canonical_name,
+            "observedValue": args.observed_value,
+            "source": args.source,
+            "confidence": args.confidence,
+            "meetingID": args.meeting,
+            "role": args.role,
+            "confirmed": args.confirmed,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command in {"recurring", "unresolved"}:
+        payload = {
+            "command": f"knowledge_{args.knowledge_command}_concepts",
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "brief":
+        payload = {
+            "command": "knowledge_concept_brief",
+            "query": args.query,
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "enrich":
+        payload = {
+            "command": "knowledge_enrich_concept",
+            "query": args.query,
+            "limit": args.limit,
+            "format": output_format,
+        }
+    elif args.command == "knowledge" and args.knowledge_command == "auto-reconcile":
+        payload = {
+            "command": "knowledge_auto_reconcile",
+            "limit": args.limit,
             "format": output_format,
         }
     elif args.command == "diagnostics" and args.diagnostics_command == "export":

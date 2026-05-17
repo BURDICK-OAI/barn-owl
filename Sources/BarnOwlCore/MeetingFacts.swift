@@ -151,6 +151,73 @@ public struct MeetingFactsConfidence: Codable, Equatable, Sendable {
     }
 }
 
+public struct StructuredMeetingFactsMerger: Sendable {
+    public init() {}
+
+    public func merge(
+        existing: MeetingFacts,
+        imported: MeetingFacts,
+        source rawSource: String,
+        confidence rawConfidence: Double
+    ) -> MeetingFacts {
+        var merged = existing
+        var sources = merged.sources
+        let source = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceLabel = source.isEmpty ? "structured_import" : "structured_import:\(source)"
+        let confidence = min(max(rawConfidence, 0), 1)
+
+        if let title = MeetingFacts.clean(imported.title) {
+            merged.title = title
+            merged.confidence.title = max(merged.confidence.title, confidence)
+            sources["title"] = sourceLabel
+        }
+        if let meetingType = MeetingFacts.clean(imported.meetingType) {
+            merged.meetingType = meetingType
+            merged.confidence.meetingType = max(merged.confidence.meetingType, confidence)
+            sources["meetingType"] = sourceLabel
+        }
+
+        if !imported.participants.isEmpty {
+            merged.participants = MeetingFacts.normalizedList(merged.participants + imported.participants)
+            merged.confidence.participants = max(merged.confidence.participants, confidence)
+            sources["participants"] = sourceLabel
+        }
+        if !imported.organizations.isEmpty {
+            merged.organizations = MeetingFacts.normalizedList(merged.organizations + imported.organizations)
+            merged.confidence.organizations = max(merged.confidence.organizations, confidence)
+            sources["organizations"] = sourceLabel
+        }
+        if !imported.customers.isEmpty {
+            merged.customers = MeetingFacts.normalizedList(merged.customers + imported.customers)
+            merged.confidence.organizations = max(merged.confidence.organizations, confidence)
+            sources["customers"] = sourceLabel
+        }
+        if !imported.projects.isEmpty {
+            merged.projects = MeetingFacts.normalizedList(merged.projects + imported.projects)
+            merged.confidence.context = max(merged.confidence.context, confidence)
+            sources["projects"] = sourceLabel
+        }
+        if !imported.goals.isEmpty {
+            merged.goals = MeetingFacts.normalizedList(merged.goals + imported.goals)
+            merged.confidence.context = max(merged.confidence.context, confidence)
+            sources["goals"] = sourceLabel
+        }
+        if !imported.additionalContext.isEmpty {
+            merged.additionalContext = MeetingFacts.normalizedList(merged.additionalContext + imported.additionalContext)
+            merged.confidence.context = max(merged.confidence.context, confidence)
+            sources["additionalContext"] = sourceLabel
+        }
+        if !imported.glossary.isEmpty {
+            merged.glossary.merge(imported.glossary) { _, newValue in newValue }
+            merged.confidence.context = max(merged.confidence.context, confidence)
+            sources["glossary"] = sourceLabel
+        }
+
+        merged.sources = sources
+        return merged
+    }
+}
+
 public struct ContextReviewPrompt: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, Equatable, Sendable {
         case title
@@ -171,13 +238,14 @@ public struct ContextReviewPrompt: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-public enum ContextEntityKind: String, Codable, CaseIterable, Equatable, Sendable {
+public enum ContextEntityKind: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
     case person
     case organization
     case customerAccount = "customer_account"
     case internalFunction = "internal_function"
     case product
     case project
+    case event
     case glossaryTerm = "glossary_term"
 }
 
@@ -273,7 +341,12 @@ public struct MeetingFactsExtractor: Sendable {
             sources["title"] = "inferred"
         }
 
-        if let type = explicitMeetingType(in: lowercased) {
+        let hasAuthoritativeStructuredMeetingType =
+            (sources["meetingType"]?.hasPrefix("structured_import") == true) &&
+            facts.confidence.meetingType >= 0.92
+
+        if let type = explicitMeetingType(in: lowercased),
+           !hasAuthoritativeStructuredMeetingType {
             facts.meetingType = type
             facts.confidence.meetingType = 0.92
             sources["meetingType"] = freeformContext.isEmpty ? "transcript" : "user_context"
@@ -716,5 +789,91 @@ public struct ContextEntitySuggestionGenerator: Sendable {
             previous = current
         }
         return previous[right.count]
+    }
+}
+
+public struct DurableContextAliasResolution: Codable, Equatable, Sendable {
+    public var kind: ContextEntityKind
+    public var canonicalValue: String
+    public var alias: String
+    public var confidence: Double
+    public var isConfirmed: Bool
+
+    public init(
+        kind: ContextEntityKind,
+        canonicalValue: String,
+        alias: String,
+        confidence: Double,
+        isConfirmed: Bool
+    ) {
+        self.kind = kind
+        self.canonicalValue = canonicalValue
+        self.alias = alias
+        self.confidence = min(max(confidence, 0), 1)
+        self.isConfirmed = isConfirmed
+    }
+}
+
+public struct MeetingFactsKnowledgeReconciler: Sendable {
+    public init() {}
+
+    public func reconcile(
+        facts: MeetingFacts,
+        resolutions: [DurableContextAliasResolution],
+        minimumConfidence: Double = 0.85
+    ) -> MeetingFacts {
+        var updated = facts
+        let eligible = resolutions.filter {
+            $0.isConfirmed
+                && $0.confidence >= minimumConfidence
+                && MeetingFacts.clean($0.alias) != nil
+                && MeetingFacts.clean($0.canonicalValue) != nil
+        }
+
+        updated.participants = canonicalize(
+            updated.participants,
+            kind: .person,
+            resolutions: eligible
+        )
+        updated.customers = canonicalize(
+            updated.customers,
+            kind: .customerAccount,
+            resolutions: eligible
+        )
+        updated.organizations = canonicalize(
+            updated.organizations,
+            kind: .organization,
+            resolutions: eligible
+        )
+        updated.projects = canonicalize(
+            updated.projects,
+            kind: .project,
+            resolutions: eligible
+        )
+        return updated
+    }
+
+    private func canonicalize(
+        _ values: [String],
+        kind: ContextEntityKind,
+        resolutions: [DurableContextAliasResolution]
+    ) -> [String] {
+        let canonicalized = values.map { value -> String in
+            let normalizedValue = normalized(value)
+            guard let match = resolutions.first(where: {
+                $0.kind == kind && normalized($0.alias) == normalizedValue
+            }) else {
+                return value
+            }
+            return MeetingFacts.clean(match.canonicalValue) ?? value
+        }
+        return MeetingFacts.normalizedList(canonicalized)
+    }
+
+    private func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
     }
 }

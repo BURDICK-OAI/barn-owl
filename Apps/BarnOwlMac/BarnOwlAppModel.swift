@@ -48,6 +48,14 @@ struct BarnOwlDisplayedNote: Identifiable, Equatable {
     var meetingFacts: MeetingFacts?
 }
 
+private struct BarnOwlStructuredImportMetadata: Codable {
+    var surface: String
+    var source: String
+    var confidence: Double?
+    var autoApplied: Bool
+    var meetingFacts: MeetingFacts
+}
+
 struct BarnOwlNoteSearchResult: Identifiable, Equatable {
     var id: UUID
     var title: String
@@ -545,6 +553,7 @@ final class BarnOwlAppModel: ObservableObject {
     private let makeLibraryStore: @Sendable () throws -> FilesystemLocalLibraryStore
     private let makeDatabase: @Sendable () throws -> BarnOwlDatabase
     private let makeCalendarContextProvider: @Sendable () -> any CalendarMeetingContextProvider
+    private let makeKnowledgeResolver: @Sendable () throws -> any BarnOwlKnowledgeResolving
     private let diagnosticsStore: DiagnosticsLogStore
     private let jobRunner: BarnOwlJobRunner
     private var realtimeTranscriptionController: BarnOwlRealtimeTranscriptionController?
@@ -605,6 +614,9 @@ final class BarnOwlAppModel: ObservableObject {
         makeCalendarContextProvider: @escaping @Sendable () -> any CalendarMeetingContextProvider = {
             EmptyCalendarMeetingContextProvider()
         },
+        makeKnowledgeResolver: @escaping @Sendable () throws -> any BarnOwlKnowledgeResolving = {
+            OpenAIKnowledgeResolutionClient(configuration: try BarnOwlAPIKeyStore.makeConfiguration())
+        },
         diagnosticsStore: DiagnosticsLogStore = DiagnosticsLogStore(rootDirectory: BarnOwlAppModel.defaultDiagnosticsRoot())
     ) {
         self.makeAudioCoordinator = makeAudioCoordinator
@@ -612,6 +624,7 @@ final class BarnOwlAppModel: ObservableObject {
         self.makeLibraryStore = makeLibraryStore
         self.makeDatabase = makeDatabase
         self.makeCalendarContextProvider = makeCalendarContextProvider
+        self.makeKnowledgeResolver = makeKnowledgeResolver
         self.diagnosticsStore = diagnosticsStore
         self.jobRunner = BarnOwlJobRunner(makeDatabase: makeDatabase, meetingProcessor: meetingProcessor)
         configurePeriodicUpdateChecks()
@@ -1850,6 +1863,18 @@ final class BarnOwlAppModel: ObservableObject {
         return confidence >= 0.85 ? .accepted : .pending
     }
 
+    private static func defaultStructuredImportState(
+        source: String,
+        confidence: Double?
+    ) -> BarnOwlExternalContextState {
+        let normalizedSource = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedSource == "codex" || normalizedSource == "cli" || normalizedSource == "barnowl" {
+            guard let confidence else { return .pending }
+            return confidence >= 0.85 ? .accepted : .pending
+        }
+        return .accepted
+    }
+
     @discardableResult
     func addExternalContext(
         _ body: String,
@@ -2695,6 +2720,10 @@ final class BarnOwlAppModel: ObservableObject {
         summary: String? = nil,
         contextItems: [BarnOwlControlContextItem]? = nil,
         contextLibraryEntries: [BarnOwlControlContextLibraryEntry]? = nil,
+        contextLibraryEvidence: [BarnOwlControlContextLibraryEvidence]? = nil,
+        contextLibraryLinks: [BarnOwlControlContextLibraryLink]? = nil,
+        knowledgeConcepts: [BarnOwlControlKnowledgeConcept]? = nil,
+        knowledgeBrief: BarnOwlControlKnowledgeBrief? = nil,
         actions: [String]? = nil,
         decisions: [String]? = nil,
         participants: [String]? = nil,
@@ -2761,6 +2790,10 @@ final class BarnOwlAppModel: ObservableObject {
             summary: summary,
             contextItems: contextItems,
             contextLibraryEntries: contextLibraryEntries,
+            contextLibraryEvidence: contextLibraryEvidence,
+            contextLibraryLinks: contextLibraryLinks,
+            knowledgeConcepts: knowledgeConcepts,
+            knowledgeBrief: knowledgeBrief,
             actions: actions,
             decisions: decisions,
             participants: participants,
@@ -2795,14 +2828,19 @@ final class BarnOwlAppModel: ObservableObject {
         "confirmation_required",
         "context_item_not_found",
         "context_review_not_found",
+        "context_library_alias_not_found",
         "meeting_not_found",
         "missing_context",
         "missing_context_item_id",
+        "missing_context_library_alias",
         "missing_job_id",
         "missing_meeting_id",
         "missing_meeting_type",
         "missing_prompt",
         "missing_query",
+        "missing_observed_value",
+        "missing_source",
+        "missing_structured_meeting_facts",
         "missing_question",
         "missing_title",
         "no_active_recording",
@@ -3489,6 +3527,22 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func controlContextLibraryGetResponse(entryID: UUID) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            guard let entry = try await controlContextLibraryEntry(database: database, entryID: entryID) else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            return controlStatusResponse(
+                message: "Barn Owl Context Library entry.",
+                contextLibraryEntryID: entryID,
+                contextLibraryEntries: [entry]
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not load Context Library entry.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
     func controlContextLibraryUpsertResponse(
         entryID: UUID?,
         kind: ContextEntityKind?,
@@ -3573,6 +3627,560 @@ final class BarnOwlAppModel: ObservableObject {
         } catch {
             return controlStatusResponse(ok: false, message: "Could not save Context Library entry.", error: BarnOwlErrorFormatter.message(for: error))
         }
+    }
+
+    func controlContextLibraryConfirmationResponse(entryID: UUID, isConfirmed: Bool) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            guard var entity = try await database.contextEntity(id: entryID) else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            entity.isConfirmed = isConfirmed
+            entity.updatedAt = Date()
+            try await database.upsertContextEntity(entity)
+            guard let entry = try await controlContextLibraryEntry(database: database, entryID: entryID) else {
+                return controlStatusResponse(ok: false, message: "Context Library entry could not be reloaded.", error: "context_library_entry_not_found")
+            }
+            return controlStatusResponse(
+                message: isConfirmed ? "Confirmed Context Library entry." : "Marked Context Library entry unconfirmed.",
+                contextLibraryEntryID: entryID,
+                contextLibraryEntries: [entry]
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not update Context Library confirmation.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryAliasResponse(
+        entryID: UUID,
+        alias rawAlias: String,
+        add: Bool
+    ) async -> BarnOwlControlResponse {
+        let alias = rawAlias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty else {
+            return controlStatusResponse(ok: false, message: "Context Library alias cannot be empty.", error: "missing_context_library_alias")
+        }
+
+        do {
+            let database = try makeDatabase()
+            guard let entity = try await database.contextEntity(id: entryID) else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            let aliases = try await database.contextEntityAliases(entityID: entryID)
+            if add {
+                if !aliases.contains(where: { $0.alias.localizedCaseInsensitiveCompare(alias) == .orderedSame })
+                    && entity.canonicalName.localizedCaseInsensitiveCompare(alias) != .orderedSame {
+                    try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+                        entityID: entryID,
+                        alias: alias,
+                        confidence: entity.confidence,
+                        isConfirmed: entity.isConfirmed,
+                        createdAt: Date(),
+                        updatedAt: Date()
+                    ))
+                }
+            } else {
+                guard aliases.contains(where: { $0.alias.localizedCaseInsensitiveCompare(alias) == .orderedSame }) else {
+                    return controlStatusResponse(ok: false, message: "Context Library alias not found.", error: "context_library_alias_not_found")
+                }
+                try await database.deleteContextEntityAlias(entityID: entryID, alias: alias)
+            }
+            guard let entry = try await controlContextLibraryEntry(database: database, entryID: entryID) else {
+                return controlStatusResponse(ok: false, message: "Context Library entry could not be reloaded.", error: "context_library_entry_not_found")
+            }
+            return controlStatusResponse(
+                message: add ? "Added Context Library alias." : "Removed Context Library alias.",
+                contextLibraryEntryID: entryID,
+                contextLibraryEntries: [entry]
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not update Context Library alias.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryEvidenceResponse(entryID: UUID) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            guard try await database.contextEntity(id: entryID) != nil else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            let evidence = try await database.contextEntityEvidence(entityID: entryID, limit: 500)
+                .map(controlContextLibraryEvidence(from:))
+            return controlStatusResponse(
+                message: evidence.isEmpty ? "No Context Library evidence found." : "Barn Owl Context Library evidence.",
+                contextLibraryEntryID: entryID,
+                contextLibraryEvidence: evidence
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not load Context Library evidence.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryEvidenceAddResponse(
+        entryID: UUID,
+        meetingID: UUID?,
+        source rawSource: String?,
+        observedValue rawObservedValue: String?,
+        metadataJSON: String?
+    ) async -> BarnOwlControlResponse {
+        let source = rawSource?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !source.isEmpty else {
+            return controlStatusResponse(ok: false, message: "context_library_evidence_add requires source.", error: "missing_source")
+        }
+        let observedValue = rawObservedValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !observedValue.isEmpty else {
+            return controlStatusResponse(ok: false, message: "context_library_evidence_add requires observedValue.", error: "missing_observed_value")
+        }
+
+        do {
+            let database = try makeDatabase()
+            guard try await database.contextEntity(id: entryID) != nil else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            let evidence = BarnOwlContextEntityEvidenceRecord(
+                entityID: entryID,
+                meetingID: meetingID,
+                source: source,
+                observedValue: observedValue,
+                metadataJSON: metadataJSON
+            )
+            try await database.upsertContextEntityEvidence(evidence)
+            return controlStatusResponse(
+                message: "Added Context Library evidence.",
+                contextLibraryEntryID: entryID,
+                contextLibraryEvidence: [controlContextLibraryEvidence(from: evidence)]
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not add Context Library evidence.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryLinksResponse(entryID: UUID) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            guard try await database.contextEntity(id: entryID) != nil else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            let links = try await database.meetingContextEntityLinks(entityID: entryID, limit: 500)
+                .map(controlContextLibraryLink(from:))
+            return controlStatusResponse(
+                message: links.isEmpty ? "No meeting links found for Context Library entry." : "Barn Owl Context Library meeting links.",
+                contextLibraryEntryID: entryID,
+                contextLibraryLinks: links
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not load Context Library meeting links.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryReconcileResponse(
+        kind: ContextEntityKind?,
+        canonicalName rawCanonicalName: String?,
+        observedValue rawObservedValue: String?,
+        source rawSource: String?,
+        confidence rawConfidence: Double?,
+        meetingID: UUID?,
+        isConfirmed: Bool?,
+        role: String?
+    ) async -> BarnOwlControlResponse {
+        guard let kind else {
+            return controlStatusResponse(ok: false, message: "context_library_reconcile requires contextKind.", error: "missing_context_kind")
+        }
+        let canonicalName = rawCanonicalName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !canonicalName.isEmpty else {
+            return controlStatusResponse(ok: false, message: "context_library_reconcile requires canonicalName.", error: "missing_canonical_name")
+        }
+        let observedValue = rawObservedValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? canonicalName
+        guard !observedValue.isEmpty else {
+            return controlStatusResponse(ok: false, message: "context_library_reconcile requires observedValue or canonicalName.", error: "missing_observed_value")
+        }
+        let source = rawSource?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !source.isEmpty else {
+            return controlStatusResponse(ok: false, message: "context_library_reconcile requires source.", error: "missing_source")
+        }
+
+        do {
+            let database = try makeDatabase()
+            let now = Date()
+            let confidence = min(max(rawConfidence ?? 0.9, 0), 1)
+            let confirmed = isConfirmed ?? false
+            let matchingEntity = try await database.contextEntities(kind: kind, limit: 500).first {
+                $0.canonicalName.localizedCaseInsensitiveCompare(canonicalName) == .orderedSame
+            }
+            let entity = BarnOwlContextEntityRecord(
+                id: matchingEntity?.id ?? UUID(),
+                kind: kind,
+                canonicalName: canonicalName,
+                confidence: max(matchingEntity?.confidence ?? 0, confidence),
+                isConfirmed: matchingEntity?.isConfirmed == true || confirmed,
+                createdAt: matchingEntity?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertContextEntity(entity)
+
+            if observedValue.localizedCaseInsensitiveCompare(canonicalName) != .orderedSame {
+                let matchingAlias = try await database.contextEntityAliases(entityID: entity.id).first {
+                    $0.alias.localizedCaseInsensitiveCompare(observedValue) == .orderedSame
+                }
+                try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+                    id: matchingAlias?.id ?? UUID(),
+                    entityID: entity.id,
+                    alias: observedValue,
+                    confidence: max(matchingAlias?.confidence ?? 0, confidence),
+                    isConfirmed: matchingAlias?.isConfirmed == true || confirmed,
+                    createdAt: matchingAlias?.createdAt ?? now,
+                    updatedAt: now
+                ))
+            }
+
+            let relatedConceptKeys = Set([
+                Self.normalizedKnowledgeConceptKey(canonicalName),
+                Self.normalizedKnowledgeConceptKey(observedValue)
+            ])
+            let relatedMeetingIDs = try await controlKnowledgeConcepts(
+                minimumDistinctMeetings: 1,
+                unresolvedOnly: false,
+                limit: 500
+            )
+            .filter { relatedConceptKeys.contains($0.normalizedValue) }
+            .flatMap(\.meetingIDs)
+            let explicitMeetingIDs = meetingID.map { [$0] } ?? []
+            let meetingsToAssociate = Set(relatedMeetingIDs + explicitMeetingIDs)
+            let existingEvidence = try await database.contextEntityEvidence(entityID: entity.id, limit: 1_000)
+            let existingLinks = try await database.meetingContextEntityLinks(entityID: entity.id, limit: 1_000)
+            let trimmedRole = role?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedRole = (trimmedRole?.isEmpty == false ? trimmedRole : nil) ?? kind.rawValue
+
+            if meetingsToAssociate.isEmpty {
+                try await database.upsertContextEntityEvidence(BarnOwlContextEntityEvidenceRecord(
+                    entityID: entity.id,
+                    meetingID: nil,
+                    source: source,
+                    observedValue: observedValue,
+                    metadataJSON: #"{"decision":"reconciled","confirmed":\#(confirmed)}"#,
+                    createdAt: now
+                ))
+            } else {
+                for associatedMeetingID in meetingsToAssociate {
+                    let hasEvidence = existingEvidence.contains {
+                        $0.meetingID == associatedMeetingID
+                            && $0.source.localizedCaseInsensitiveCompare(source) == .orderedSame
+                            && $0.observedValue.localizedCaseInsensitiveCompare(observedValue) == .orderedSame
+                    }
+                    if !hasEvidence {
+                        try await database.upsertContextEntityEvidence(BarnOwlContextEntityEvidenceRecord(
+                            entityID: entity.id,
+                            meetingID: associatedMeetingID,
+                            source: source,
+                            observedValue: observedValue,
+                            metadataJSON: #"{"decision":"reconciled","confirmed":\#(confirmed),"propagated":true}"#,
+                            createdAt: now
+                        ))
+                    }
+
+                    let hasLink = existingLinks.contains {
+                        $0.meetingID == associatedMeetingID
+                            && $0.role.localizedCaseInsensitiveCompare(resolvedRole) == .orderedSame
+                    }
+                    if !hasLink {
+                        try await database.upsertMeetingContextEntityLink(BarnOwlMeetingContextEntityLinkRecord(
+                            meetingID: associatedMeetingID,
+                            entityID: entity.id,
+                            role: resolvedRole,
+                            confidence: confidence,
+                            createdAt: now,
+                            updatedAt: now
+                        ))
+                    }
+                }
+            }
+            guard let entry = try await controlContextLibraryEntry(database: database, entryID: entity.id) else {
+                return controlStatusResponse(ok: false, message: "Reconciled Context Library entry could not be reloaded.", error: "context_library_entry_not_found")
+            }
+            return controlStatusResponse(
+                message: matchingEntity == nil ? "Reconciled new Context Library entry." : "Reconciled existing Context Library entry.",
+                contextLibraryEntryID: entity.id,
+                contextLibraryEntries: [entry]
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not reconcile Context Library entry.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlRecurringKnowledgeConceptsResponse(limit: Int = 20) async -> BarnOwlControlResponse {
+        await controlKnowledgeConceptsResponse(
+            minimumDistinctMeetings: 2,
+            unresolvedOnly: false,
+            limit: limit,
+            emptyMessage: "No recurring knowledge concepts found.",
+            populatedMessage: "Barn Owl recurring knowledge concepts."
+        )
+    }
+
+    func controlUnresolvedKnowledgeConceptsResponse(limit: Int = 20) async -> BarnOwlControlResponse {
+        await controlKnowledgeConceptsResponse(
+            minimumDistinctMeetings: 1,
+            unresolvedOnly: true,
+            limit: limit,
+            emptyMessage: "No unresolved knowledge concepts found.",
+            populatedMessage: "Barn Owl unresolved knowledge concepts."
+        )
+    }
+
+    func controlKnowledgeConceptBriefResponse(query rawQuery: String?, limit: Int = 12) async -> BarnOwlControlResponse {
+        let query = rawQuery?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !query.isEmpty else {
+            return controlStatusResponse(
+                ok: false,
+                message: "knowledge_concept_brief requires query.",
+                error: "missing_query"
+            )
+        }
+
+        do {
+            guard let brief = try await knowledgeConceptBrief(query: query, limit: limit) else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "Knowledge concept not found.",
+                    error: "knowledge_concept_not_found"
+                )
+            }
+
+            return controlStatusResponse(
+                message: "Barn Owl knowledge enrichment brief.",
+                knowledgeBrief: brief
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not build knowledge enrichment brief.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlKnowledgeEnrichConceptResponse(query rawQuery: String?, limit: Int = 12) async -> BarnOwlControlResponse {
+        let query = rawQuery?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !query.isEmpty else {
+            return controlStatusResponse(
+                ok: false,
+                message: "knowledge_enrich_concept requires query.",
+                error: "missing_query"
+            )
+        }
+
+        do {
+            guard let brief = try await knowledgeConceptBrief(query: query, limit: limit) else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "Knowledge concept not found.",
+                    error: "knowledge_concept_not_found"
+                )
+            }
+
+            let resolution = try await makeKnowledgeResolver().resolve(request: BarnOwlKnowledgeResolutionRequest(
+                concept: brief.concept,
+                relatedMeetings: brief.relatedMeetings,
+                transcriptExcerpts: brief.transcriptExcerpts,
+                matchingContextLibraryEntries: brief.matchingContextLibraryEntries
+            ))
+            let canonicalName = MeetingFacts.clean(resolution.canonicalName)
+            guard resolution.shouldPersist,
+                  resolution.confidence >= 0.90,
+                  let kind = resolution.kind,
+                  let canonicalName,
+                  !canonicalName.isEmpty
+            else {
+                return controlStatusResponse(
+                    message: "Knowledge enrichment completed, but the evidence did not clear the automatic persistence threshold.",
+                    knowledgeBrief: brief
+                )
+            }
+
+            let reconcile = await controlContextLibraryReconcileResponse(
+                kind: kind,
+                canonicalName: canonicalName,
+                observedValue: brief.concept.value,
+                source: "barnowl_model_enrichment",
+                confidence: resolution.confidence,
+                meetingID: nil,
+                isConfirmed: true,
+                role: kind.rawValue
+            )
+            guard reconcile.ok, let entryID = reconcile.contextLibraryEntryID else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "Knowledge enrichment resolved the concept, but Barn Owl could not persist it.",
+                    knowledgeBrief: brief,
+                    error: reconcile.error ?? reconcile.errorCode ?? "knowledge_enrichment_persist_failed"
+                )
+            }
+
+            let aliases = Self.normalizedContextLibraryAliases(
+                resolution.aliases + [brief.concept.value],
+                canonicalName: canonicalName
+            )
+            for alias in aliases {
+                _ = await controlContextLibraryAliasResponse(entryID: entryID, alias: alias, add: true)
+            }
+
+            let persisted = await controlContextLibraryGetResponse(entryID: entryID)
+            return controlStatusResponse(
+                message: "Resolved and reconciled durable knowledge automatically.",
+                contextLibraryEntryID: entryID,
+                contextLibraryEntries: persisted.contextLibraryEntries ?? reconcile.contextLibraryEntries,
+                knowledgeBrief: brief
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not enrich knowledge concept.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlKnowledgeAutoReconcileResponse(limit: Int = 20) async -> BarnOwlControlResponse {
+        do {
+            let entries = try await autoReconcileRecurringKnowledge(limit: limit)
+            return controlStatusResponse(
+                message: entries.isEmpty
+                    ? "No high-confidence recurring concepts were ready for automatic reconciliation."
+                    : "Automatically reconciled \(entries.count) recurring knowledge concept\(entries.count == 1 ? "" : "s").",
+                contextLibraryEntries: entries
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not auto-reconcile recurring knowledge.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    private func knowledgeConceptBrief(query: String, limit: Int) async throws -> BarnOwlControlKnowledgeBrief? {
+        let normalizedQuery = Self.normalizedKnowledgeConceptKey(query)
+        let concepts = try await controlKnowledgeConcepts(
+            minimumDistinctMeetings: 1,
+            unresolvedOnly: false,
+            limit: 500
+        )
+        guard let concept = concepts.first(where: { $0.normalizedValue == normalizedQuery }) else {
+            return nil
+        }
+
+        let database = try makeDatabase()
+        let states = try await database.meetingStates(limit: 500)
+        let conceptMeetingIDs = Set(concept.meetingIDs)
+        let relatedStates = states
+            .filter { conceptMeetingIDs.contains($0.id) }
+            .sorted { $0.startedAt > $1.startedAt }
+        let relatedMeetings = relatedStates.map(controlMeeting(from:))
+        let matchingEntries = try await controlContextLibraryEntries(
+            database: database,
+            kind: nil,
+            query: concept.value
+        )
+
+        let excerptNeedles = Set([query, concept.value])
+            .compactMap { MeetingFacts.clean($0) }
+            .filter { !$0.isEmpty }
+        let excerpts = relatedStates
+            .flatMap { state in
+                state.transcriptSegments.compactMap { segment -> BarnOwlControlKnowledgeExcerpt? in
+                    guard excerptNeedles.contains(where: { segment.text.localizedCaseInsensitiveContains($0) }) else {
+                        return nil
+                    }
+                    let sanitizedText = Self.sanitizedControlString(segment.text) ?? segment.text
+                    return BarnOwlControlKnowledgeExcerpt(
+                        meetingID: state.id,
+                        meetingTitle: state.title,
+                        speakerLabel: segment.speakerLabel,
+                        sequence: segment.sequence,
+                        text: String(sanitizedText.prefix(360))
+                    )
+                }
+            }
+            .prefix(max(1, min(limit, 50)))
+            .map { $0 }
+
+        return BarnOwlControlKnowledgeBrief(
+            concept: concept,
+            relatedMeetings: relatedMeetings,
+            transcriptExcerpts: excerpts,
+            matchingContextLibraryEntries: matchingEntries
+        )
+    }
+
+    private func controlKnowledgeConceptsResponse(
+        minimumDistinctMeetings: Int,
+        unresolvedOnly: Bool,
+        limit: Int,
+        emptyMessage: String,
+        populatedMessage: String
+    ) async -> BarnOwlControlResponse {
+        do {
+            let concepts = try await controlKnowledgeConcepts(
+                minimumDistinctMeetings: minimumDistinctMeetings,
+                unresolvedOnly: unresolvedOnly,
+                limit: limit
+            )
+            return controlStatusResponse(
+                message: concepts.isEmpty ? emptyMessage : populatedMessage,
+                knowledgeConcepts: concepts
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not load knowledge concepts.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    private func autoReconcileRecurringKnowledge(limit: Int) async throws -> [BarnOwlControlContextLibraryEntry] {
+        let concepts = try await controlKnowledgeConcepts(
+            minimumDistinctMeetings: 3,
+            unresolvedOnly: true,
+            limit: max(1, min(limit, 100))
+        )
+        let candidates = concepts.filter { concept in
+            concept.suggestedKinds.count == 1
+                && concept.salienceConfidence >= 0.45
+                && concept.semanticConfidence >= 0.70
+        }
+
+        var entries: [BarnOwlControlContextLibraryEntry] = []
+        for concept in candidates {
+            guard let kind = concept.suggestedKinds.first else { continue }
+            let response = await controlContextLibraryReconcileResponse(
+                kind: kind,
+                canonicalName: concept.value,
+                observedValue: concept.value,
+                source: "barnowl_auto_enrichment",
+                confidence: max(concept.semanticConfidence, concept.salienceConfidence),
+                meetingID: nil,
+                isConfirmed: true,
+                role: kind.rawValue
+            )
+            if response.ok, let entry = response.contextLibraryEntries?.first {
+                entries.append(entry)
+            }
+        }
+        return entries
+    }
+
+    private func autoEnrichRecurringKnowledge(limit: Int) async throws -> [BarnOwlControlContextLibraryEntry] {
+        let concepts = try await controlKnowledgeConcepts(
+            minimumDistinctMeetings: 3,
+            unresolvedOnly: true,
+            limit: max(1, min(limit, 40))
+        )
+
+        var entries: [BarnOwlControlContextLibraryEntry] = []
+        for concept in concepts {
+            let response = await controlKnowledgeEnrichConceptResponse(query: concept.value, limit: 12)
+            if response.ok, let entry = response.contextLibraryEntries?.first {
+                entries.append(entry)
+            }
+        }
+        return entries
     }
 
     func controlContextLibraryDeleteResponse(entryID: UUID) async -> BarnOwlControlResponse {
@@ -3788,6 +4396,106 @@ final class BarnOwlAppModel: ObservableObject {
             )
         } catch {
             return controlStatusResponse(ok: false, message: "Could not load context.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlStructuredMeetingContextImportResponse(
+        meetingID: UUID,
+        importedFacts: MeetingFacts?,
+        source rawSource: String?,
+        confidence rawConfidence: Double?
+    ) async -> BarnOwlControlResponse {
+        guard let importedFacts else {
+            return controlStatusResponse(
+                ok: false,
+                message: "meeting_structured_context_import requires meetingFacts.",
+                error: "missing_structured_meeting_facts"
+            )
+        }
+        let normalizedContextLines = importedFacts.contextLines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !normalizedContextLines.isEmpty else {
+            return controlStatusResponse(
+                ok: false,
+                message: "meeting_structured_context_import requires non-empty meetingFacts.",
+                error: "missing_structured_meeting_facts"
+            )
+        }
+
+        let source = rawSource?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? rawSource!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "cli"
+        let confidence = rawConfidence.map { min(max($0, 0), 1) }
+        let state = Self.defaultStructuredImportState(source: source, confidence: confidence)
+        let metadataJSON: String?
+        do {
+            let metadata = BarnOwlStructuredImportMetadata(
+                surface: "structured-import",
+                source: source,
+                confidence: confidence,
+                autoApplied: state == .accepted,
+                meetingFacts: importedFacts
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            metadataJSON = String(decoding: try encoder.encode(metadata), as: UTF8.self)
+        } catch {
+            metadataJSON = nil
+        }
+
+        do {
+            let database = try makeDatabase()
+            guard let currentState = try await database.meetingState(id: meetingID) else {
+                return controlStatusResponse(ok: false, message: "Meeting not found.", error: "meeting_not_found")
+            }
+
+            let item = BarnOwlExternalContextItemRecord(
+                meetingID: meetingID,
+                source: source,
+                body: normalizedContextLines.joined(separator: "\n"),
+                state: state,
+                confidence: confidence,
+                metadataJSON: metadataJSON
+            )
+            try await database.upsertExternalContextItem(item)
+
+            if state == .accepted {
+                let mergedFacts = StructuredMeetingFactsMerger().merge(
+                    existing: currentState.meetingFacts ?? MeetingFacts(title: currentState.title),
+                    imported: importedFacts,
+                    source: source,
+                    confidence: confidence ?? 0.9
+                )
+                _ = try await database.updateMeetingStateFacts(
+                    meetingID: meetingID,
+                    facts: mergedFacts,
+                    actor: .codexAPI,
+                    changeType: .meetingFactsUpdate,
+                    summary: "Applied trusted structured context import from \(source)."
+                )
+                await applyAcceptedExternalContextToNote(meetingID: meetingID)
+            }
+
+            await refreshContextInbox()
+            await refreshMeetingHistory()
+            await refreshRecentSessions()
+            let refreshedItems = try await database.externalContextItems(meetingID: meetingID, limit: 100)
+            let responseMessage = state == .accepted
+                ? "Structured context imported and applied automatically."
+                : "Structured context imported and queued for review."
+            return controlStatusResponse(
+                message: responseMessage,
+                contextItemID: item.id,
+                contextItems: refreshedItems.map(controlContextItem(from:)),
+                activeMeetingID: meetingID
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not import structured meeting context.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
         }
     }
 
@@ -4063,6 +4771,243 @@ final class BarnOwlAppModel: ObservableObject {
         return entries
     }
 
+    private func controlKnowledgeConcepts(
+        minimumDistinctMeetings: Int,
+        unresolvedOnly: Bool,
+        limit: Int
+    ) async throws -> [BarnOwlControlKnowledgeConcept] {
+        struct Candidate {
+            var displayValue: String
+            var suggestedKinds: Set<ContextEntityKind> = []
+            var meetingIDs: Set<UUID> = []
+            var mentionCount: Int = 0
+            var evidenceSources: Set<String> = []
+        }
+
+        let database = try makeDatabase()
+        let states = try await database.meetingStates(limit: 500)
+        let entities = try await database.contextEntities(limit: 500)
+        var resolvedKeys = Set<String>()
+        for entity in entities {
+            resolvedKeys.insert(Self.normalizedKnowledgeConceptKey(entity.canonicalName))
+            for alias in try await database.contextEntityAliases(entityID: entity.id) {
+                resolvedKeys.insert(Self.normalizedKnowledgeConceptKey(alias.alias))
+            }
+        }
+
+        var candidates: [String: Candidate] = [:]
+        func add(
+            _ rawValue: String,
+            kind: ContextEntityKind? = nil,
+            source: String,
+            meetingID: UUID,
+            mentionIncrement: Int = 1
+        ) {
+            guard let cleaned = MeetingFacts.clean(rawValue) else { return }
+            let key = Self.normalizedKnowledgeConceptKey(cleaned)
+            guard !key.isEmpty else { return }
+            var candidate = candidates[key] ?? Candidate(displayValue: cleaned)
+            if cleaned.count > candidate.displayValue.count {
+                candidate.displayValue = cleaned
+            }
+            if let kind {
+                candidate.suggestedKinds.insert(kind)
+            }
+            candidate.meetingIDs.insert(meetingID)
+            candidate.mentionCount += max(1, mentionIncrement)
+            candidate.evidenceSources.insert(source)
+            candidates[key] = candidate
+        }
+
+        for state in states {
+            if let facts = state.meetingFacts {
+                for participant in facts.participants {
+                    add(participant, kind: .person, source: "meeting_facts.participants", meetingID: state.id)
+                }
+                for customer in facts.customers {
+                    add(customer, kind: .customerAccount, source: "meeting_facts.customers", meetingID: state.id)
+                }
+                for organization in facts.organizations {
+                    add(organization, kind: .organization, source: "meeting_facts.organizations", meetingID: state.id)
+                }
+                for project in facts.projects {
+                    add(project, kind: .project, source: "meeting_facts.projects", meetingID: state.id)
+                }
+                for acronym in facts.glossary.keys {
+                    add(acronym, kind: .glossaryTerm, source: "meeting_facts.glossary_key", meetingID: state.id)
+                }
+                for expansion in facts.glossary.values {
+                    add(expansion, kind: .glossaryTerm, source: "meeting_facts.glossary_value", meetingID: state.id)
+                }
+            }
+            for mention in Self.transcriptKnowledgeConceptMentions(in: state.transcriptSegments) {
+                add(
+                    mention.value,
+                    source: "transcript.recurring_term",
+                    meetingID: state.id,
+                    mentionIncrement: mention.count
+                )
+            }
+        }
+
+        return candidates
+            .compactMap { normalizedValue, candidate -> BarnOwlControlKnowledgeConcept? in
+                let distinctMeetingCount = candidate.meetingIDs.count
+                guard distinctMeetingCount >= minimumDistinctMeetings else { return nil }
+                let isResolved = resolvedKeys.contains(normalizedValue)
+                guard !unresolvedOnly || !isResolved else { return nil }
+                let salienceConfidence = Self.knowledgeSalienceConfidence(
+                    distinctMeetingCount: distinctMeetingCount,
+                    mentionCount: candidate.mentionCount,
+                    evidenceSources: candidate.evidenceSources
+                )
+                let semanticConfidence = Self.knowledgeSemanticConfidence(
+                    suggestedKinds: candidate.suggestedKinds,
+                    distinctMeetingCount: distinctMeetingCount,
+                    evidenceSources: candidate.evidenceSources
+                )
+                return BarnOwlControlKnowledgeConcept(
+                    value: candidate.displayValue,
+                    normalizedValue: normalizedValue,
+                    suggestedKinds: candidate.suggestedKinds.sorted { $0.rawValue < $1.rawValue },
+                    meetingIDs: candidate.meetingIDs.sorted { $0.uuidString < $1.uuidString },
+                    distinctMeetingCount: distinctMeetingCount,
+                    mentionCount: candidate.mentionCount,
+                    evidenceSources: candidate.evidenceSources.sorted(),
+                    salienceConfidence: salienceConfidence,
+                    semanticConfidence: semanticConfidence,
+                    isResolved: isResolved
+                )
+            }
+            .sorted {
+                if $0.distinctMeetingCount != $1.distinctMeetingCount {
+                    return $0.distinctMeetingCount > $1.distinctMeetingCount
+                }
+                if $0.mentionCount != $1.mentionCount {
+                    return $0.mentionCount > $1.mentionCount
+                }
+                return $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending
+            }
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+
+    private static func transcriptKnowledgeConceptMentions(
+        in segments: [BarnOwlTranscriptSegmentRecord]
+    ) -> [(value: String, count: Int)] {
+        let transcript = segments
+            .map(\.text)
+            .joined(separator: "\n")
+        guard !transcript.isEmpty else { return [] }
+
+        let pattern = #"\b(?:[A-Z][A-Za-z0-9]{2,}|[A-Z]{2,})(?:\s+(?:[A-Z][A-Za-z0-9]{2,}|[A-Z]{2,})){0,2}\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ignored = Set([
+            "A", "AN", "AND", "ARE", "AS", "AT", "BE", "BUT", "BY", "CAN", "DO", "FOR", "FROM",
+            "HAS", "HAVE", "HOW", "IF", "IN", "IS", "IT", "LET", "MAY", "NOT", "OF", "OK", "ON",
+            "OR", "SO", "THE", "THIS", "THAT", "TO", "WE", "WHAT", "WHEN", "WITH", "WOULD", "YOU"
+        ])
+        let nsRange = NSRange(transcript.startIndex..<transcript.endIndex, in: transcript)
+        var counts: [String: (value: String, count: Int)] = [:]
+        for match in regex.matches(in: transcript, range: nsRange) {
+            guard let range = Range(match.range, in: transcript),
+                  let cleaned = MeetingFacts.clean(String(transcript[range]))
+            else {
+                continue
+            }
+            let normalizedKey = normalizedKnowledgeConceptKey(cleaned)
+            guard !normalizedKey.isEmpty else { continue }
+            guard !ignored.contains(cleaned.uppercased()) else { continue }
+            guard cleaned.count >= 3 else { continue }
+            var existing = counts[normalizedKey] ?? (cleaned, 0)
+            if cleaned.count > existing.value.count {
+                existing.value = cleaned
+            }
+            existing.count += 1
+            counts[normalizedKey] = existing
+        }
+        return counts.values
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count {
+                    return lhs.count > rhs.count
+                }
+                return lhs.value.localizedCaseInsensitiveCompare(rhs.value) == .orderedAscending
+            }
+    }
+
+    private static func knowledgeSalienceConfidence(
+        distinctMeetingCount: Int,
+        mentionCount: Int,
+        evidenceSources: Set<String>
+    ) -> Double {
+        let meetingSignal = min(Double(distinctMeetingCount), 15) * 0.045
+        let mentionSignal = min(Double(mentionCount), 20) * 0.0125
+        let structuredBonus = evidenceSources.contains { $0.hasPrefix("meeting_facts.") } ? 0.08 : 0
+        return min(0.99, 0.18 + meetingSignal + mentionSignal + structuredBonus)
+    }
+
+    private static func knowledgeSemanticConfidence(
+        suggestedKinds: Set<ContextEntityKind>,
+        distinctMeetingCount: Int,
+        evidenceSources: Set<String>
+    ) -> Double {
+        guard !suggestedKinds.isEmpty else {
+            return evidenceSources.contains("transcript.recurring_term") ? 0.18 : 0.25
+        }
+        let kindSpecificity = suggestedKinds.count == 1 ? 0.48 : 0.32
+        let recurrenceSignal = min(Double(distinctMeetingCount), 8) * 0.035
+        let structuredBonus = evidenceSources.contains { $0.hasPrefix("meeting_facts.") } ? 0.12 : 0
+        return min(0.95, kindSpecificity + recurrenceSignal + structuredBonus)
+    }
+
+    private func controlContextLibraryEntry(
+        database: BarnOwlDatabase,
+        entryID: UUID
+    ) async throws -> BarnOwlControlContextLibraryEntry? {
+        guard let entity = try await database.contextEntity(id: entryID) else {
+            return nil
+        }
+        let aliases = try await database.contextEntityAliases(entityID: entity.id).map(\.alias)
+        return BarnOwlControlContextLibraryEntry(
+            id: entity.id,
+            kind: entity.kind,
+            canonicalName: entity.canonicalName,
+            aliases: aliases,
+            confidence: entity.confidence,
+            isConfirmed: entity.isConfirmed,
+            createdAt: entity.createdAt,
+            updatedAt: entity.updatedAt
+        )
+    }
+
+    private func controlContextLibraryEvidence(
+        from evidence: BarnOwlContextEntityEvidenceRecord
+    ) -> BarnOwlControlContextLibraryEvidence {
+        BarnOwlControlContextLibraryEvidence(
+            id: evidence.id,
+            entityID: evidence.entityID,
+            meetingID: evidence.meetingID,
+            source: evidence.source,
+            observedValue: evidence.observedValue,
+            metadataJSON: evidence.metadataJSON,
+            createdAt: evidence.createdAt
+        )
+    }
+
+    private func controlContextLibraryLink(
+        from link: BarnOwlMeetingContextEntityLinkRecord
+    ) -> BarnOwlControlContextLibraryLink {
+        BarnOwlControlContextLibraryLink(
+            id: link.id,
+            meetingID: link.meetingID,
+            entityID: link.entityID,
+            role: link.role,
+            confidence: link.confidence,
+            createdAt: link.createdAt,
+            updatedAt: link.updatedAt
+        )
+    }
+
     private static func normalizedContextLibraryAliases(
         _ aliases: [String],
         canonicalName: String
@@ -4075,6 +5020,13 @@ final class BarnOwlAppModel: ObservableObject {
                 guard alias.localizedCaseInsensitiveCompare(canonicalName) != .orderedSame else { return false }
                 return seen.insert(alias.lowercased()).inserted
             }
+    }
+
+    private static func normalizedKnowledgeConceptKey(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     private func controlContextItems(from state: BarnOwlMeetingState) -> [BarnOwlControlContextItem] {
@@ -4585,6 +5537,26 @@ final class BarnOwlAppModel: ObservableObject {
         await refreshRecentSessions()
         await openRecentSession(session.id)
         await preparePostProcessingContextReview(for: session.id)
+        let autoReconciledEntries = (try? await autoReconcileRecurringKnowledge(limit: 20)) ?? []
+        if !autoReconciledEntries.isEmpty {
+            recordActivity(
+                category: "knowledge",
+                message: "Auto-reconciled durable context.",
+                details: "\(autoReconciledEntries.count) high-confidence recurring concept\(autoReconciledEntries.count == 1 ? "" : "s")",
+                sessionID: session.id,
+                updatePreview: false
+            )
+        }
+        let modelEnrichedEntries = (try? await autoEnrichRecurringKnowledge(limit: 8)) ?? []
+        if !modelEnrichedEntries.isEmpty {
+            recordActivity(
+                category: "knowledge",
+                message: "Auto-enriched durable context.",
+                details: "\(modelEnrichedEntries.count) resolver-backed concept\(modelEnrichedEntries.count == 1 ? "" : "s")",
+                sessionID: session.id,
+                updatePreview: false
+            )
+        }
         await refreshContextInbox()
         await refreshRecoveryAttentionItems()
         await refreshProcessingTimeline(meetingID: session.id)

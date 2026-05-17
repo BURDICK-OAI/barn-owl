@@ -158,6 +158,52 @@ func contextReviewCommandsDecodeMeetingAndReviewedContext() throws {
 }
 
 @Test
+func structuredMeetingContextImportDecodesMeetingFactsPayload() throws {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000C027")!
+    let command = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(
+            #"""
+            {
+              "command":"meeting_structured_context_import",
+              "meetingID":"\#(meetingID.uuidString)",
+              "source":"codex",
+              "confidence":0.97,
+              "meetingFacts":{
+                "title":"Moderna: Rosalind Pricing",
+                "meetingType":"Customer Review",
+                "participants":["Collin Burdick"],
+                "organizations":["OpenAI"],
+                "customers":["Moderna"],
+                "projects":["Rosalind"],
+                "glossary":{"API":"Application Programming Interface"},
+                "goals":["Confirm next steps"],
+                "additionalContext":["Imported from Codex enrichment."],
+                "confidence":{
+                  "title":0.97,
+                  "meetingType":0.97,
+                  "participants":0.97,
+                  "organizations":0.97,
+                  "context":0.97
+                },
+                "sources":{"title":"structured_import:codex"}
+              }
+            }
+            """#.utf8
+        )
+    )
+
+    #expect(command.command == .meetingStructuredContextImport)
+    #expect(command.meetingID == meetingID)
+    #expect(command.source == "codex")
+    #expect(command.confidence == 0.97)
+    #expect(command.meetingFacts?.title == "Moderna: Rosalind Pricing")
+    #expect(command.meetingFacts?.participants == ["Collin Burdick"])
+    #expect(command.meetingFacts?.projects == ["Rosalind"])
+    #expect(command.meetingFacts?.glossary["API"] == "Application Programming Interface")
+}
+
+@Test
 func jobContextAndAdminCommandsDecodePayloads() throws {
     let jobID = UUID(uuidString: "00000000-0000-0000-0000-00000000C021")!
     let contextID = UUID(uuidString: "00000000-0000-0000-0000-00000000C022")!
@@ -198,7 +244,35 @@ func contextLibraryCommandsDecodePayloads() throws {
     )
     let delete = try JSONDecoder().decode(
         BarnOwlControlCommand.self,
-        from: Data(#"{"command":"context_library_delete","contextLibraryEntryID":"\#(entryID.uuidString)"}"#.utf8)
+        from: Data(#"{"command":"context_library_delete","contextLibraryEntryID":"\#(entryID.uuidString)","confirmed":true}"#.utf8)
+    )
+    let alias = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"context_library_alias_add","contextLibraryEntryID":"\#(entryID.uuidString)","alias":"Roslyn"}"#.utf8)
+    )
+    let evidence = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"context_library_evidence_add","contextLibraryEntryID":"\#(entryID.uuidString)","source":"codex","observedValue":"Rosalind"}"#.utf8)
+    )
+    let reconcile = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"context_library_reconcile","contextKind":"project","canonicalName":"Rosalind","observedValue":"Roslyn","source":"codex","confidence":0.97,"confirmed":true}"#.utf8)
+    )
+    let recurring = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"knowledge_recurring_concepts","limit":12}"#.utf8)
+    )
+    let brief = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"knowledge_concept_brief","query":"Rosalind","limit":8}"#.utf8)
+    )
+    let enrich = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"knowledge_enrich_concept","query":"Rosalind","limit":7}"#.utf8)
+    )
+    let autoReconcile = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"knowledge_auto_reconcile","limit":6}"#.utf8)
     )
 
     #expect(list.command == .contextLibraryList)
@@ -211,6 +285,28 @@ func contextLibraryCommandsDecodePayloads() throws {
     #expect(upsert.aliases == ["Colin Burdick"])
     #expect(delete.command == .contextLibraryDelete)
     #expect(delete.contextLibraryEntryID == entryID)
+    #expect(delete.confirmed == true)
+    #expect(alias.command == .contextLibraryAliasAdd)
+    #expect(alias.contextLibraryEntryID == entryID)
+    #expect(alias.alias == "Roslyn")
+    #expect(evidence.command == .contextLibraryEvidenceAdd)
+    #expect(evidence.source == "codex")
+    #expect(evidence.observedValue == "Rosalind")
+    #expect(reconcile.command == .contextLibraryReconcile)
+    #expect(reconcile.contextKind == .project)
+    #expect(reconcile.canonicalName == "Rosalind")
+    #expect(reconcile.observedValue == "Roslyn")
+    #expect(reconcile.confirmed == true)
+    #expect(recurring.command == .knowledgeRecurringConcepts)
+    #expect(recurring.limit == 12)
+    #expect(brief.command == .knowledgeConceptBrief)
+    #expect(brief.query == "Rosalind")
+    #expect(brief.limit == 8)
+    #expect(enrich.command == .knowledgeEnrichConcept)
+    #expect(enrich.query == "Rosalind")
+    #expect(enrich.limit == 7)
+    #expect(autoReconcile.command == .knowledgeAutoReconcile)
+    #expect(autoReconcile.limit == 6)
 }
 
 @Test
@@ -238,12 +334,27 @@ func controlCommandNameIncludesCodexPrimaryCases() {
     #expect(names.contains("meeting_context_review_dismiss"))
     #expect(names.contains("meeting_context_review_accept_suggestion"))
     #expect(names.contains("meeting_context_review_ignore_suggestion"))
+    #expect(names.contains("meeting_structured_context_import"))
     #expect(names.contains("context_accept"))
     #expect(names.contains("context_ignore"))
     #expect(names.contains("context_delete"))
     #expect(names.contains("context_library_list"))
+    #expect(names.contains("context_library_get"))
     #expect(names.contains("context_library_upsert"))
+    #expect(names.contains("context_library_confirm"))
+    #expect(names.contains("context_library_unconfirm"))
+    #expect(names.contains("context_library_alias_add"))
+    #expect(names.contains("context_library_alias_remove"))
+    #expect(names.contains("context_library_evidence_add"))
+    #expect(names.contains("context_library_evidence_list"))
+    #expect(names.contains("context_library_links_list"))
+    #expect(names.contains("context_library_reconcile"))
     #expect(names.contains("context_library_delete"))
+    #expect(names.contains("knowledge_recurring_concepts"))
+    #expect(names.contains("knowledge_unresolved_concepts"))
+    #expect(names.contains("knowledge_concept_brief"))
+    #expect(names.contains("knowledge_enrich_concept"))
+    #expect(names.contains("knowledge_auto_reconcile"))
     #expect(names.contains("meeting_delete"))
     #expect(names.contains("meeting_purge_temp_audio"))
     #expect(names.contains("diagnostics_export"))

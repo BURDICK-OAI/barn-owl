@@ -22,7 +22,22 @@ barnowl start --title "Meeting" --source codex
 ```
 
 2. Capture `sessionID` or `meetingID` from the JSON response.
-3. Attach context after recording starts:
+3. Prefer structured assignments when Codex knows the meeting shape:
+
+```bash
+barnowl meeting import-context <meeting-id> \
+  --source codex \
+  --confidence 0.95 \
+  --title "Moderna: Rosalind Pricing" \
+  --type "Customer Review" \
+  --participant "Collin Burdick" \
+  --customer "Moderna" \
+  --project "Rosalind"
+```
+
+Trusted high-confidence structured imports are applied automatically to the meeting and remain inspectable in Barn Owl history/context surfaces. Use this path for participants, organizations, customer accounts, projects, glossary terms, titles, meeting types, goals, and concise imported context.
+
+4. Use freeform context only when the input is not yet cleanly structured:
 
 ```bash
 barnowl context add --session <uuid> --source codex --confidence 0.95 "Relevant context, summarized as facts."
@@ -30,7 +45,7 @@ barnowl context add --session <uuid> --source codex --confidence 0.95 "Relevant 
 
 Use `--confidence` for machine-supplied context. High-confidence Codex/Barn Owl context can be applied immediately; medium- and low-confidence context is queued for review.
 
-4. Stop only when the user asks. Prefer the review-aware flow so Codex returns the same post-meeting transcript suggestions the app shows:
+5. Stop only when the user asks. Prefer the review-aware flow so Codex returns the same post-meeting transcript suggestions the app shows:
 
 ```bash
 barnowl stop --wait-review --timeout 10m
@@ -44,7 +59,7 @@ barnowl wait --session <uuid> --until review --timeout 10m
 
 Summarize the returned `contextReview` prompts and Context Library suggestions, then ask for a decision before applying edits. Use `barnowl meeting context-review accept-suggestion <meeting-id> <suggestion-id>` or `ignore-suggestion` when the user approves or rejects a reusable mapping. Use `barnowl meeting context-review apply <meeting-id> --context "..."` only when the user approves the reviewed suggestions, or `dismiss` when they say to leave them for later.
 
-5. Wait for final processing before retrieving final notes:
+6. Wait for final processing before retrieving final notes:
 
 ```bash
 barnowl wait --session <uuid> --until complete --timeout 10m
@@ -56,19 +71,65 @@ Use `--latest` only when you did not capture the session id:
 barnowl wait --latest --until complete --timeout 10m
 ```
 
-6. Fetch final notes as Markdown:
+7. Fetch final notes as Markdown:
 
 ```bash
 barnowl meeting notes <meeting-id> --format markdown
 ```
 
-7. If processing failed, recover without opening the UI:
+8. If processing failed, recover without opening the UI:
 
 ```bash
 barnowl jobs list --session <uuid>
 barnowl jobs retry --session <uuid>
 barnowl wait --session <uuid> --until complete --timeout 10m
 ```
+
+## Durable Knowledge Enrichment Workflow
+
+When Barn Owl surfaces recurring or unresolved concepts, gather the enrichment packet before deciding what to persist:
+
+```bash
+barnowl knowledge unresolved --format json
+barnowl knowledge brief "Rosalind" --format json
+barnowl knowledge enrich "Rosalind" --format json
+```
+
+The brief includes recurrence confidence, semantic confidence, related meetings,
+transcript excerpts, and matching Context Library entries. Use that packet as the
+local Barn Owl evidence base, then add permitted user/internal/reference
+research when it materially improves classification. Write durable structured
+knowledge back through the CLI, not as prose:
+
+```bash
+barnowl context-library reconcile \
+  --type project \
+  --name "Rosalind" \
+  --observed "Rosalind" \
+  --source codex \
+  --confidence 0.97 \
+  --role project \
+  --confirmed
+```
+
+Use `--confirmed` only when the evidence supports a durable canonical mapping.
+The reconcile path backfills matching meeting links and evidence so one resolved
+concept improves future transcription, notes, and retrieval work.
+
+Barn Owl also auto-reconciles highly recurrent, semantically consistent concepts
+after completed processing. Use the explicit maintenance command when you want
+to force a pass from Codex:
+
+```bash
+barnowl knowledge auto-reconcile --limit 20
+```
+
+Use `barnowl knowledge enrich "<concept>" --format json` when the concept is
+recurrent but its type or canonical meaning is not yet defensible from local
+heuristics alone. Barn Owl sends the enrichment brief through its structured
+resolver, persists the result only above the automatic confidence threshold, and
+otherwise leaves the concept unresolved for later evidence instead of forcing a
+bad durable mapping.
 
 ## Commands
 
@@ -91,6 +152,11 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Ignore context: `barnowl context ignore <context-id>`
 - Delete context: `barnowl context delete <context-id>`
 - List Context Library entries: `barnowl context-library list --type person --query "Collin"`
+- Recurring concepts: `barnowl knowledge recurring --limit 20`
+- Unresolved concepts: `barnowl knowledge unresolved --limit 20`
+- Enrichment packet: `barnowl knowledge brief "Rosalind" --format json`
+- Resolver-backed enrichment: `barnowl knowledge enrich "Rosalind" --format json`
+- Auto-reconcile strong recurring concepts: `barnowl knowledge auto-reconcile --limit 20`
 - Add Context Library entry: `barnowl context-library add --type person --name "Collin Burdick" --alias "Colin Burdick"`
 - Update Context Library entry: `barnowl context-library update <entry-id> --name "Collin S. Burdick" --clear-aliases`
 - Delete Context Library entry: `barnowl context-library delete <entry-id> --yes`
@@ -105,6 +171,7 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Meeting notes: `barnowl meeting notes <meeting-id> --format markdown`
 - Meeting summary: `barnowl meeting summary <meeting-id>`
 - Meeting context: `barnowl meeting context <meeting-id>`
+- Structured meeting import: `barnowl meeting import-context <meeting-id> --source codex --confidence 0.95 --participant "Collin Burdick" --customer "Moderna" --project "Rosalind"`
 - Meeting transcript suggestions: `barnowl meeting context-review <meeting-id>`
 - Save correction for future meetings: `barnowl meeting context-review accept-suggestion <meeting-id> <suggestion-id>`
 - Ignore Context Library suggestion: `barnowl meeting context-review ignore-suggestion <meeting-id> <suggestion-id>`

@@ -112,6 +112,34 @@ enum BarnOwlProcessingRetryPolicy {
     }
 }
 
+private func reconcileMeetingFactsWithDurableKnowledge(
+    _ facts: MeetingFacts,
+    database: BarnOwlDatabase
+) async -> MeetingFacts {
+    do {
+        let entities = try await database.contextEntities(limit: 500)
+        var resolutions: [DurableContextAliasResolution] = []
+        for entity in entities where entity.isConfirmed {
+            let aliases = try await database.contextEntityAliases(entityID: entity.id)
+            for alias in aliases where alias.isConfirmed {
+                resolutions.append(DurableContextAliasResolution(
+                    kind: entity.kind,
+                    canonicalValue: entity.canonicalName,
+                    alias: alias.alias,
+                    confidence: max(entity.confidence, alias.confidence),
+                    isConfirmed: entity.isConfirmed && alias.isConfirmed
+                ))
+            }
+        }
+        return MeetingFactsKnowledgeReconciler().reconcile(
+            facts: facts,
+            resolutions: resolutions
+        )
+    } catch {
+        return facts
+    }
+}
+
 enum BarnOwlJobType {
     static let finalProcessing = "final_processing"
     static let summaryProcessing = "summary_processing"
@@ -485,6 +513,7 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
             freeformContext: MeetingContextBuilder.factsContext(from: context),
             currentTitle: finalSession.title
         )
+        meetingFacts = await reconcileMeetingFactsWithDurableKnowledge(meetingFacts, database: database)
         if let factTitle = MeetingFacts.clean(meetingFacts.title) {
             finalSession.title = factTitle
         } else {
@@ -724,6 +753,9 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             freeformContext: MeetingContextBuilder.factsContext(from: context),
             currentTitle: finalSession.title
         )
+        if let database = try? makeDatabase() {
+            meetingFacts = await reconcileMeetingFactsWithDurableKnowledge(meetingFacts, database: database)
+        }
         if let factTitle = MeetingFacts.clean(meetingFacts.title) {
             finalSession.title = factTitle
         } else {

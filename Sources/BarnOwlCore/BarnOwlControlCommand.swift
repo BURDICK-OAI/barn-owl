@@ -25,6 +25,7 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case meetingNotes = "meeting_notes"
     case meetingSummary = "meeting_summary"
     case meetingContext = "meeting_context"
+    case meetingStructuredContextImport = "meeting_structured_context_import"
     case meetingContextReview = "meeting_context_review"
     case meetingContextReviewApply = "meeting_context_review_apply"
     case meetingContextReviewDismiss = "meeting_context_review_dismiss"
@@ -43,8 +44,22 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case contextIgnore = "context_ignore"
     case contextDelete = "context_delete"
     case contextLibraryList = "context_library_list"
+    case contextLibraryGet = "context_library_get"
     case contextLibraryUpsert = "context_library_upsert"
+    case contextLibraryConfirm = "context_library_confirm"
+    case contextLibraryUnconfirm = "context_library_unconfirm"
+    case contextLibraryAliasAdd = "context_library_alias_add"
+    case contextLibraryAliasRemove = "context_library_alias_remove"
+    case contextLibraryEvidenceAdd = "context_library_evidence_add"
+    case contextLibraryEvidenceList = "context_library_evidence_list"
+    case contextLibraryLinksList = "context_library_links_list"
+    case contextLibraryReconcile = "context_library_reconcile"
     case contextLibraryDelete = "context_library_delete"
+    case knowledgeRecurringConcepts = "knowledge_recurring_concepts"
+    case knowledgeUnresolvedConcepts = "knowledge_unresolved_concepts"
+    case knowledgeConceptBrief = "knowledge_concept_brief"
+    case knowledgeEnrichConcept = "knowledge_enrich_concept"
+    case knowledgeAutoReconcile = "knowledge_auto_reconcile"
     case chat = "chat"
     case diagnosticsExport = "diagnostics_export"
     case permissionsCheck = "permissions_check"
@@ -63,6 +78,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var source: String?
     public var confidence: Double?
     public var meetingID: UUID?
+    public var meetingFacts: MeetingFacts?
     public var query: String?
     public var limit: Int?
     public var format: String?
@@ -76,6 +92,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var contextKind: ContextEntityKind?
     public var canonicalName: String?
     public var aliases: [String]?
+    public var alias: String?
+    public var observedValue: String?
+    public var metadataJSON: String?
+    public var role: String?
     public var confirmed: Bool?
     public var outputPath: String?
     public var all: Bool?
@@ -92,6 +112,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         source: String? = nil,
         confidence: Double? = nil,
         meetingID: UUID? = nil,
+        meetingFacts: MeetingFacts? = nil,
         query: String? = nil,
         limit: Int? = nil,
         format: String? = nil,
@@ -105,6 +126,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         contextKind: ContextEntityKind? = nil,
         canonicalName: String? = nil,
         aliases: [String]? = nil,
+        alias: String? = nil,
+        observedValue: String? = nil,
+        metadataJSON: String? = nil,
+        role: String? = nil,
         confirmed: Bool? = nil,
         outputPath: String? = nil,
         all: Bool? = nil,
@@ -120,6 +145,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.source = source
         self.confidence = confidence.map { min(max($0, 0), 1) }
         self.meetingID = meetingID
+        self.meetingFacts = meetingFacts
         self.query = query
         self.limit = limit
         self.format = format
@@ -133,6 +159,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.contextKind = contextKind
         self.canonicalName = canonicalName
         self.aliases = aliases
+        self.alias = alias
+        self.observedValue = observedValue
+        self.metadataJSON = metadataJSON
+        self.role = role
         self.confirmed = confirmed
         self.outputPath = outputPath
         self.all = all
@@ -356,6 +386,142 @@ public struct BarnOwlControlContextLibraryEntry: Codable, Equatable, Identifiabl
     }
 }
 
+public struct BarnOwlControlContextLibraryEvidence: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var entityID: UUID
+    public var meetingID: UUID?
+    public var source: String
+    public var observedValue: String
+    public var metadataJSON: String?
+    public var createdAt: Date
+
+    public init(
+        id: UUID,
+        entityID: UUID,
+        meetingID: UUID? = nil,
+        source: String,
+        observedValue: String,
+        metadataJSON: String? = nil,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.entityID = entityID
+        self.meetingID = meetingID
+        self.source = source
+        self.observedValue = observedValue
+        self.metadataJSON = metadataJSON
+        self.createdAt = createdAt
+    }
+}
+
+public struct BarnOwlControlContextLibraryLink: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var meetingID: UUID
+    public var entityID: UUID
+    public var role: String
+    public var confidence: Double
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID,
+        meetingID: UUID,
+        entityID: UUID,
+        role: String,
+        confidence: Double,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.meetingID = meetingID
+        self.entityID = entityID
+        self.role = role
+        self.confidence = min(max(confidence, 0), 1)
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlControlKnowledgeConcept: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { normalizedValue }
+    public var value: String
+    public var normalizedValue: String
+    public var suggestedKinds: [ContextEntityKind]
+    public var meetingIDs: [UUID]
+    public var distinctMeetingCount: Int
+    public var mentionCount: Int
+    public var evidenceSources: [String]
+    public var salienceConfidence: Double
+    public var semanticConfidence: Double
+    public var isResolved: Bool
+
+    public init(
+        value: String,
+        normalizedValue: String,
+        suggestedKinds: [ContextEntityKind],
+        meetingIDs: [UUID],
+        distinctMeetingCount: Int,
+        mentionCount: Int,
+        evidenceSources: [String],
+        salienceConfidence: Double,
+        semanticConfidence: Double,
+        isResolved: Bool
+    ) {
+        self.value = value
+        self.normalizedValue = normalizedValue
+        self.suggestedKinds = suggestedKinds
+        self.meetingIDs = meetingIDs
+        self.distinctMeetingCount = distinctMeetingCount
+        self.mentionCount = mentionCount
+        self.evidenceSources = evidenceSources
+        self.salienceConfidence = min(max(salienceConfidence, 0), 1)
+        self.semanticConfidence = min(max(semanticConfidence, 0), 1)
+        self.isResolved = isResolved
+    }
+}
+
+public struct BarnOwlControlKnowledgeExcerpt: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { "\(meetingID.uuidString):\(sequence)" }
+    public var meetingID: UUID
+    public var meetingTitle: String
+    public var speakerLabel: String?
+    public var sequence: Int
+    public var text: String
+
+    public init(
+        meetingID: UUID,
+        meetingTitle: String,
+        speakerLabel: String? = nil,
+        sequence: Int,
+        text: String
+    ) {
+        self.meetingID = meetingID
+        self.meetingTitle = meetingTitle
+        self.speakerLabel = speakerLabel
+        self.sequence = sequence
+        self.text = text
+    }
+}
+
+public struct BarnOwlControlKnowledgeBrief: Codable, Equatable, Sendable {
+    public var concept: BarnOwlControlKnowledgeConcept
+    public var relatedMeetings: [BarnOwlControlMeeting]
+    public var transcriptExcerpts: [BarnOwlControlKnowledgeExcerpt]
+    public var matchingContextLibraryEntries: [BarnOwlControlContextLibraryEntry]
+
+    public init(
+        concept: BarnOwlControlKnowledgeConcept,
+        relatedMeetings: [BarnOwlControlMeeting],
+        transcriptExcerpts: [BarnOwlControlKnowledgeExcerpt],
+        matchingContextLibraryEntries: [BarnOwlControlContextLibraryEntry]
+    ) {
+        self.concept = concept
+        self.relatedMeetings = relatedMeetings
+        self.transcriptExcerpts = transcriptExcerpts
+        self.matchingContextLibraryEntries = matchingContextLibraryEntries
+    }
+}
+
 public struct BarnOwlControlJob: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var meetingID: UUID?
@@ -504,6 +670,10 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var summary: String?
     public var contextItems: [BarnOwlControlContextItem]?
     public var contextLibraryEntries: [BarnOwlControlContextLibraryEntry]?
+    public var contextLibraryEvidence: [BarnOwlControlContextLibraryEvidence]?
+    public var contextLibraryLinks: [BarnOwlControlContextLibraryLink]?
+    public var knowledgeConcepts: [BarnOwlControlKnowledgeConcept]?
+    public var knowledgeBrief: BarnOwlControlKnowledgeBrief?
     public var contextReview: BarnOwlContextReview?
     public var contextReviewReady: Bool?
     public var actions: [String]?
@@ -558,6 +728,10 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         summary: String? = nil,
         contextItems: [BarnOwlControlContextItem]? = nil,
         contextLibraryEntries: [BarnOwlControlContextLibraryEntry]? = nil,
+        contextLibraryEvidence: [BarnOwlControlContextLibraryEvidence]? = nil,
+        contextLibraryLinks: [BarnOwlControlContextLibraryLink]? = nil,
+        knowledgeConcepts: [BarnOwlControlKnowledgeConcept]? = nil,
+        knowledgeBrief: BarnOwlControlKnowledgeBrief? = nil,
         contextReview: BarnOwlContextReview? = nil,
         contextReviewReady: Bool? = nil,
         actions: [String]? = nil,
@@ -611,6 +785,10 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.summary = summary
         self.contextItems = contextItems
         self.contextLibraryEntries = contextLibraryEntries
+        self.contextLibraryEvidence = contextLibraryEvidence
+        self.contextLibraryLinks = contextLibraryLinks
+        self.knowledgeConcepts = knowledgeConcepts
+        self.knowledgeBrief = knowledgeBrief
         self.contextReview = contextReview
         self.contextReviewReady = contextReviewReady
         self.actions = actions
