@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
-  "build": "17",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.17/BarnOwl.app.zip",
-  "sha256": "51aacbe9ccb95b3315434feca99732e81c150e43ba15a1f6509834dc3d4aafa2",
-  "notes": "Barn Owl 0.1.0 (17)"
+  "build": "19",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.19/BarnOwl.app.zip",
+  "sha256": "2e40b25b38db24f802eaf6b69cb01230fc0e6797bd8e8a64634f2e8a35128319",
+  "notes": "Made explicit Barn Owl update checks refresh the live feed before deciding no newer build exists. Prevents stale cached up-to-date state from hiding a newly published release."
 }
