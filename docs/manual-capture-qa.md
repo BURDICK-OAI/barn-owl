@@ -42,13 +42,30 @@ scripts/verify-production-readiness.sh \
   --manual-qa-evidence .build/manual-qa/manual-capture-qa-evidence-YYYYMMDD-HHMMSS.md
 ```
 
-The CLI/Codex feedback section can be checked automatically after installing the
-release candidate:
+Most of the CLI/Codex feedback section can be checked automatically after
+installing the release candidate:
 
 ```sh
 scripts/verify-cli-codex-qa.sh \
   --evidence .build/manual-qa/manual-capture-qa-evidence-YYYYMMDD-HHMMSS.md
 ```
+
+That helper verifies status, diagnostics export, Slack feedback guards, and the
+bundled Codex skill text. It does not start or stop a live recording, so leave
+`CLI start stop wait notes flow passed or was covered by the manual recording flow`
+unchecked until the actual recording QA pass covers it.
+
+If you want the CLI recording control path proven separately from the broader
+manual TCC walkthrough, run:
+
+```sh
+scripts/verify-cli-recording-flow.sh \
+  --evidence .build/manual-qa/manual-capture-qa-evidence-YYYYMMDD-HHMMSS.md
+```
+
+That script starts a short installed-app recording, stops it, waits for final
+processing, fetches notes, marks the matching evidence checkbox, and appends a
+transcript-free proof section to the evidence file.
 
 Use a real audio signal for both sources:
 
@@ -60,7 +77,27 @@ Use a real audio signal for both sources:
 
 Run manual QA against the exact `dist/BarnOwl.app.zip` release candidate you
 intend to share. `scripts/verify-production-readiness.sh` rejects evidence whose
-recorded app SHA-256 does not match the current `dist/BarnOwl.app.zip`.
+recorded app SHA-256 does not match the current `dist/BarnOwl.app.zip`, and it
+also rejects evidence where the installed app version/build does not match the
+packaged artifact version/build recorded in the same file.
+
+For the redesigned context flow, confirm the recorder UI exposes two clear
+entry points:
+
+- `Add Details` for meeting-only facts the user types directly.
+- `Review Auto Context` for proposed updates from the transcript plus imported suggestions
+  from CLI or Codex.
+
+When transcript-derived durable corrections are available, they should appear as
+`Reusable knowledge for future meetings`, and Settings should use the shorter
+durable-layer label `Context Library`. In Settings, confirm that Context Library
+knowledge is not just described: the release candidate must visibly support
+listing saved mappings plus creating, editing, and deleting them.
+
+In the installed app recording view, also open each transcript-top utility panel
+(`Update Notes with Prompt`, `Add Details`, and `Review Auto Context`) and confirm the pane
+still scrolls normally, the transcript/editor region remains reachable, and the
+layout stays usable at the tested window size.
 
 ## Permission Reset Commands
 
@@ -349,6 +386,21 @@ This pass is done only when all of the following are true:
 - Denied mic permission is visible, retryable, and does not retain raw audio.
 - Denied system-audio permission is visible, retryable, and does not silently downgrade default capture.
 - Previously denied permissions fail quickly with actionable UI and can be retried after the user grants access.
+- The recorder exposes `Add Details` for meeting-only input and `Review Auto Context` for
+  transcript/imported suggestions; durable cross-meeting corrections are labeled
+  `Corrections for future meetings` in the app and `Context Library`
+  in Settings.
+- Opening the transcript-top utility panels preserves normal app scrolling and
+  keeps the transcript/editor content reachable instead of clipping it below the
+  viewport.
+- Mark `Add Details, Review Auto Context, and Context Library labels are clear` in the
+  evidence file only after that recorder/settings check passes on the installed
+  release candidate.
+- Mark `Transcript utility panels preserve app scrolling and remain responsive`
+  in the evidence file only after that installed-app interaction passes.
+- Mark `Settings Context Library stays compact and opens management for view create edit and delete` in the
+  evidence file only after those four actions work on the installed release
+  candidate.
 - Evidence is attached for prompts, app states, logs, chunk metadata, and post-finalize file listings.
 - Installed CLI status, diagnostics export, feedback draft, feedback confirmation guard, and bundled Codex skill guidance are checked against the same app package.
 

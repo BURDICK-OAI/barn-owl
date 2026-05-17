@@ -89,6 +89,9 @@ required_checked_labels=(
   "Realtime preview produced visible text while recording"
   "Final notes and transcript are visible"
   "Live preview stayed visually separate from final transcript"
+  "Transcript utility panels preserve app scrolling and remain responsive"
+  "Add Details, Review Auto Context, and Context Library labels are clear"
+  "Settings Context Library stays compact and opens management for view create edit and delete"
   "No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors"
   "Installed CLI status command passed"
   "CLI start stop wait notes flow passed or was covered by the manual recording flow"
@@ -96,6 +99,8 @@ required_checked_labels=(
   "CLI feedback Slack draft produced a redacted draft without posting"
   "CLI feedback Slack post requires explicit confirmation and configured webhook"
   "Bundled Codex skill guidance matches the installed CLI behavior"
+  "Bundled Codex MCP app resources are present"
+  "Installed Codex MCP app smoke passed"
 )
 
 completed_manual_evidence=""
@@ -122,6 +127,25 @@ for evidence in "${MANUAL_QA_EVIDENCE[@]}"; do
   fi
   if ! grep -Fxq -- '- Installed Codex skill: `present`' "$evidence"; then
     evidence_reasons+=("installed bundled Codex skill is not recorded as present")
+  fi
+  if ! grep -Fxq -- '- Installed Codex MCP app: `present`' "$evidence"; then
+    evidence_reasons+=("installed bundled Codex MCP app is not recorded as present")
+  fi
+
+  artifact_version="$(
+    sed -nE 's/^- Version: `([^`]*)`$/\1/p' "$evidence" | head -n 1
+  )"
+  installed_version="$(
+    sed -nE 's/^- Installed version: `([^`]*)`$/\1/p' "$evidence" | head -n 1
+  )"
+  if [[ -z "$artifact_version" ]]; then
+    evidence_reasons+=("artifact version/build is missing from evidence")
+  fi
+  if [[ -z "$installed_version" ]]; then
+    evidence_reasons+=("installed app version/build is missing from evidence")
+  fi
+  if [[ -n "$artifact_version" && -n "$installed_version" && "$artifact_version" != "$installed_version" ]]; then
+    evidence_reasons+=("installed app version/build does not match packaged artifact ($installed_version != $artifact_version)")
   fi
 
   for label in "${required_checked_labels[@]}"; do

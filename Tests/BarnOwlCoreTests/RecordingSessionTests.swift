@@ -357,6 +357,36 @@ func menuBarTranscriptPreviewUsesRecordingPlaceholderWhenEmpty() {
 }
 
 @Test
+func recorderContextPresentationKeepsMeetingInputSeparateFromReview() {
+    #expect(RecorderContextPresentation.addDetailsToolbarTitle == "Add Details")
+    #expect(RecorderContextPresentation.reviewToolbarTitle == "Review Auto Context")
+    #expect(RecorderContextPresentation.addDetailsSectionTitle == "This meeting")
+    #expect(RecorderContextPresentation.transcriptReviewSectionTitle == "From the transcript")
+    #expect(RecorderContextPresentation.importedReviewSectionTitle == "Imported suggestions")
+    #expect(RecorderContextPresentation.addDetailsPanelDetail.contains("this meeting"))
+    #expect(RecorderContextPresentation.addDetailsPanelDetail.contains("separately in Review Auto Context"))
+    #expect(RecorderContextPresentation.reviewPanelDetail.contains("future meetings"))
+    #expect(RecorderContextPresentation.reusableKnowledgeTitle == "Corrections for future meetings")
+    #expect(RecorderContextPresentation.applyTranscriptSuggestionsTitle == "Apply to this meeting")
+    #expect(RecorderContextPresentation.keepCurrentNoteTitle == "Keep current note")
+    #expect(RecorderContextPresentation.meetingUpdatesSummaryTitle == "Meeting updates")
+    #expect(RecorderContextPresentation.reusableCorrectionsSummaryTitle == "Reusable corrections")
+    #expect(RecorderContextPresentation.importedSuggestionsSummaryTitle == "Imported suggestions")
+}
+
+@Test
+func recorderNoteSurfacePresentationSeparatesRealtimePreviewFromSavedMarkdown() {
+    #expect(
+        RecorderNoteSurfacePresentation.make(hasDisplayedNote: false)
+            == RecorderNoteSurfacePresentation(title: "Realtime Preview", systemImage: "waveform")
+    )
+    #expect(
+        RecorderNoteSurfacePresentation.make(hasDisplayedNote: true)
+            == RecorderNoteSurfacePresentation(title: "Markdown Note", systemImage: "doc.plaintext")
+    )
+}
+
+@Test
 func lifecyclePresentationDistinguishesStoppingProcessingAndComplete() {
     let session = RecordingSession(
         id: .init(uuidString: "00000000-0000-0000-0000-000000000031")!,
@@ -396,6 +426,58 @@ func lifecyclePresentationDistinguishesStoppingProcessingAndComplete() {
         BarnOwlProcessingTimelineItem(step: .complete, status: .complete)
     ]
     #expect(!BarnOwlAppModel.hasActiveProcessing(collapsedTimeline))
+}
+
+@Test
+func lifecyclePresentationUsesConfiguredRecordingDetail() {
+    let session = RecordingSession(
+        id: .init(uuidString: "00000000-0000-0000-0000-000000000032")!,
+        title: "System Audio Review",
+        startedAt: .init(timeIntervalSince1970: 100),
+        audioSources: AudioSourceConfiguration(capturesMicrophone: false, capturesSystemAudio: true)
+    )
+
+    let recording = BarnOwlLifecyclePresentation.make(
+        state: .recording(session),
+        hasActiveProcessing: false,
+        hasDisplayedNote: false,
+        recordingDetail: "Capturing system audio only."
+    )
+
+    #expect(recording.phase == .recording)
+    #expect(recording.detail == "Capturing system audio only.")
+}
+
+@Test
+func localCaptureReadinessResultReportsCurrentObservedTracksSeparatelyFromPersistedReadiness() {
+    let result = BarnOwlLocalCaptureReadinessResult(capturedTrackKinds: [.microphone])
+
+    #expect(result.currentTestDiagnosticLines == [
+        "current_local_capture_test_microphone_observed=true",
+        "current_local_capture_test_system_audio_observed=false"
+    ])
+}
+
+@Test
+func recorderWorkspaceUsesScrollableModeForExpandedInlinePanels() {
+    #expect(
+        RecorderWorkspacePresentation.shouldUseScrollableWorkspace(
+            hasActiveUtilityPanel: true,
+            hasPostRecordingReview: false
+        )
+    )
+    #expect(
+        RecorderWorkspacePresentation.shouldUseScrollableWorkspace(
+            hasActiveUtilityPanel: false,
+            hasPostRecordingReview: true
+        )
+    )
+    #expect(
+        !RecorderWorkspacePresentation.shouldUseScrollableWorkspace(
+            hasActiveUtilityPanel: false,
+            hasPostRecordingReview: false
+        )
+    )
 }
 
 @Test
@@ -578,6 +660,16 @@ func controlResponseSuggestsSlackFeedbackOnlyForNonOwnerErrors() {
         currentUsername: "teammate",
         ownerUsername: "burdick"
     ))
+
+    #expect(!BarnOwlAppModel.shouldSuggestSlackFeedback(
+        ok: false,
+        errorCode: "context_review_not_found",
+        error: "No context review is ready for this meeting.",
+        lastError: nil,
+        jobState: nil,
+        currentUsername: "teammate",
+        ownerUsername: "burdick"
+    ))
 }
 
 @Test
@@ -674,6 +766,44 @@ func controlBridgeRequiresBearerTokenForPOSTCommands() async throws {
     #expect(unauthorized.contains(#""error":"unauthorized""#))
     #expect(authorized.contains(#""ok":true"#))
     #expect(!authorized.contains(#""error":"unauthorized""#))
+}
+
+@Test
+func controlBridgeReportsLoopbackBindFailures() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try await MainActor.run {
+        try makeQuickCommandTestModel(database: database)
+    }
+    let port = try unusedLocalPort()
+    let occupiedSocket = try occupyLocalPort(port)
+    defer { Darwin.close(occupiedSocket) }
+
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "BarnOwlControlBridgeBindFailureTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bridge = BarnOwlControlBridge(
+        model: model,
+        port: port,
+        tokenStore: BarnOwlControlBridgeTokenStore(
+            tokenFileURL: root.appending(path: "control-bridge-token", directoryHint: .notDirectory)
+        ),
+        openCurrentMeeting: {}
+    )
+    bridge.start()
+    defer { bridge.stop() }
+
+    let deadline = Date().addingTimeInterval(3)
+    while Date() < deadline {
+        let messages = await MainActor.run {
+            model.activityItems.map(\.message)
+        }
+        if messages.contains("Control bridge could not bind its local loopback port.") {
+            return
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    #expect(Bool(false), "Expected control bridge bind failure diagnostics.")
 }
 
 @Test
@@ -812,6 +942,19 @@ func updateAvailabilityButtonTitlesMatchMenuBarPolicy() {
     let available = BarnOwlUpdateAvailability.available(BarnOwlAvailableUpdate(version: "0.1.0", build: "9", notes: nil))
     #expect(available.buttonTitle == "Update Available")
     #expect(available.hasInstallableUpdate)
+}
+
+@Test
+func bundledChangelogIncludesReleaseNotesForSettingsAndUpdateManifests() throws {
+    let latest = try #require(BarnOwlChangelog.latestRelease)
+    let notes = try #require(BarnOwlChangelog.updateManifestNotes(
+        version: latest.version,
+        build: latest.build
+    ))
+
+    #expect(!latest.title.isEmpty)
+    #expect(!latest.highlights.isEmpty)
+    #expect(notes.contains(latest.highlights[0]))
 }
 
 @Test
@@ -1071,6 +1214,14 @@ func appDelegateSkipsMenuBarRuntimeDuringUnitTests() {
         environment: [:],
         arguments: ["/tmp/BarnOwlApp", "/tmp/BarnOwlCoreTests.xctest"]
     ))
+    #expect(!BarnOwlAppDelegate.shouldInstallAppRuntime(
+        environment: ["XCInjectBundleInto": "unused"],
+        arguments: ["/tmp/BarnOwlApp"]
+    ))
+    #expect(!BarnOwlAppDelegate.shouldInstallAppRuntime(
+        environment: ["DYLD_INSERT_LIBRARIES": "/tmp/libXCTestBundleInject.dylib"],
+        arguments: ["/tmp/BarnOwlApp"]
+    ))
     #expect(BarnOwlAppDelegate.shouldInstallAppRuntime(
         environment: [:],
         arguments: ["/Applications/Barn Owl.app/Contents/MacOS/BarnOwlApp"]
@@ -1140,7 +1291,8 @@ func quickCommandAddContextUsesLatestMeetingWhenNoIDIsSupplied() async throws {
     let response = await model.handleQuickCommand(BarnOwlQuickCommand(
         name: .addContext,
         context: "Dana said renewal pricing is the main risk.",
-        source: "codex"
+        source: "codex",
+        confidence: 0.95
     ))
 
     #expect(response.ok)
@@ -1149,6 +1301,166 @@ func quickCommandAddContextUsesLatestMeetingWhenNoIDIsSupplied() async throws {
     #expect(contextItems.count == 1)
     #expect(contextItems[0].body == "Dana said renewal pricing is the main risk.")
     #expect(contextItems[0].source == "codex")
+    #expect(contextItems[0].state == .accepted)
+    #expect(contextItems[0].confidence == 0.95)
+}
+
+@Test
+@MainActor
+func quickCommandMediumConfidenceCodexContextRequiresReview() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000709")!
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(id: meetingID, title: "Acme Pricing"))
+
+    let response = await model.handleQuickCommand(BarnOwlQuickCommand(
+        name: .addContext,
+        meetingID: meetingID,
+        context: "This might be a procurement escalation.",
+        source: "codex",
+        confidence: 0.62
+    ))
+
+    #expect(response.ok)
+    #expect(response.message == "Context queued for review.")
+    let contextItems = try await database.externalContextItems(meetingID: meetingID, limit: 10)
+    #expect(contextItems.count == 1)
+    #expect(contextItems[0].state == .pending)
+    #expect(contextItems[0].confidence == 0.62)
+}
+
+@Test
+@MainActor
+func postRecordingContextReviewAutoSavesHighConfidenceSuggestionsAndLeavesLowerConfidenceForReview() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let libraryRoot = FileManager.default.temporaryDirectory
+        .appending(path: "BarnOwlContextAutoAcceptTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: libraryRoot) }
+    let model = try makeQuickCommandTestModel(database: database, libraryRoot: libraryRoot)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000710")!
+    let startedAt = Date(timeIntervalSince1970: 1_800_000_300)
+    let session = RecordingSession(
+        id: meetingID,
+        title: "Untitled Meeting",
+        startedAt: startedAt,
+        audioSources: .defaultMeetingCapture
+    ).finished(at: startedAt.addingTimeInterval(90))
+    let markdown = "# Untitled Meeting\n\n## Summary\nDiscussed Acme follow-up."
+    let summary = MeetingSummary(overview: "Discussed Acme follow-up.")
+    let transcriptSegments = [
+        TranscriptSegment(
+            speakerLabel: "Colin",
+            text: "Acme needs the follow-up owner confirmed.",
+            startTime: 0,
+            endTime: 4
+        )
+    ]
+
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: meetingID,
+        title: "Untitled Meeting",
+        startedAt: startedAt,
+        summary: summary
+    ))
+    try await FilesystemLocalLibraryStore(rootDirectory: libraryRoot).saveArtifact(LocalMeetingArtifact(
+        session: session,
+        summary: summary,
+        transcriptSegments: transcriptSegments,
+        markdown: markdown
+    ))
+    try await database.upsertMeetingCalendarContext(BarnOwlMeetingCalendarContextRecord(
+        meetingID: meetingID,
+        calendarEventID: "event-auto-accept",
+        title: "Customer Review",
+        startsAt: startedAt,
+        endsAt: startedAt.addingTimeInterval(90),
+        attendeesJSON: #"["Collin"]"#,
+        createdAt: startedAt,
+        updatedAt: startedAt
+    ))
+
+    let existingEntity = BarnOwlContextEntityRecord(
+        kind: .organization,
+        canonicalName: "Acme Corp",
+        confidence: 0.70,
+        isConfirmed: true,
+        createdAt: startedAt,
+        updatedAt: startedAt
+    )
+    try await database.upsertContextEntity(existingEntity)
+    try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+        entityID: existingEntity.id,
+        alias: "Acme",
+        confidence: 0.70,
+        isConfirmed: true,
+        createdAt: startedAt,
+        updatedAt: startedAt
+    ))
+
+    model.displayedNote = BarnOwlDisplayedNote(
+        id: meetingID,
+        title: session.title,
+        startedAt: session.startedAt,
+        markdown: markdown,
+        meetingFacts: nil
+    )
+
+    await model.prepareContextReviewForDisplayedMeeting()
+
+    let people = try await database.contextEntities(kind: .person, limit: 20)
+    let savedPerson = try #require(people.first { $0.canonicalName == "Collin" })
+    let savedAliases = try await database.contextEntityAliases(entityID: savedPerson.id)
+    let remainingSuggestions = try #require(model.postRecordingContextReview?.entitySuggestions)
+
+    #expect(savedPerson.isConfirmed)
+    #expect(savedPerson.confidence == 0.94)
+    #expect(savedAliases.contains { $0.alias == "Colin" && $0.isConfirmed && $0.confidence == 0.94 })
+    #expect(!remainingSuggestions.contains { $0.observedValue == "Colin" && $0.canonicalValue == "Collin" })
+    #expect(remainingSuggestions.contains {
+        $0.observedValue == "Acme"
+            && $0.canonicalValue == "Acme Corp"
+            && $0.confidence == 0.70
+    })
+    #expect(model.contextReviewStatus.contains("Saved 1 high-confidence Context Library suggestion"))
+}
+
+@Test
+@MainActor
+func controlContextLibraryResponsesSupportCreateSearchUpdateAndDelete() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+
+    let create = await model.controlContextLibraryUpsertResponse(
+        entryID: nil,
+        kind: .person,
+        canonicalName: "Collin Burdick",
+        aliases: ["Colin Burdick", "Collin"]
+    )
+
+    let entryID = try #require(create.contextLibraryEntryID)
+    #expect(create.ok)
+    #expect(create.contextLibraryEntries?.first?.canonicalName == "Collin Burdick")
+
+    let search = await model.controlContextLibraryListResponse(kind: .person, query: "Colin")
+    #expect(search.ok)
+    #expect(search.contextLibraryEntries?.count == 1)
+    #expect(search.contextLibraryEntries?.first?.aliases == ["Colin Burdick", "Collin"])
+
+    let update = await model.controlContextLibraryUpsertResponse(
+        entryID: entryID,
+        kind: .person,
+        canonicalName: "Collin S. Burdick",
+        aliases: []
+    )
+    #expect(update.ok)
+    #expect(update.contextLibraryEntries?.first?.canonicalName == "Collin S. Burdick")
+    #expect(update.contextLibraryEntries?.first?.aliases == [])
+
+    let delete = await model.controlContextLibraryDeleteResponse(entryID: entryID)
+    #expect(delete.ok)
+
+    let finalList = await model.controlContextLibraryListResponse()
+    #expect(finalList.contextLibraryEntries?.isEmpty == true)
 }
 
 @Test
@@ -1596,6 +1908,28 @@ func postRecordingContextReviewSuggestsTypeTitleAndParticipantsFromTranscript() 
 }
 
 @Test
+func contextEntitySuggestionGeneratorFindsPersonOrganizationAndGlossaryCorrections() {
+    let facts = MeetingFacts(
+        participants: ["Colin"],
+        organizations: ["Acme"],
+        customers: ["Acme"],
+        glossary: ["SE": "Solutions Engineering"]
+    )
+    let suggestions = ContextEntitySuggestionGenerator().suggestions(
+        facts: facts,
+        transcript: "Colin: We should follow up.",
+        contextLines: [
+            "Calendar attendees: Collin",
+            "Customers: Acme Corp."
+        ]
+    )
+
+    #expect(suggestions.contains { $0.kind == .person && $0.observedValue == "Colin" && $0.canonicalValue == "Collin" })
+    #expect(suggestions.contains { $0.kind == .customerAccount && $0.observedValue == "Acme" && $0.canonicalValue == "Acme Corp" })
+    #expect(suggestions.contains { $0.kind == .glossaryTerm && $0.observedValue == "SE" && $0.canonicalValue == "Solutions Engineering" })
+}
+
+@Test
 @MainActor
 func meetingFactsMarkdownSectionIsReplacedInsteadOfDuplicated() {
     let session = RecordingSession(
@@ -1688,8 +2022,11 @@ private func makeActivityItem(message: String, timestamp: Date) -> BarnOwlActivi
 }
 
 @MainActor
-private func makeQuickCommandTestModel(database: BarnOwlDatabase) throws -> BarnOwlAppModel {
-    let libraryRoot = FileManager.default.temporaryDirectory
+private func makeQuickCommandTestModel(
+    database: BarnOwlDatabase,
+    libraryRoot requestedLibraryRoot: URL? = nil
+) throws -> BarnOwlAppModel {
+    let libraryRoot = requestedLibraryRoot ?? FileManager.default.temporaryDirectory
         .appending(path: "BarnOwlQuickCommandTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
     return BarnOwlAppModel(
@@ -1769,6 +2106,31 @@ private func unusedLocalPort() throws -> UInt16 {
     }
     guard nameResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     return UInt16(bigEndian: boundAddress.sin_port)
+}
+
+private func occupyLocalPort(_ port: UInt16) throws -> Int32 {
+    let server = socket(AF_INET, SOCK_STREAM, 0)
+    guard server >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+
+    var reuse: Int32 = 1
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(port).bigEndian
+    address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+    let bindResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(server, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard bindResult == 0, listen(server, 1) == 0 else {
+        Darwin.close(server)
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    return server
 }
 
 private func waitForBridge(port: UInt16) async throws {

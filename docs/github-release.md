@@ -13,11 +13,21 @@ Local update manifests are for development and smoke testing only.
 
 2. Build and verify the release artifacts. Developer ID/notarized releases are
    preferred, but internal updates may use a stable local signing identity when
-   Developer ID is unavailable:
+   Developer ID is unavailable. Barn Owl accepts either a pre-created
+   `BARNOWL_NOTARY_PROFILE` or Apple notarization API key inputs via
+   `APPLE_NOTARIZATION_KEY_P8`, `APPLE_NOTARIZATION_KEY_ID`, and
+   `APPLE_NOTARIZATION_ISSUER_ID`:
 
    ```sh
    BARNOWL_CODESIGN_IDENTITY="Barn Owl Local Code Signing" \
    scripts/package-all.sh
+   ```
+
+   For the notarized direct-download path, use:
+
+   ```sh
+   BARNOWL_CODESIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)" \
+   scripts/release-direct-download.sh
    ```
 
 3. Generate the tracked GitHub update manifest:
@@ -27,6 +37,11 @@ Local update manifests are for development and smoke testing only.
    BARNOWL_ALLOW_LOCAL_SIGNED_UPDATE=1 \
    scripts/publish-git-update.sh
    ```
+
+   For a Developer ID/notarized release, use the Developer ID identity instead.
+   `scripts/publish-git-update.sh` accepts the same notarization inputs described
+   above and will package the update artifacts through the notarized path before
+   writing the tracked manifest.
 
 4. Commit and push the source and `Updates/BarnOwl` manifest changes:
 
@@ -43,6 +58,7 @@ Local update manifests are for development and smoke testing only.
      dist/BarnOwl.app.zip \
      dist/BarnOwl-source-handoff.zip \
      dist/BarnOwl-release-manifest.json \
+     dist/BarnOwl-update-manifest.json \
      dist/SHA256SUMS \
      --title "Barn Owl 0.1.0 build 12" \
      --notes "Internal Barn Owl release."
@@ -56,6 +72,35 @@ https://raw.githubusercontent.com/BURDICK-OAI/barn-owl/main/Updates/BarnOwl/Barn
 
 The tracked manifest points at the matching GitHub Release asset. Do not commit
 binary app zips to Git history.
+
+## Rollback Plan
+
+Keep the previous known-good release assets available after every publish:
+
+- `BarnOwl.app.zip`
+- `BarnOwl-source-handoff.zip`
+- `BarnOwl-release-manifest.json`
+- `BarnOwl-update-manifest.json`
+- `SHA256SUMS`
+
+Barn Owl only installs updates whose manifest build is newer than the app already
+installed on the machine. That means restoring an older tracked manifest can
+stop additional users from receiving a bad release, but it does not
+auto-downgrade users who already installed it.
+
+For an actual rollback:
+
+1. If the bad release has not spread, restore the previous tracked manifest in
+   `Updates/BarnOwl/` and commit that change.
+2. If users already installed the bad build, either:
+   - have them reinstall the previous `BarnOwl.app.zip` manually, which replaces
+     only the app bundle and preserves local recordings, notes, preferences, and
+     API-key configuration, or
+   - publish a new higher-build rollback release built from the last known-good
+     code and let the updater move users forward to that recovery build.
+
+The second option is the better internal default when more than a couple of
+people are affected. Fewer manual installs, less thrash.
 
 ## Teammate Install Instructions
 

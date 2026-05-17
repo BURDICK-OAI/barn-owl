@@ -34,7 +34,8 @@ struct BarnOwlLifecyclePresentation: Equatable {
         state: RecordingLifecycleState,
         hasActiveProcessing: Bool,
         hasFailedProcessing: Bool = false,
-        hasDisplayedNote: Bool
+        hasDisplayedNote: Bool,
+        recordingDetail: String = "Capturing microphone and system audio."
     ) -> BarnOwlLifecyclePresentation {
         switch state {
         case .idle, .ready:
@@ -55,7 +56,7 @@ struct BarnOwlLifecyclePresentation: Equatable {
             return BarnOwlLifecyclePresentation(
                 phase: .recording,
                 title: "Recording",
-                detail: "Capturing microphone and system audio.",
+                detail: recordingDetail,
                 systemImage: "record.circle.fill"
             )
         case .stopping:

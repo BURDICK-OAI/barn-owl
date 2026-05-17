@@ -18,14 +18,13 @@ if [[ "$BARNOWL_CODESIGN_IDENTITY" != Developer\ ID\ Application:* ]]; then
   exit 1
 fi
 
-if [[ -z "$BARNOWL_NOTARY_PROFILE" ]]; then
-  echo "BARNOWL_NOTARY_PROFILE is required and must name an xcrun notarytool keychain profile." >&2
-  exit 1
-fi
-
 if ! command -v xcrun >/dev/null 2>&1; then
   echo "xcrun is required for notarization." >&2
   exit 1
+fi
+
+if [[ -z "$BARNOWL_NOTARY_PROFILE" ]]; then
+  BARNOWL_NOTARY_PROFILE="$("$ROOT_DIR/scripts/resolve-notary-profile.sh")"
 fi
 
 if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

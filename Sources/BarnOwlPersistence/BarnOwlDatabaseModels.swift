@@ -721,6 +721,7 @@ public struct BarnOwlExternalContextItemRecord: Equatable, Identifiable, Sendabl
     public var source: String
     public var body: String
     public var state: BarnOwlExternalContextState
+    public var confidence: Double?
     public var createdAt: Date
     public var updatedAt: Date
     public var usedInNoteGeneration: Bool
@@ -732,6 +733,7 @@ public struct BarnOwlExternalContextItemRecord: Equatable, Identifiable, Sendabl
         source: String,
         body: String,
         state: BarnOwlExternalContextState = .pending,
+        confidence: Double? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         usedInNoteGeneration: Bool = false,
@@ -742,10 +744,160 @@ public struct BarnOwlExternalContextItemRecord: Equatable, Identifiable, Sendabl
         self.source = source
         self.body = body
         self.state = state
+        self.confidence = confidence.map { min(max($0, 0), 1) }
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.usedInNoteGeneration = usedInNoteGeneration
         self.metadataJSON = metadataJSON
+    }
+}
+
+public struct BarnOwlContextEntityRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var kind: ContextEntityKind
+    public var canonicalName: String
+    public var confidence: Double
+    public var isConfirmed: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        kind: ContextEntityKind,
+        canonicalName: String,
+        confidence: Double,
+        isConfirmed: Bool,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.kind = kind
+        self.canonicalName = canonicalName
+        self.confidence = min(max(confidence, 0), 1)
+        self.isConfirmed = isConfirmed
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlContextEntityAliasRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var entityID: UUID
+    public var alias: String
+    public var confidence: Double
+    public var isConfirmed: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        entityID: UUID,
+        alias: String,
+        confidence: Double,
+        isConfirmed: Bool,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.entityID = entityID
+        self.alias = alias
+        self.confidence = min(max(confidence, 0), 1)
+        self.isConfirmed = isConfirmed
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlContextEntityEvidenceRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var entityID: UUID
+    public var meetingID: UUID?
+    public var source: String
+    public var observedValue: String
+    public var metadataJSON: String?
+    public var createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        entityID: UUID,
+        meetingID: UUID? = nil,
+        source: String,
+        observedValue: String,
+        metadataJSON: String? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.entityID = entityID
+        self.meetingID = meetingID
+        self.source = source
+        self.observedValue = observedValue
+        self.metadataJSON = metadataJSON
+        self.createdAt = createdAt
+    }
+}
+
+public struct BarnOwlContextEntityFeedbackRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var meetingID: UUID?
+    public var kind: ContextEntityKind
+    public var observedValue: String
+    public var canonicalValue: String
+    public var decision: ContextEntityReviewAction
+    public var source: String
+    public var metadataJSON: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        meetingID: UUID? = nil,
+        kind: ContextEntityKind,
+        observedValue: String,
+        canonicalValue: String,
+        decision: ContextEntityReviewAction,
+        source: String,
+        metadataJSON: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.meetingID = meetingID
+        self.kind = kind
+        self.observedValue = observedValue
+        self.canonicalValue = canonicalValue
+        self.decision = decision
+        self.source = source
+        self.metadataJSON = metadataJSON
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlMeetingContextEntityLinkRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var meetingID: UUID
+    public var entityID: UUID
+    public var role: String
+    public var confidence: Double
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        meetingID: UUID,
+        entityID: UUID,
+        role: String,
+        confidence: Double,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.meetingID = meetingID
+        self.entityID = entityID
+        self.role = role
+        self.confidence = min(max(confidence, 0), 1)
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }
 

@@ -18,10 +18,8 @@ if [[ "$ALLOW_ADHOC_UPDATE" != "1" ]]; then
   fi
   if [[ "${BARNOWL_CODESIGN_IDENTITY:-}" == Developer\ ID\ Application:* ]]; then
     if [[ -z "${BARNOWL_NOTARY_PROFILE:-}" ]]; then
-      echo "git_update_publish=false" >&2
-      echo "reason=Developer ID remote update publishing requires BARNOWL_NOTARY_PROFILE for notarization" >&2
-      echo "hint=Developer ID signed and notarized updates preserve the strongest macOS install/update behavior" >&2
-      exit 1
+      BARNOWL_NOTARY_PROFILE="$("$ROOT_DIR/scripts/resolve-notary-profile.sh")"
+      export BARNOWL_NOTARY_PROFILE
     fi
     BARNOWL_NOTARIZE=1 "$ROOT_DIR/scripts/package-all.sh" >/dev/null
   elif [[ "$ALLOW_LOCAL_SIGNED_UPDATE" == "1" ]]; then
@@ -40,6 +38,7 @@ cp "$DIST_DIR/BarnOwl-release-manifest.json" "$UPDATE_DIR/BarnOwl-release-manife
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Apps/BarnOwlMac/Info.plist")"
 APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ROOT_DIR/Apps/BarnOwlMac/Info.plist")"
+RELEASE_NOTES_JSON="$("$ROOT_DIR/scripts/changelog-notes.sh" "$APP_VERSION" "$APP_BUILD" json)"
 RELEASE_TAG="${BARNOWL_GITHUB_RELEASE_TAG:-"v${APP_VERSION}-build.${APP_BUILD}"}"
 REMOTE_URL="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || true)"
 REPO_SLUG="${BARNOWL_GITHUB_REPOSITORY:-}"
@@ -63,7 +62,7 @@ cat >"$UPDATE_DIR/BarnOwl-update-manifest.json" <<EOF
   "build": "$APP_BUILD",
   "archive_url": "$RELEASE_BASE_URL/BarnOwl.app.zip",
   "sha256": "$actual_app_sha",
-  "notes": "Barn Owl $APP_VERSION ($APP_BUILD)"
+  "notes": $RELEASE_NOTES_JSON
 }
 EOF
 

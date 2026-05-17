@@ -2,6 +2,7 @@ import BarnOwlCore
 import BarnOwlPersistence
 import BarnOwlTranscription
 import Foundation
+import SQLite3
 import Testing
 
 @Test
@@ -22,6 +23,144 @@ func barnOwlDatabaseCreatesSchemaAndPersistsMeetingsAcrossReopen() async throws 
     let reloaded = try #require(await reopened.meeting(id: meeting.id))
 
     #expect(reloaded == meeting)
+}
+
+@Test
+func barnOwlDatabaseStoresLearnedContextEntitiesAliasesEvidenceAndMeetingLinks() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID()
+    try await database.upsertMeeting(makeDatabaseMeeting(id: meetingID, title: "Entity Review"))
+
+    let entity = BarnOwlContextEntityRecord(
+        kind: .person,
+        canonicalName: "Collin Burdick",
+        confidence: 0.98,
+        isConfirmed: true
+    )
+    try await database.upsertContextEntity(entity)
+    try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+        entityID: entity.id,
+        alias: "Colin Burdick",
+        confidence: 0.98,
+        isConfirmed: true
+    ))
+    try await database.upsertContextEntityEvidence(BarnOwlContextEntityEvidenceRecord(
+        entityID: entity.id,
+        meetingID: meetingID,
+        source: "calendar+transcript",
+        observedValue: "Colin Burdick"
+    ))
+    try await database.upsertMeetingContextEntityLink(BarnOwlMeetingContextEntityLinkRecord(
+        meetingID: meetingID,
+        entityID: entity.id,
+        role: "participant",
+        confidence: 0.98
+    ))
+
+    let entities = try await database.contextEntities(kind: .person)
+    let aliases = try await database.contextEntityAliases(entityID: entity.id)
+
+    #expect(entities.map(\.canonicalName) == ["Collin Burdick"])
+    #expect(aliases.map(\.alias) == ["Colin Burdick"])
+}
+
+@Test
+func barnOwlDatabaseEditsAndDeletesLearnedContextEntitiesForSettingsManagement() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let entity = BarnOwlContextEntityRecord(
+        kind: .organization,
+        canonicalName: "OpenAI",
+        confidence: 1,
+        isConfirmed: true
+    )
+    try await database.upsertContextEntity(entity)
+    try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+        entityID: entity.id,
+        alias: "OAI",
+        confidence: 1,
+        isConfirmed: true
+    ))
+
+    try await database.upsertContextEntity(BarnOwlContextEntityRecord(
+        id: entity.id,
+        kind: .customerAccount,
+        canonicalName: "OpenAI Enterprise",
+        confidence: 1,
+        isConfirmed: true,
+        createdAt: entity.createdAt,
+        updatedAt: Date()
+    ))
+    try await database.deleteContextEntityAliases(entityID: entity.id)
+    try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+        entityID: entity.id,
+        alias: "Open AI",
+        confidence: 1,
+        isConfirmed: true
+    ))
+
+    let edited = try #require(await database.contextEntities(limit: 10).first)
+    let aliases = try await database.contextEntityAliases(entityID: entity.id)
+    #expect(edited.kind == .customerAccount)
+    #expect(edited.canonicalName == "OpenAI Enterprise")
+    #expect(aliases.map(\.alias) == ["Open AI"])
+
+    try await database.deleteContextEntity(id: entity.id)
+    #expect(try await database.contextEntities(limit: 10).isEmpty)
+    #expect(try await database.contextEntityAliases(entityID: entity.id).isEmpty)
+}
+
+@Test
+func barnOwlDatabaseStoresIgnoredLearnedContextFeedback() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID()
+    try await database.upsertMeeting(makeDatabaseMeeting(id: meetingID, title: "Feedback Review"))
+
+    let feedback = BarnOwlContextEntityFeedbackRecord(
+        meetingID: meetingID,
+        kind: .person,
+        observedValue: "Colin",
+        canonicalValue: "Collin Burdick",
+        decision: .ignore,
+        source: "calendar,transcript",
+        metadataJSON: #"{"surface":"context_review"}"#
+    )
+    try await database.upsertContextEntityFeedback(feedback)
+
+    let ignored = try #require(await database.contextEntityFeedback(decision: .ignore).first)
+
+    #expect(ignored.id == feedback.id)
+    #expect(ignored.meetingID == feedback.meetingID)
+    #expect(ignored.kind == feedback.kind)
+    #expect(ignored.observedValue == feedback.observedValue)
+    #expect(ignored.canonicalValue == feedback.canonicalValue)
+    #expect(ignored.decision == feedback.decision)
+    #expect(ignored.source == feedback.source)
+    #expect(ignored.metadataJSON == feedback.metadataJSON)
+}
+
+@Test
+func barnOwlDatabaseMigratesExistingV6FilesToFeedbackSchema() async throws {
+    let directory = try makeSQLiteTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let databaseURL = directory.appending(path: "barnowl-v6.sqlite")
+
+    var pointer: OpaquePointer?
+    #expect(sqlite3_open(databaseURL.path(percentEncoded: false), &pointer) == SQLITE_OK)
+    try executeSQLite("CREATE TABLE meetings (id TEXT PRIMARY KEY);", database: pointer)
+    try executeSQLite("PRAGMA user_version = 6;", database: pointer)
+    sqlite3_close(pointer)
+
+    let migrated = try BarnOwlDatabase(url: databaseURL)
+    #expect(try await migrated.schemaVersion() == BarnOwlDatabase.latestSchemaVersion)
+    try await migrated.upsertContextEntityFeedback(BarnOwlContextEntityFeedbackRecord(
+        kind: .organization,
+        observedValue: "OAI",
+        canonicalValue: "OpenAI",
+        decision: .ignore,
+        source: "migration-test"
+    ))
+
+    #expect(try await migrated.contextEntityFeedback(decision: .ignore).count == 1)
 }
 
 @Test
@@ -362,6 +501,7 @@ func barnOwlDatabaseStoresExternalContextItems() async throws {
         source: "codex",
         body: "Customer: Acme. Goal: draft follow-up.",
         state: .accepted,
+        confidence: 0.95,
         createdAt: now,
         updatedAt: now,
         metadataJSON: #"{"surface":"test"}"#
@@ -379,6 +519,7 @@ func barnOwlDatabaseStoresExternalContextItems() async throws {
     let acceptedItems = try await database.externalContextItems(meetingID: meetingID, state: .accepted)
 
     #expect(reloaded == updated)
+    #expect(reloaded.confidence == 0.95)
     #expect(ignoredItems == [updated])
     #expect(acceptedItems.isEmpty)
 
@@ -1204,4 +1345,13 @@ private func posixPermissions(at url: URL) throws -> Int {
         return permissions.intValue & 0o777
     }
     return (attributes[.posixPermissions] as? Int ?? 0) & 0o777
+}
+
+private func executeSQLite(_ sql: String, database: OpaquePointer?) throws {
+    var errorMessage: UnsafeMutablePointer<Int8>?
+    if sqlite3_exec(database, sql, nil, nil, &errorMessage) != SQLITE_OK {
+        let message = errorMessage.map { String(cString: $0) } ?? "unknown SQLite error"
+        sqlite3_free(errorMessage)
+        throw NSError(domain: "BarnOwlPersistenceTests.SQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
 }

@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Barn Owl</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --amber: #db8721;
+        --amber-light: #ffba5c;
+        --clay: #874f29;
+        --cream: #f7e8cc;
+        --graphite: #1f2121;
+        --graphite-raised: #2d302f;
+        --moss: #637f6d;
+        --field: rgba(255, 248, 236, 0.08);
+        --field-strong: rgba(255, 248, 236, 0.12);
+        --stroke: rgba(255, 255, 255, 0.1);
+        --muted: rgba(255, 255, 255, 0.62);
+        --soft: rgba(255, 255, 255, 0.08);
+        --danger: #e78b86;
+        --success: #7ca48a;
+        --warning: #ffba5c;
+        --shadow: rgba(0, 0, 0, 0.24);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        letter-spacing: 0;
+        color: #fff;
+        background:
+          radial-gradient(circle at top left, rgba(219, 135, 33, 0.12), transparent 34%),
+          linear-gradient(145deg, #191b1b, #242726 58%, #1f211f);
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      .shell {
+        padding: 16px;
+      }
+
+      :root[data-display-mode="fullscreen"] .shell {
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .topbar,
+      .columns,
+      .status-grid,
+      .actions-row,
+      .session-row,
+      .detail-grid,
+      .toolbar {
+        display: flex;
+      }
+
+      .topbar {
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 35% 30%, rgba(255, 186, 92, 0.28), transparent 42%),
+          linear-gradient(145deg, rgba(219, 135, 33, 0.4), rgba(135, 79, 41, 0.22));
+        border: 1px solid rgba(255, 186, 92, 0.24);
+        color: var(--cream);
+        font-weight: 700;
+        box-shadow: 0 10px 22px var(--shadow);
+      }
+
+      .brand-copy {
+        min-width: 0;
+      }
+
+      .eyebrow,
+      .meta,
+      .small,
+      .pill,
+      .chip,
+      .label {
+        font-size: 12px;
+      }
+
+      .eyebrow {
+        color: var(--amber-light);
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 20px;
+        line-height: 1.1;
+      }
+
+      h2 {
+        font-size: 15px;
+      }
+
+      h3 {
+        font-size: 14px;
+      }
+
+      .meta,
+      .small {
+        color: var(--muted);
+      }
+
+      .toolbar {
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .button,
+      .segmented button,
+      .icon-button {
+        border: 1px solid var(--stroke);
+        color: #fff;
+        background: rgba(255, 255, 255, 0.05);
+        min-height: 34px;
+        padding: 0 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition:
+          transform 120ms ease,
+          border-color 120ms ease,
+          background 120ms ease,
+          opacity 120ms ease;
+      }
+
+      .button:hover,
+      .segmented button:hover,
+      .icon-button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(255, 186, 92, 0.28);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .button.primary {
+        background: var(--amber);
+        border-color: rgba(255, 186, 92, 0.4);
+        color: #171818;
+        font-weight: 700;
+      }
+
+      .button.danger {
+        background: rgba(231, 139, 134, 0.12);
+        color: #ffd7d2;
+      }
+
+      .button:disabled,
+      .segmented button:disabled,
+      .icon-button:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .columns {
+        gap: 14px;
+        align-items: flex-start;
+      }
+
+      .main,
+      .side {
+        min-width: 0;
+      }
+
+      .main {
+        flex: 1.35;
+      }
+
+      .side {
+        flex: 0.92;
+      }
+
+      .section {
+        border: 1px solid var(--stroke);
+        background: rgba(255, 255, 255, 0.045);
+        border-radius: 8px;
+        padding: 14px;
+        box-shadow: 0 16px 30px rgba(0, 0, 0, 0.14);
+      }
+
+      .section + .section {
+        margin-top: 14px;
+      }
+
+      .section-head {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .status-grid {
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+
+      .stat {
+        min-width: 140px;
+        flex: 1;
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      .label {
+        color: var(--muted);
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .value {
+        font-size: 14px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
+      .pill-row,
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill,
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 26px;
+        padding: 0 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.86);
+      }
+
+      .pill.live {
+        color: #172019;
+        background: var(--success);
+        border-color: rgba(124, 164, 138, 0.42);
+        font-weight: 700;
+      }
+
+      .pill.warning {
+        color: #1e1a14;
+        background: var(--warning);
+        border-color: rgba(255, 186, 92, 0.42);
+        font-weight: 700;
+      }
+
+      .pill.error {
+        color: #2f1512;
+        background: var(--danger);
+        border-color: rgba(231, 139, 134, 0.42);
+        font-weight: 700;
+      }
+
+      .preview,
+      .detail,
+      textarea,
+      input[type="search"] {
+        width: 100%;
+        color: #fff;
+        background: var(--field);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+      }
+
+      .preview,
+      .detail {
+        padding: 12px;
+        line-height: 1.45;
+        color: rgba(255, 255, 255, 0.84);
+        white-space: pre-wrap;
+        min-height: 76px;
+      }
+
+      .actions-row {
+        margin-top: 12px;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .segmented {
+        display: inline-flex;
+        gap: 6px;
+        padding: 4px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      .segmented button.is-on {
+        background: rgba(219, 135, 33, 0.92);
+        border-color: rgba(255, 186, 92, 0.35);
+        color: #171818;
+        font-weight: 700;
+      }
+
+      .search-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      input[type="search"] {
+        min-height: 36px;
+        padding: 0 12px;
+        outline: none;
+      }
+
+      .session-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .session-row {
+        width: 100%;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        text-align: left;
+        padding: 11px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.045);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      .session-row:hover {
+        border-color: rgba(255, 186, 92, 0.24);
+        background: rgba(255, 255, 255, 0.065);
+      }
+
+      .session-row.is-selected {
+        border-color: rgba(255, 186, 92, 0.34);
+        background: rgba(219, 135, 33, 0.12);
+      }
+
+      .session-title {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .detail-block {
+        border-radius: 8px;
+        padding: 11px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      textarea {
+        min-height: 86px;
+        resize: vertical;
+        padding: 11px;
+        outline: none;
+      }
+
+      .empty,
+      .error {
+        padding: 12px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.045);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: var(--muted);
+      }
+
+      .error {
+        color: #ffd7d2;
+        background: rgba(231, 139, 134, 0.1);
+        border-color: rgba(231, 139, 134, 0.2);
+      }
+
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      @media (max-width: 860px) {
+        .columns {
+          display: grid;
+        }
+
+        .detail-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">BO</div>
+          <div class="brand-copy">
+            <div class="eyebrow">Barn Owl</div>
+            <h1>Meeting control center</h1>
+            <p class="meta" id="header-meta">Loading local Barn Owl state...</p>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button class="button" id="fullscreen-button" type="button">Fullscreen</button>
+          <button class="button" id="refresh-button" type="button">Refresh</button>
+          <button class="button" id="settings-button" type="button">Settings</button>
+          <button class="button" id="notes-folder-button" type="button">Notes Folder</button>
+        </div>
+      </header>
+
+      <div class="columns">
+        <section class="main">
+          <article class="section">
+            <div class="section-head">
+              <div>
+                <h2>Live meeting</h2>
+                <p class="small" id="meeting-subtitle">Reading Barn Owl...</p>
+              </div>
+              <div class="pill-row" id="status-pills"></div>
+            </div>
+
+            <div class="segmented" aria-label="Audio source">
+              <button id="mic-toggle" type="button">Mic</button>
+              <button id="system-toggle" type="button">System</button>
+            </div>
+
+            <div class="status-grid">
+              <div class="stat">
+                <span class="label">Elapsed</span>
+                <div class="value" id="elapsed-value">--:--</div>
+              </div>
+              <div class="stat">
+                <span class="label">Realtime</span>
+                <div class="value" id="realtime-value">Loading</div>
+              </div>
+              <div class="stat">
+                <span class="label">Final pass</span>
+                <div class="value" id="final-value">Loading</div>
+              </div>
+            </div>
+
+            <div class="actions-row">
+              <button class="button primary" id="primary-recording-button" type="button">Start Recording</button>
+              <button class="button" id="context-review-button" type="button">Review Context</button>
+              <button class="button" id="jobs-button" type="button">Check Jobs</button>
+            </div>
+
+            <div style="height: 12px"></div>
+            <h3>Realtime preview</h3>
+            <div class="preview" id="preview-value">Waiting for Barn Owl.</div>
+          </article>
+
+          <article class="section">
+            <div class="section-head">
+              <div>
+                <h2>Attach context</h2>
+                <p class="small">Add concise context to the active or selected meeting.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <textarea id="context-input" placeholder="What should Barn Owl know?"></textarea>
+              <div class="actions-row">
+                <button class="button primary" id="attach-context-button" type="button">Attach Context</button>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <aside class="side">
+          <article class="section">
+            <div class="section-head">
+              <div>
+                <h2>Recent sessions</h2>
+                <p class="small">Quick access from the same local library as the native app.</p>
+              </div>
+            </div>
+            <div class="search-row">
+              <input id="search-input" type="search" placeholder="Search meetings" />
+              <button class="button" id="search-button" type="button">Search</button>
+            </div>
+            <div class="session-list" id="session-list"></div>
+          </article>
+
+          <article class="section">
+            <div class="section-head">
+              <div>
+                <h2>Meeting detail</h2>
+                <p class="small" id="detail-subtitle">Select a meeting to load notes.</p>
+              </div>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-block">
+                <span class="label">Summary</span>
+                <div class="detail" id="summary-value">No meeting selected.</div>
+              </div>
+              <div class="detail-block">
+                <span class="label">Actions</span>
+                <div class="detail" id="actions-value">No meeting selected.</div>
+              </div>
+            </div>
+          </article>
+
+          <article class="section">
+            <div class="section-head">
+              <div>
+                <h2>Recovery and setup</h2>
+                <p class="small">Sanitized local health signals only.</p>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="detail" id="readiness-value">Checking readiness...</div>
+              <div class="actions-row">
+                <button class="button" id="permissions-button" type="button">Check Permissions</button>
+                <button class="button" id="diagnostics-button" type="button">Export Diagnostics</button>
+              </div>
+            </div>
+          </article>
+        </aside>
+      </div>
+    </main>
+
+    <script>
+      const els = {
+        headerMeta: document.getElementById("header-meta"),
+        fullscreen: document.getElementById("fullscreen-button"),
+        refresh: document.getElementById("refresh-button"),
+        settings: document.getElementById("settings-button"),
+        notesFolder: document.getElementById("notes-folder-button"),
+        meetingSubtitle: document.getElementById("meeting-subtitle"),
+        statusPills: document.getElementById("status-pills"),
+        micToggle: document.getElementById("mic-toggle"),
+        systemToggle: document.getElementById("system-toggle"),
+        elapsed: document.getElementById("elapsed-value"),
+        realtime: document.getElementById("realtime-value"),
+        final: document.getElementById("final-value"),
+        preview: document.getElementById("preview-value"),
+        record: document.getElementById("primary-recording-button"),
+        contextReview: document.getElementById("context-review-button"),
+        jobs: document.getElementById("jobs-button"),
+        contextInput: document.getElementById("context-input"),
+        attachContext: document.getElementById("attach-context-button"),
+        searchInput: document.getElementById("search-input"),
+        search: document.getElementById("search-button"),
+        sessions: document.getElementById("session-list"),
+        detailSubtitle: document.getElementById("detail-subtitle"),
+        summary: document.getElementById("summary-value"),
+        actions: document.getElementById("actions-value"),
+        readiness: document.getElementById("readiness-value"),
+        permissions: document.getElementById("permissions-button"),
+        diagnostics: document.getElementById("diagnostics-button"),
+      };
+
+      const bridge = {
+        rpcID: 0,
+        pending: new Map(),
+        status: "pending",
+        notify(method, params) {
+          if (window.parent === window) return;
+          window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+        },
+        request(method, params, timeoutMs = 1500) {
+          return new Promise((resolve, reject) => {
+            if (window.parent === window) {
+              reject(new Error("MCP Apps bridge is unavailable outside a host frame."));
+              return;
+            }
+            const id = ++bridge.rpcID;
+            const timeout = window.setTimeout(() => {
+              bridge.pending.delete(id);
+              reject(new Error(`MCP Apps bridge request timed out: ${method}`));
+            }, timeoutMs);
+            bridge.pending.set(id, {
+              resolve(value) {
+                window.clearTimeout(timeout);
+                resolve(value);
+              },
+              reject(error) {
+                window.clearTimeout(timeout);
+                reject(error);
+              },
+            });
+            window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+          });
+        },
+      };
+      let state = null;
+
+      window.addEventListener(
+        "message",
+        (event) => {
+          if (event.source !== window.parent) return;
+          const message = event.data;
+          if (!message || message.jsonrpc !== "2.0") return;
+          if (typeof message.id === "number") {
+            const pending = bridge.pending.get(message.id);
+            if (!pending) return;
+            bridge.pending.delete(message.id);
+            if (message.error) {
+              pending.reject(message.error);
+              return;
+            }
+            pending.resolve(message.result);
+            return;
+          }
+          if (message.method === "ui/notifications/tool-result") {
+            const dashboard = message.params?.structuredContent?.dashboard;
+            if (state && dashboard !== undefined) {
+              state.dashboard = dashboard;
+            }
+            if (state) {
+              render();
+            }
+          }
+        },
+        { passive: true }
+      );
+
+      const bridgeReady = bridge
+        .request("ui/initialize", {
+          appInfo: { name: "barnowl-dashboard-widget", version: "0.1.0" },
+          appCapabilities: {},
+          protocolVersion: "2026-01-26",
+        })
+        .then(() => {
+          bridge.status = "ready";
+          bridge.notify("ui/notifications/initialized", {});
+          return true;
+        })
+        .catch(() => {
+          bridge.status = "unavailable";
+          return false;
+        });
+
+      const host = {
+        toolOutput: window.openai?.toolOutput ?? {},
+        widgetState: window.openai?.widgetState ?? {},
+        async callTool(name, args = {}) {
+          const bridgeAvailable = await bridgeReady;
+          if (bridgeAvailable) {
+            try {
+              return await bridge.request("tools/call", {
+                name,
+                arguments: args,
+              });
+            } catch {
+              // Fall through to the ChatGPT/Codex compatibility layer.
+            }
+          }
+          if (!window.openai?.callTool) {
+            throw new Error("Barn Owl widget tool calls are unavailable in this host.");
+          }
+          return window.openai.callTool(name, args);
+        },
+        setWidgetState(nextState) {
+          window.openai?.setWidgetState?.(nextState);
+        },
+        async requestDisplayMode(mode) {
+          if (!window.openai?.requestDisplayMode) return null;
+          try {
+            return await Promise.resolve(window.openai.requestDisplayMode({ mode }));
+          } catch {
+            return null;
+          }
+        },
+      };
+
+      state = {
+        dashboard: host.toolOutput.dashboard ?? null,
+        selectedMeetingID: host.widgetState.selectedMeetingID ?? null,
+        selectedMeetingTitle: host.widgetState.selectedMeetingTitle ?? null,
+        searchQuery: host.widgetState.searchQuery ?? "",
+        searchResults: [],
+        busy: false,
+        displayMode: window.openai?.displayMode ?? "inline",
+      };
+
+      function normalizeDisplayMode(value) {
+        return value === "fullscreen" || value === "pip" ? value : "inline";
+      }
+
+      function applyHostGlobals(globals = {}) {
+        const theme = typeof globals.theme === "string" ? globals.theme : window.openai?.theme;
+        const displayMode = normalizeDisplayMode(globals.displayMode ?? window.openai?.displayMode);
+        state.displayMode = displayMode;
+        document.documentElement.dataset.hostTheme = typeof theme === "string" ? theme : "unknown";
+        document.body.dataset.hostTheme = document.documentElement.dataset.hostTheme;
+        document.documentElement.dataset.displayMode = displayMode;
+        document.body.dataset.displayMode = displayMode;
+        els.fullscreen.hidden = !window.openai?.requestDisplayMode || displayMode === "fullscreen";
+      }
+
+      async function requestFullscreen() {
+        const result = await host.requestDisplayMode("fullscreen");
+        if (result === null) return;
+        const requestedMode = normalizeDisplayMode(result?.mode ?? result?.displayMode ?? "fullscreen");
+        if (requestedMode === "fullscreen") {
+          applyHostGlobals({ displayMode: "fullscreen" });
+        }
+      }
+
+      function setWidgetState() {
+        host.setWidgetState({
+          selectedMeetingID: state.selectedMeetingID,
+          selectedMeetingTitle: state.selectedMeetingTitle,
+          searchQuery: state.searchQuery,
+        });
+      }
+
+      function text(value, fallback = "") {
+        return typeof value === "string" && value.trim() ? value : fallback;
+      }
+
+      function asArray(value) {
+        return Array.isArray(value) ? value : [];
+      }
+
+      function activeMeetings() {
+        return state.searchResults.length
+          ? state.searchResults
+          : asArray(state.dashboard?.recentMeetings);
+      }
+
+      async function refreshDashboard() {
+        const result = await host.callTool("get_dashboard_snapshot", {});
+        state.dashboard = result?.structuredContent?.dashboard ?? null;
+        render();
+      }
+
+      function pill(label, kind = "") {
+        const node = document.createElement("span");
+        node.className = `pill ${kind}`.trim();
+        node.textContent = label;
+        return node;
+      }
+
+      function renderPills() {
+        els.statusPills.innerHTML = "";
+        const dashboard = state.dashboard;
+        if (!dashboard) {
+          els.statusPills.appendChild(pill("Bridge unavailable", "error"));
+          return;
+        }
+        els.statusPills.appendChild(
+          pill(text(dashboard.recordingStatus, "idle") === "recording" ? "Recording" : text(dashboard.status, "Idle"), text(dashboard.recordingStatus) === "recording" ? "live" : "")
+        );
+        if (dashboard.setupReady === false) {
+          els.statusPills.appendChild(pill("Setup needed", "warning"));
+        }
+        if (dashboard.lastError) {
+          els.statusPills.appendChild(pill("Needs attention", "error"));
+        }
+      }
+
+      function renderSessions() {
+        const meetings = activeMeetings();
+        els.sessions.innerHTML = "";
+        if (!meetings.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = state.searchResults.length ? "No search results." : "No quick-access sessions yet.";
+          els.sessions.appendChild(empty);
+          return;
+        }
+        for (const meeting of meetings) {
+          const button = document.createElement("button");
+          button.className = `session-row ${state.selectedMeetingID === meeting.id ? "is-selected" : ""}`;
+          button.type = "button";
+          button.innerHTML = `
+            <span>
+              <div class="session-title">${escapeHtml(text(meeting.title, "Untitled meeting"))}</div>
+              <div class="small">${escapeHtml(text(meeting.overview, "No overview available."))}</div>
+            </span>
+            <span class="chip">${escapeHtml(text(meeting.status, "Ready"))}</span>
+          `;
+          button.addEventListener("click", () => loadMeetingDetail(meeting.id, meeting.title));
+          els.sessions.appendChild(button);
+        }
+      }
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      async function loadMeetingDetail(meetingID, title = "Meeting") {
+        state.selectedMeetingID = meetingID;
+        state.selectedMeetingTitle = title;
+        setWidgetState();
+        renderSessions();
+        els.detailSubtitle.textContent = title;
+        els.summary.textContent = "Loading summary...";
+        els.actions.textContent = "Loading actions...";
+        const [summaryResult, actionsResult] = await Promise.all([
+          host.callTool("get_meeting_summary", { meetingID }),
+          host.callTool("get_meeting_actions", { meetingID }),
+        ]);
+        const summaryResponse = summaryResult?.structuredContent?.response ?? {};
+        const actionsResponse = actionsResult?.structuredContent?.response ?? {};
+        els.summary.textContent = text(summaryResponse.summary, "No summary available yet.");
+        const actions = asArray(actionsResponse.actions);
+        els.actions.textContent = actions.length ? actions.map((action) => `• ${action}`).join("\n") : "No action items available.";
+      }
+
+      function render() {
+        const dashboard = state.dashboard;
+        renderPills();
+        renderSessions();
+        applyHostGlobals();
+        if (!dashboard) {
+          els.headerMeta.textContent = "Barn Owl bridge is unavailable.";
+          els.meetingSubtitle.textContent = "Start the Barn Owl app, then refresh.";
+          els.elapsed.textContent = "--:--";
+          els.realtime.textContent = "Unavailable";
+          els.final.textContent = "Unavailable";
+          els.preview.textContent = "The local Barn Owl bridge is not reachable.";
+          els.readiness.textContent = "No local readiness snapshot is available.";
+          els.record.textContent = "Start Recording";
+          els.record.disabled = true;
+          return;
+        }
+
+        const recording = text(dashboard.recordingStatus) === "recording";
+        els.headerMeta.textContent = text(dashboard.updateAvailability, "Barn Owl status loaded.");
+        els.meetingSubtitle.textContent = text(
+          dashboard.title,
+          recording ? "Recording in progress" : "No active meeting"
+        );
+        els.elapsed.textContent = text(dashboard.recordingElapsedText, "--:--");
+        els.realtime.textContent = text(dashboard.realtimeStatus, "Idle");
+        els.final.textContent = text(dashboard.finalTranscriptionStatus, "Idle");
+        els.preview.textContent = text(dashboard.liveTranscriptPreview, "Ready.");
+        els.record.textContent = recording ? "Stop Recording" : "Start Recording";
+        els.record.classList.toggle("danger", recording);
+        els.record.disabled = false;
+        els.contextReview.disabled = dashboard.contextReviewReady !== true || !dashboard.activeMeetingID;
+        els.micToggle.disabled = recording;
+        els.systemToggle.disabled = recording;
+        els.micToggle.classList.toggle("is-on", dashboard.audioSources?.capturesMicrophone === true);
+        els.systemToggle.classList.toggle("is-on", dashboard.audioSources?.capturesSystemAudio === true);
+        els.readiness.textContent = [
+          `Readiness: ${text(dashboard.readinessState, "unknown")}`,
+          `API key configured: ${dashboard.apiKeyConfigured ? "yes" : "no"}`,
+          `API key verified: ${dashboard.apiKeyVerified ? "yes" : "no"}`,
+          dashboard.lastError ? `Last error: ${dashboard.lastError}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      async function runAction(action) {
+        if (state.busy) return;
+        state.busy = true;
+        try {
+          await action();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          els.readiness.textContent = message;
+        } finally {
+          state.busy = false;
+        }
+      }
+
+      els.refresh.addEventListener("click", () => runAction(refreshDashboard));
+      els.fullscreen.addEventListener("click", () => runAction(requestFullscreen));
+      els.settings.addEventListener("click", () => runAction(() => host.callTool("open_settings", {})));
+      els.notesFolder.addEventListener("click", () => runAction(() => host.callTool("open_notes_folder", {})));
+      els.record.addEventListener("click", () =>
+        runAction(async () => {
+          const recording = text(state.dashboard?.recordingStatus) === "recording";
+          await host.callTool(recording ? "stop_recording" : "start_recording", {});
+          await refreshDashboard();
+        })
+      );
+      els.micToggle.addEventListener("click", () =>
+        runAction(async () => {
+          await host.callTool("set_audio_sources", {
+            capturesMicrophone: !(state.dashboard?.audioSources?.capturesMicrophone === true),
+          });
+          await refreshDashboard();
+        })
+      );
+      els.systemToggle.addEventListener("click", () =>
+        runAction(async () => {
+          await host.callTool("set_audio_sources", {
+            capturesSystemAudio: !(state.dashboard?.audioSources?.capturesSystemAudio === true),
+          });
+          await refreshDashboard();
+        })
+      );
+      els.attachContext.addEventListener("click", () =>
+        runAction(async () => {
+          const context = els.contextInput.value.trim();
+          if (!context) return;
+          await host.callTool("add_context", {
+            meetingID: state.selectedMeetingID ?? state.dashboard?.activeMeetingID ?? undefined,
+            source: "barnowl-mcp-widget",
+            context,
+          });
+          els.contextInput.value = "";
+          await refreshDashboard();
+        })
+      );
+      els.search.addEventListener("click", () =>
+        runAction(async () => {
+          const query = els.searchInput.value.trim();
+          state.searchQuery = query;
+          setWidgetState();
+          if (!query) {
+            state.searchResults = [];
+            renderSessions();
+            return;
+          }
+          const result = await host.callTool("search_meetings", { query, limit: 8 });
+          state.searchResults = result?.structuredContent?.response?.meetings ?? [];
+          renderSessions();
+        })
+      );
+      els.searchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          els.search.click();
+        }
+      });
+      els.contextReview.addEventListener("click", () =>
+        runAction(async () => {
+          const meetingID = state.dashboard?.activeMeetingID;
+          if (!meetingID) return;
+          const result = await host.callTool("get_context_review", { meetingID });
+          const review = result?.structuredContent?.response?.contextReview;
+          els.readiness.textContent = review
+            ? `${review.suggestedSummary ?? "Context review ready."}\n${(review.prompts ?? []).map((prompt) => `• ${prompt.title ?? prompt}`).join("\n")}`
+            : "No context review is ready.";
+        })
+      );
+      els.jobs.addEventListener("click", () =>
+        runAction(async () => {
+          const result = await host.callTool("list_jobs", {
+            meetingID: state.selectedMeetingID ?? state.dashboard?.activeMeetingID ?? undefined,
+          });
+          const jobs = result?.structuredContent?.response?.jobs ?? [];
+          els.readiness.textContent = jobs.length
+            ? jobs.map((job) => `${job.type}: ${job.status}`).join("\n")
+            : "No Barn Owl jobs found.";
+        })
+      );
+      els.permissions.addEventListener("click", () =>
+        runAction(async () => {
+          const result = await host.callTool("check_permissions", {});
+          els.readiness.textContent = result?.structuredContent?.message ?? "Permissions check finished.";
+        })
+      );
+      els.diagnostics.addEventListener("click", () =>
+        runAction(async () => {
+          const result = await host.callTool("export_diagnostics", {});
+          els.readiness.textContent = result?.structuredContent?.message ?? "Diagnostics export requested.";
+        })
+      );
+
+      els.searchInput.value = state.searchQuery;
+      window.addEventListener(
+        "openai:set_globals",
+        (event) => applyHostGlobals(event.detail?.globals ?? {}),
+        { passive: true }
+      );
+      applyHostGlobals();
+      render();
+      requestFullscreen().catch(() => {});
+      if (!state.dashboard) {
+        refreshDashboard().catch(() => render());
+      }
+      if (state.selectedMeetingID) {
+        loadMeetingDetail(
+          state.selectedMeetingID,
+          state.selectedMeetingTitle ?? "Meeting"
+        ).catch(() => {});
+      }
+      window.setInterval(() => {
+        const status = text(state.dashboard?.recordingStatus);
+        if (status === "recording" || state.dashboard?.jobState === "running") {
+          refreshDashboard().catch(() => {});
+        }
+      }, 3000);
+    </script>
+  </body>
+</html>

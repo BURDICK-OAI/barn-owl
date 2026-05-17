@@ -2,8 +2,10 @@ import Foundation
 
 public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case getStatus = "get_status"
+    case dashboardSnapshot = "dashboard_snapshot"
     case startRecording = "start_recording"
     case stopRecording = "stop_recording"
+    case setAudioSources = "set_audio_sources"
     case addContext = "add_context"
     case appendContext = "append_context"
     case setContext = "set_context"
@@ -23,6 +25,11 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case meetingNotes = "meeting_notes"
     case meetingSummary = "meeting_summary"
     case meetingContext = "meeting_context"
+    case meetingContextReview = "meeting_context_review"
+    case meetingContextReviewApply = "meeting_context_review_apply"
+    case meetingContextReviewDismiss = "meeting_context_review_dismiss"
+    case meetingContextReviewAcceptSuggestion = "meeting_context_review_accept_suggestion"
+    case meetingContextReviewIgnoreSuggestion = "meeting_context_review_ignore_suggestion"
     case meetingActions = "meeting_actions"
     case meetingDelete = "meeting_delete"
     case meetingPurgeTempAudio = "meeting_purge_temp_audio"
@@ -35,10 +42,15 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case contextAccept = "context_accept"
     case contextIgnore = "context_ignore"
     case contextDelete = "context_delete"
+    case contextLibraryList = "context_library_list"
+    case contextLibraryUpsert = "context_library_upsert"
+    case contextLibraryDelete = "context_library_delete"
     case chat = "chat"
     case diagnosticsExport = "diagnostics_export"
     case permissionsCheck = "permissions_check"
     case permissionsTest = "permissions_test"
+    case openSettings = "open_settings"
+    case openNotesFolder = "open_notes_folder"
 }
 
 public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
@@ -49,6 +61,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var context: String?
     public var prompt: String?
     public var source: String?
+    public var confidence: Double?
     public var meetingID: UUID?
     public var query: String?
     public var limit: Int?
@@ -58,6 +71,11 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var latest: Bool?
     public var jobID: UUID?
     public var contextItemID: UUID?
+    public var contextLibraryEntryID: UUID?
+    public var suggestionID: UUID?
+    public var contextKind: ContextEntityKind?
+    public var canonicalName: String?
+    public var aliases: [String]?
     public var confirmed: Bool?
     public var outputPath: String?
     public var all: Bool?
@@ -72,6 +90,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         context: String? = nil,
         prompt: String? = nil,
         source: String? = nil,
+        confidence: Double? = nil,
         meetingID: UUID? = nil,
         query: String? = nil,
         limit: Int? = nil,
@@ -81,6 +100,11 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         latest: Bool? = nil,
         jobID: UUID? = nil,
         contextItemID: UUID? = nil,
+        contextLibraryEntryID: UUID? = nil,
+        suggestionID: UUID? = nil,
+        contextKind: ContextEntityKind? = nil,
+        canonicalName: String? = nil,
+        aliases: [String]? = nil,
         confirmed: Bool? = nil,
         outputPath: String? = nil,
         all: Bool? = nil,
@@ -94,6 +118,7 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.context = context
         self.prompt = prompt
         self.source = source
+        self.confidence = confidence.map { min(max($0, 0), 1) }
         self.meetingID = meetingID
         self.query = query
         self.limit = limit
@@ -103,6 +128,11 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.latest = latest
         self.jobID = jobID
         self.contextItemID = contextItemID
+        self.contextLibraryEntryID = contextLibraryEntryID
+        self.suggestionID = suggestionID
+        self.contextKind = contextKind
+        self.canonicalName = canonicalName
+        self.aliases = aliases
         self.confirmed = confirmed
         self.outputPath = outputPath
         self.all = all
@@ -128,6 +158,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
     public var context: String?
     public var question: String?
     public var source: String?
+    public var confidence: Double?
     public var capturesMicrophone: Bool?
     public var capturesSystemAudio: Bool?
 
@@ -139,6 +170,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
         context: String? = nil,
         question: String? = nil,
         source: String? = nil,
+        confidence: Double? = nil,
         capturesMicrophone: Bool? = nil,
         capturesSystemAudio: Bool? = nil
     ) {
@@ -149,6 +181,7 @@ public struct BarnOwlQuickCommand: Codable, Equatable, Sendable {
         self.context = context
         self.question = question
         self.source = source
+        self.confidence = confidence.map { min(max($0, 0), 1) }
         self.capturesMicrophone = capturesMicrophone
         self.capturesSystemAudio = capturesSystemAudio
     }
@@ -187,6 +220,7 @@ public extension BarnOwlControlCommand {
                 meetingType: meetingType,
                 context: context,
                 source: source,
+                confidence: confidence,
                 capturesMicrophone: capturesMicrophone,
                 capturesSystemAudio: capturesSystemAudio
             )
@@ -197,7 +231,8 @@ public extension BarnOwlControlCommand {
                 name: .addContext,
                 meetingID: meetingID ?? sessionID,
                 context: context,
-                source: source
+                source: source,
+                confidence: confidence
             )
         case .setTitle, .renameMeeting:
             BarnOwlQuickCommand(
@@ -255,6 +290,7 @@ public struct BarnOwlControlContextItem: Codable, Equatable, Identifiable, Senda
     public var body: String
     public var bodyPreview: String?
     public var state: String
+    public var confidence: Double?
     public var createdAt: Date
     public var usedInNoteGeneration: Bool
 
@@ -265,6 +301,7 @@ public struct BarnOwlControlContextItem: Codable, Equatable, Identifiable, Senda
         body: String,
         bodyPreview: String? = nil,
         state: String,
+        confidence: Double? = nil,
         createdAt: Date,
         usedInNoteGeneration: Bool = false
     ) {
@@ -274,6 +311,7 @@ public struct BarnOwlControlContextItem: Codable, Equatable, Identifiable, Senda
         self.body = body
         self.bodyPreview = bodyPreview ?? Self.preview(for: body)
         self.state = state
+        self.confidence = confidence.map { min(max($0, 0), 1) }
         self.createdAt = createdAt
         self.usedInNoteGeneration = usedInNoteGeneration
     }
@@ -284,6 +322,37 @@ public struct BarnOwlControlContextItem: Codable, Equatable, Identifiable, Senda
             .joined(separator: " ")
         guard collapsed.count > 160 else { return collapsed }
         return String(collapsed.prefix(157)) + "..."
+    }
+}
+
+public struct BarnOwlControlContextLibraryEntry: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var kind: ContextEntityKind
+    public var canonicalName: String
+    public var aliases: [String]
+    public var confidence: Double
+    public var isConfirmed: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID,
+        kind: ContextEntityKind,
+        canonicalName: String,
+        aliases: [String] = [],
+        confidence: Double,
+        isConfirmed: Bool,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.kind = kind
+        self.canonicalName = canonicalName
+        self.aliases = aliases
+        self.confidence = min(max(confidence, 0), 1)
+        self.isConfirmed = isConfirmed
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }
 
@@ -325,6 +394,89 @@ public struct BarnOwlControlCitation: Codable, Equatable, Sendable {
     }
 }
 
+public struct BarnOwlControlAudioSources: Codable, Equatable, Sendable {
+    public var capturesMicrophone: Bool
+    public var capturesSystemAudio: Bool
+
+    public init(capturesMicrophone: Bool, capturesSystemAudio: Bool) {
+        self.capturesMicrophone = capturesMicrophone
+        self.capturesSystemAudio = capturesSystemAudio
+    }
+}
+
+public struct BarnOwlControlDashboardSnapshot: Codable, Equatable, Sendable {
+    public var status: String
+    public var recordingStatus: String
+    public var activeMeetingID: UUID?
+    public var title: String?
+    public var meetingType: String?
+    public var audioSources: BarnOwlControlAudioSources
+    public var liveTranscriptPreview: String
+    public var captureStatus: String
+    public var realtimeStatus: String
+    public var finalTranscriptionStatus: String
+    public var recordingElapsedText: String
+    public var readinessState: String?
+    public var setupReady: Bool
+    public var apiKeyConfigured: Bool
+    public var apiKeyVerified: Bool
+    public var updateStatus: String
+    public var updateAvailability: String
+    public var isUpdateInFlight: Bool
+    public var recentMeetings: [BarnOwlControlMeeting]
+    public var jobState: String?
+    public var contextReviewReady: Bool
+    public var lastError: String?
+
+    public init(
+        status: String,
+        recordingStatus: String,
+        activeMeetingID: UUID? = nil,
+        title: String? = nil,
+        meetingType: String? = nil,
+        audioSources: BarnOwlControlAudioSources,
+        liveTranscriptPreview: String,
+        captureStatus: String,
+        realtimeStatus: String,
+        finalTranscriptionStatus: String,
+        recordingElapsedText: String,
+        readinessState: String? = nil,
+        setupReady: Bool,
+        apiKeyConfigured: Bool,
+        apiKeyVerified: Bool,
+        updateStatus: String,
+        updateAvailability: String,
+        isUpdateInFlight: Bool,
+        recentMeetings: [BarnOwlControlMeeting],
+        jobState: String? = nil,
+        contextReviewReady: Bool,
+        lastError: String? = nil
+    ) {
+        self.status = status
+        self.recordingStatus = recordingStatus
+        self.activeMeetingID = activeMeetingID
+        self.title = title
+        self.meetingType = meetingType
+        self.audioSources = audioSources
+        self.liveTranscriptPreview = liveTranscriptPreview
+        self.captureStatus = captureStatus
+        self.realtimeStatus = realtimeStatus
+        self.finalTranscriptionStatus = finalTranscriptionStatus
+        self.recordingElapsedText = recordingElapsedText
+        self.readinessState = readinessState
+        self.setupReady = setupReady
+        self.apiKeyConfigured = apiKeyConfigured
+        self.apiKeyVerified = apiKeyVerified
+        self.updateStatus = updateStatus
+        self.updateAvailability = updateAvailability
+        self.isUpdateInFlight = isUpdateInFlight
+        self.recentMeetings = recentMeetings
+        self.jobState = jobState
+        self.contextReviewReady = contextReviewReady
+        self.lastError = lastError
+    }
+}
+
 public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var ok: Bool
     public var message: String
@@ -342,6 +494,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var captureStatus: String?
     public var liveTranscriptPreview: String?
     public var contextItemID: UUID?
+    public var contextLibraryEntryID: UUID?
     public var current: BarnOwlControlMeeting?
     public var meeting: BarnOwlControlMeeting?
     public var meetings: [BarnOwlControlMeeting]?
@@ -350,11 +503,15 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var notes: String?
     public var summary: String?
     public var contextItems: [BarnOwlControlContextItem]?
+    public var contextLibraryEntries: [BarnOwlControlContextLibraryEntry]?
+    public var contextReview: BarnOwlContextReview?
+    public var contextReviewReady: Bool?
     public var actions: [String]?
     public var decisions: [String]?
     public var participants: [String]?
     public var answer: String?
     public var citations: [BarnOwlControlCitation]?
+    public var dashboard: BarnOwlControlDashboardSnapshot?
     public var jobState: String?
     public var readinessState: String?
     public var setupReady: Bool?
@@ -391,6 +548,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         captureStatus: String? = nil,
         liveTranscriptPreview: String? = nil,
         contextItemID: UUID? = nil,
+        contextLibraryEntryID: UUID? = nil,
         current: BarnOwlControlMeeting? = nil,
         meeting: BarnOwlControlMeeting? = nil,
         meetings: [BarnOwlControlMeeting]? = nil,
@@ -399,11 +557,15 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         notes: String? = nil,
         summary: String? = nil,
         contextItems: [BarnOwlControlContextItem]? = nil,
+        contextLibraryEntries: [BarnOwlControlContextLibraryEntry]? = nil,
+        contextReview: BarnOwlContextReview? = nil,
+        contextReviewReady: Bool? = nil,
         actions: [String]? = nil,
         decisions: [String]? = nil,
         participants: [String]? = nil,
         answer: String? = nil,
         citations: [BarnOwlControlCitation]? = nil,
+        dashboard: BarnOwlControlDashboardSnapshot? = nil,
         jobState: String? = nil,
         readinessState: String? = nil,
         setupReady: Bool? = nil,
@@ -439,6 +601,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.captureStatus = captureStatus
         self.liveTranscriptPreview = liveTranscriptPreview
         self.contextItemID = contextItemID
+        self.contextLibraryEntryID = contextLibraryEntryID
         self.current = current
         self.meeting = meeting
         self.meetings = meetings
@@ -447,11 +610,15 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.notes = notes
         self.summary = summary
         self.contextItems = contextItems
+        self.contextLibraryEntries = contextLibraryEntries
+        self.contextReview = contextReview
+        self.contextReviewReady = contextReviewReady
         self.actions = actions
         self.decisions = decisions
         self.participants = participants
         self.answer = answer
         self.citations = citations
+        self.dashboard = dashboard
         self.jobState = jobState
         self.readinessState = readinessState
         self.setupReady = setupReady

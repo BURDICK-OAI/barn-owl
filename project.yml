@@ -37,7 +37,8 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Apps/BarnOwlMac/BarnOwl.entitlements
         DEVELOPMENT_TEAM: ""
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_HARDENED_RUNTIME: NO
   BarnOwlCore:
     type: framework
     platform: macOS

@@ -25,14 +25,24 @@ barnowl start --title "Meeting" --source codex
 3. Attach context after recording starts:
 
 ```bash
-barnowl context add --session <uuid> --source codex "Relevant context, summarized as facts."
+barnowl context add --session <uuid> --source codex --confidence 0.95 "Relevant context, summarized as facts."
 ```
 
-4. Stop only when the user asks:
+Use `--confidence` for machine-supplied context. High-confidence Codex/Barn Owl context can be applied immediately; medium- and low-confidence context is queued for review.
+
+4. Stop only when the user asks. Prefer the review-aware flow so Codex returns the same post-meeting transcript suggestions the app shows:
 
 ```bash
-barnowl stop
+barnowl stop --wait-review --timeout 10m
 ```
+
+If you used plain `barnowl stop`, wait for review explicitly:
+
+```bash
+barnowl wait --session <uuid> --until review --timeout 10m
+```
+
+Summarize the returned `contextReview` prompts and Context Library suggestions, then ask for a decision before applying edits. Use `barnowl meeting context-review accept-suggestion <meeting-id> <suggestion-id>` or `ignore-suggestion` when the user approves or rejects a reusable mapping. Use `barnowl meeting context-review apply <meeting-id> --context "..."` only when the user approves the reviewed suggestions, or `dismiss` when they say to leave them for later.
 
 5. Wait for final processing before retrieving final notes:
 
@@ -69,15 +79,21 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Current meeting: `barnowl current`
 - Start: `barnowl start --title "Meeting" --type "Team Meeting" --context "..."`
 - Stop: `barnowl stop`
+- Stop and return transcript suggestions: `barnowl stop --wait-review --timeout 10m`
 - Wait: `barnowl wait --session <uuid> --until complete --timeout 10m`
 - Wait for notes: `barnowl wait --latest --until notes --timeout 10m`
+- Wait for transcript suggestions: `barnowl wait --session <uuid> --until review --timeout 10m`
 - Wait for stopped: `barnowl wait --session <uuid> --until stopped --timeout 2m`
-- Add context: `barnowl context add --session <uuid> --source codex "..."`
-- Replace context: `barnowl context set --session <uuid> --source codex "..."`
-- List context inbox: `barnowl context list --session <uuid>`
+- Add context: `barnowl context add --session <uuid> --source codex --confidence 0.95 "..."`
+- Replace context: `barnowl context set --session <uuid> --source codex --confidence 0.95 "..."`
+- List incoming context items: `barnowl context list --session <uuid>`
 - Accept context: `barnowl context accept <context-id>`
 - Ignore context: `barnowl context ignore <context-id>`
 - Delete context: `barnowl context delete <context-id>`
+- List Context Library entries: `barnowl context-library list --type person --query "Collin"`
+- Add Context Library entry: `barnowl context-library add --type person --name "Collin Burdick" --alias "Colin Burdick"`
+- Update Context Library entry: `barnowl context-library update <entry-id> --name "Collin S. Burdick" --clear-aliases`
+- Delete Context Library entry: `barnowl context-library delete <entry-id> --yes`
 - Rename: `barnowl title set --session <uuid> "Better title"`
 - Set type: `barnowl type set --session <uuid> "Customer Workshop"`
 - Update notes: `barnowl notes update --session <uuid> "Draft the follow-up"`
@@ -89,6 +105,11 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Meeting notes: `barnowl meeting notes <meeting-id> --format markdown`
 - Meeting summary: `barnowl meeting summary <meeting-id>`
 - Meeting context: `barnowl meeting context <meeting-id>`
+- Meeting transcript suggestions: `barnowl meeting context-review <meeting-id>`
+- Save correction for future meetings: `barnowl meeting context-review accept-suggestion <meeting-id> <suggestion-id>`
+- Ignore Context Library suggestion: `barnowl meeting context-review ignore-suggestion <meeting-id> <suggestion-id>`
+- Apply transcript suggestions: `barnowl meeting context-review apply <meeting-id> --context "..."`
+- Dismiss transcript suggestions for now: `barnowl meeting context-review dismiss <meeting-id>`
 - Meeting actions: `barnowl meeting actions <meeting-id>`
 - Ask notes locally: `barnowl ask-notes --session <uuid> "What did we decide?"`
 - Chat over meetings: `barnowl chat "What did we decide about Acme?"`
@@ -127,13 +148,14 @@ For prompts like "find my last meeting with Alex," search first, then fetch the 
 Record now:
 
 ```bash
-barnowl start --title "Codex planning" --source codex --context "User asked to discuss Barn Owl control layer."
+barnowl start --title "Codex planning" --source codex --confidence 0.95 --context "User asked to discuss Barn Owl control layer."
 ```
 
-Stop and retrieve notes:
+Stop, return transcript suggestions, then retrieve notes:
 
 ```bash
-barnowl stop
+barnowl stop --wait-review --timeout 10m
+barnowl meeting context-review <meeting-id>
 barnowl wait --latest --until complete --timeout 10m
 barnowl meeting notes <meeting-id> --format markdown
 ```

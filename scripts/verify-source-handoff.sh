@@ -55,18 +55,37 @@ required_entries=(
   "BarnOwl/project.yml"
   "BarnOwl/.env.example"
   "BarnOwl/Apps/BarnOwlMac/Info.plist"
+  "BarnOwl/Apps/BarnOwlMac/BarnOwlChangelog.json"
   "BarnOwl/Sources/BarnOwlCore/"
   "BarnOwl/Tests/"
   "BarnOwl/docs/distribution.md"
+  "BarnOwl/docs/barnowl-mcp-app.md"
   "BarnOwl/docs/manual-capture-qa.md"
   "BarnOwl/docs/production-readiness-audit.md"
+  "BarnOwl/mcp-app/package.json"
+  "BarnOwl/mcp-app/server.js"
+  "BarnOwl/mcp-app/lib/barnowl-client.js"
+  "BarnOwl/mcp-app/lib/codex-capability-adapter.js"
+  "BarnOwl/mcp-app/public/barnowl-widget.html"
+  "BarnOwl/mcp-app/tests/barnowl-client.test.js"
+  "BarnOwl/mcp-app/tests/codex-capability-adapter.test.js"
+  "BarnOwl/mcp-app/tests/server.test.js"
   "BarnOwl/scripts/xcodegen.sh"
   "BarnOwl/scripts/verify.sh"
+  "BarnOwl/scripts/run-hosted-app-tests.sh"
   "BarnOwl/scripts/package-all.sh"
+  "BarnOwl/scripts/changelog-notes.sh"
   "BarnOwl/scripts/verify-source-handoff.sh"
   "BarnOwl/scripts/verify-dist.sh"
   "BarnOwl/scripts/verify-production-readiness.sh"
   "BarnOwl/scripts/verify-cli-codex-qa.sh"
+  "BarnOwl/scripts/verify-barnowl-cli-start-timeout.sh"
+  "BarnOwl/scripts/verify-barnowl-cli-mcp-autostart.sh"
+  "BarnOwl/scripts/verify-barnowl-cli-stop-review.sh"
+  "BarnOwl/scripts/register-codex-mcp-app.sh"
+  "BarnOwl/scripts/verify-register-codex-mcp-app.sh"
+  "BarnOwl/scripts/resolve-notary-profile.sh"
+  "BarnOwl/scripts/verify-notary-profile-resolver.sh"
   "BarnOwl/scripts/reset-local-state.sh"
   "BarnOwl/scripts/install-local-app.sh"
 )
@@ -77,7 +96,7 @@ for required in "${required_entries[@]}"; do
   fi
 done
 
-forbidden_pattern='(^|/)\.git/|(^|/)\.tools/|(^|/)\.build/|(^|/)DerivedData/|(^|/)build/|(^|/)dist/|(^|/)\.DS_Store$|(^|/)\.env$|(^|/)\.env\.[^/]+$|\.xcuserdata/|\.xcuserstate$|BarnOwl-source-handoff\.zip$|BarnOwl\.app\.zip$|BarnOwl-release-manifest\.json$|SHA256SUMS$|manual-capture-qa-evidence-[0-9-]+\.md$'
+forbidden_pattern='(^|/)\.git/|(^|/)\.tools/|(^|/)\.build/|(^|/)DerivedData[^/]*/|(^|/)build/|(^|/)dist/|(^|/)\.DS_Store$|(^|/)\.env$|(^|/)\.env\.[^/]+$|\.xcuserdata/|\.xcuserstate$|BarnOwl-source-handoff\.zip$|BarnOwl\.app\.zip$|BarnOwl-release-manifest\.json$|SHA256SUMS$|manual-capture-qa-evidence-[0-9-]+\.md$'
 
 while IFS= read -r entry; do
   [[ "$entry" == "BarnOwl/.env.example" ]] && continue

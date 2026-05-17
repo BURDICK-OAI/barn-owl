@@ -24,7 +24,7 @@ public enum BarnOwlDatabaseError: Error, Equatable, Sendable {
 }
 
 public actor BarnOwlDatabase {
-    public static let latestSchemaVersion = 5
+    public static let latestSchemaVersion = 8
 
     private let url: URL
     private let database: SQLiteDatabaseHandle
@@ -893,8 +893,8 @@ public actor BarnOwlDatabase {
         try withStatement(
             """
             INSERT INTO external_context_items (
-                id, meeting_id, source, body, state, created_at, updated_at, used_in_note_generation, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, meeting_id, source, body, state, created_at, updated_at, used_in_note_generation, metadata_json, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 meeting_id = excluded.meeting_id,
                 source = excluded.source,
@@ -902,7 +902,8 @@ public actor BarnOwlDatabase {
                 state = excluded.state,
                 updated_at = excluded.updated_at,
                 used_in_note_generation = excluded.used_in_note_generation,
-                metadata_json = excluded.metadata_json
+                metadata_json = excluded.metadata_json,
+                confidence = excluded.confidence
             """
         ) { statement, sql in
             try bind(item.id, at: 1, in: statement, sql: sql)
@@ -914,6 +915,7 @@ public actor BarnOwlDatabase {
             try bind(item.updatedAt, at: 7, in: statement, sql: sql)
             try bind(item.usedInNoteGeneration ? 1 : 0, at: 8, in: statement, sql: sql)
             try bind(item.metadataJSON, at: 9, in: statement, sql: sql)
+            try bind(item.confidence, at: 10, in: statement, sql: sql)
             try stepDone(statement, sql: sql)
         }
     }
@@ -965,6 +967,193 @@ public actor BarnOwlDatabase {
     public func deleteExternalContextItem(id: UUID) throws {
         try withStatement("DELETE FROM external_context_items WHERE id = ?") { statement, sql in
             try bind(id, at: 1, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func upsertContextEntity(_ entity: BarnOwlContextEntityRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO context_entities (
+                id, kind, canonical_name, confidence, is_confirmed, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                canonical_name = excluded.canonical_name,
+                confidence = excluded.confidence,
+                is_confirmed = excluded.is_confirmed,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(entity.id, at: 1, in: statement, sql: sql)
+            try bind(entity.kind.rawValue, at: 2, in: statement, sql: sql)
+            try bind(entity.canonicalName, at: 3, in: statement, sql: sql)
+            try bind(entity.confidence, at: 4, in: statement, sql: sql)
+            try bind(entity.isConfirmed ? 1 : 0, at: 5, in: statement, sql: sql)
+            try bind(entity.createdAt, at: 6, in: statement, sql: sql)
+            try bind(entity.updatedAt, at: 7, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func contextEntities(kind: ContextEntityKind? = nil, limit: Int = 200) throws -> [BarnOwlContextEntityRecord] {
+        let sql = kind == nil
+            ? "SELECT * FROM context_entities ORDER BY updated_at DESC, canonical_name ASC LIMIT ?"
+            : "SELECT * FROM context_entities WHERE kind = ? ORDER BY updated_at DESC, canonical_name ASC LIMIT ?"
+        return try withStatement(sql) { statement, sql in
+            var index: Int32 = 1
+            if let kind {
+                try bind(kind.rawValue, at: index, in: statement, sql: sql)
+                index += 1
+            }
+            try bind(max(0, limit), at: index, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readContextEntity)
+        }
+    }
+
+    public func upsertContextEntityAlias(_ alias: BarnOwlContextEntityAliasRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO context_entity_aliases (
+                id, entity_id, alias, confidence, is_confirmed, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                entity_id = excluded.entity_id,
+                alias = excluded.alias,
+                confidence = excluded.confidence,
+                is_confirmed = excluded.is_confirmed,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(alias.id, at: 1, in: statement, sql: sql)
+            try bind(alias.entityID, at: 2, in: statement, sql: sql)
+            try bind(alias.alias, at: 3, in: statement, sql: sql)
+            try bind(alias.confidence, at: 4, in: statement, sql: sql)
+            try bind(alias.isConfirmed ? 1 : 0, at: 5, in: statement, sql: sql)
+            try bind(alias.createdAt, at: 6, in: statement, sql: sql)
+            try bind(alias.updatedAt, at: 7, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func contextEntityAliases(entityID: UUID) throws -> [BarnOwlContextEntityAliasRecord] {
+        try withStatement(
+            "SELECT * FROM context_entity_aliases WHERE entity_id = ? ORDER BY updated_at DESC, alias ASC"
+        ) { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readContextEntityAlias)
+        }
+    }
+
+    public func deleteContextEntityAliases(entityID: UUID) throws {
+        try withStatement("DELETE FROM context_entity_aliases WHERE entity_id = ?") { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func deleteContextEntity(id: UUID) throws {
+        try withStatement("DELETE FROM context_entities WHERE id = ?") { statement, sql in
+            try bind(id, at: 1, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func upsertContextEntityEvidence(_ evidence: BarnOwlContextEntityEvidenceRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO context_entity_evidence (
+                id, entity_id, meeting_id, source, observed_value, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                entity_id = excluded.entity_id,
+                meeting_id = excluded.meeting_id,
+                source = excluded.source,
+                observed_value = excluded.observed_value,
+                metadata_json = excluded.metadata_json
+            """
+        ) { statement, sql in
+            try bind(evidence.id, at: 1, in: statement, sql: sql)
+            try bind(evidence.entityID, at: 2, in: statement, sql: sql)
+            try bind(evidence.meetingID, at: 3, in: statement, sql: sql)
+            try bind(evidence.source, at: 4, in: statement, sql: sql)
+            try bind(evidence.observedValue, at: 5, in: statement, sql: sql)
+            try bind(evidence.metadataJSON, at: 6, in: statement, sql: sql)
+            try bind(evidence.createdAt, at: 7, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func upsertContextEntityFeedback(_ feedback: BarnOwlContextEntityFeedbackRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO context_entity_feedback (
+                id, meeting_id, kind, observed_value, canonical_value, decision, source, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                meeting_id = excluded.meeting_id,
+                kind = excluded.kind,
+                observed_value = excluded.observed_value,
+                canonical_value = excluded.canonical_value,
+                decision = excluded.decision,
+                source = excluded.source,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(feedback.id, at: 1, in: statement, sql: sql)
+            try bind(feedback.meetingID, at: 2, in: statement, sql: sql)
+            try bind(feedback.kind.rawValue, at: 3, in: statement, sql: sql)
+            try bind(feedback.observedValue, at: 4, in: statement, sql: sql)
+            try bind(feedback.canonicalValue, at: 5, in: statement, sql: sql)
+            try bind(feedback.decision.rawValue, at: 6, in: statement, sql: sql)
+            try bind(feedback.source, at: 7, in: statement, sql: sql)
+            try bind(feedback.metadataJSON, at: 8, in: statement, sql: sql)
+            try bind(feedback.createdAt, at: 9, in: statement, sql: sql)
+            try bind(feedback.updatedAt, at: 10, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func contextEntityFeedback(
+        decision: ContextEntityReviewAction? = nil,
+        limit: Int = 500
+    ) throws -> [BarnOwlContextEntityFeedbackRecord] {
+        let sql = decision == nil
+            ? "SELECT * FROM context_entity_feedback ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+            : "SELECT * FROM context_entity_feedback WHERE decision = ? ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+        return try withStatement(sql) { statement, sql in
+            var index: Int32 = 1
+            if let decision {
+                try bind(decision.rawValue, at: index, in: statement, sql: sql)
+                index += 1
+            }
+            try bind(max(0, limit), at: index, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readContextEntityFeedback)
+        }
+    }
+
+    public func upsertMeetingContextEntityLink(_ link: BarnOwlMeetingContextEntityLinkRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO meeting_context_entity_links (
+                id, meeting_id, entity_id, role, confidence, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                meeting_id = excluded.meeting_id,
+                entity_id = excluded.entity_id,
+                role = excluded.role,
+                confidence = excluded.confidence,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(link.id, at: 1, in: statement, sql: sql)
+            try bind(link.meetingID, at: 2, in: statement, sql: sql)
+            try bind(link.entityID, at: 3, in: statement, sql: sql)
+            try bind(link.role, at: 4, in: statement, sql: sql)
+            try bind(link.confidence, at: 5, in: statement, sql: sql)
+            try bind(link.createdAt, at: 6, in: statement, sql: sql)
+            try bind(link.updatedAt, at: 7, in: statement, sql: sql)
             try stepDone(statement, sql: sql)
         }
     }
@@ -1262,6 +1451,39 @@ private extension BarnOwlDatabase {
             try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
             do {
                 try execute(schemaV5SQL, database: database)
+                try execute("PRAGMA user_version = 5", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 6 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV6SQL, database: database)
+                try execute("PRAGMA user_version = 6", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 7 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV7SQL, database: database)
+                try execute("PRAGMA user_version = 7", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 8 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV8SQL, database: database)
                 try execute("PRAGMA user_version = \(latestSchemaVersion)", database: database)
                 try execute("COMMIT", database: database)
             } catch {
@@ -1340,6 +1562,24 @@ private extension BarnOwlDatabase {
         if version < 5 {
             try transaction {
                 try execute(Self.schemaV5SQL)
+                try execute("PRAGMA user_version = 5")
+            }
+        }
+        if version < 6 {
+            try transaction {
+                try execute(Self.schemaV6SQL)
+                try execute("PRAGMA user_version = 6")
+            }
+        }
+        if version < 7 {
+            try transaction {
+                try execute(Self.schemaV7SQL)
+                try execute("PRAGMA user_version = 7")
+            }
+        }
+        if version < 8 {
+            try transaction {
+                try execute(Self.schemaV8SQL)
                 try execute("PRAGMA user_version = \(Self.latestSchemaVersion)")
             }
         }
@@ -1638,6 +1878,7 @@ private extension BarnOwlDatabase {
             source: columnRequiredString(statement, 2),
             body: columnRequiredString(statement, 3),
             state: BarnOwlExternalContextState(rawValue: columnRequiredString(statement, 4)) ?? .pending,
+            confidence: columnDouble(statement, 9),
             createdAt: columnRequiredDate(statement, 5),
             updatedAt: columnRequiredDate(statement, 6),
             usedInNoteGeneration: sqlite3_column_int(statement, 8) != 0,
@@ -1655,6 +1896,45 @@ private extension BarnOwlDatabase {
             summary: columnRequiredString(statement, 5),
             beforeJSON: columnString(statement, 6),
             afterJSON: columnString(statement, 7)
+        )
+    }
+
+    func readContextEntity(_ statement: OpaquePointer) throws -> BarnOwlContextEntityRecord {
+        BarnOwlContextEntityRecord(
+            id: try columnRequiredUUID(statement, 0),
+            kind: ContextEntityKind(rawValue: columnRequiredString(statement, 1)) ?? .glossaryTerm,
+            canonicalName: columnRequiredString(statement, 2),
+            confidence: sqlite3_column_double(statement, 3),
+            isConfirmed: sqlite3_column_int(statement, 4) != 0,
+            createdAt: columnRequiredDate(statement, 5),
+            updatedAt: columnRequiredDate(statement, 6)
+        )
+    }
+
+    func readContextEntityAlias(_ statement: OpaquePointer) throws -> BarnOwlContextEntityAliasRecord {
+        BarnOwlContextEntityAliasRecord(
+            id: try columnRequiredUUID(statement, 0),
+            entityID: try columnRequiredUUID(statement, 1),
+            alias: columnRequiredString(statement, 2),
+            confidence: sqlite3_column_double(statement, 3),
+            isConfirmed: sqlite3_column_int(statement, 4) != 0,
+            createdAt: columnRequiredDate(statement, 5),
+            updatedAt: columnRequiredDate(statement, 6)
+        )
+    }
+
+    func readContextEntityFeedback(_ statement: OpaquePointer) throws -> BarnOwlContextEntityFeedbackRecord {
+        BarnOwlContextEntityFeedbackRecord(
+            id: try columnRequiredUUID(statement, 0),
+            meetingID: try columnUUID(statement, 1),
+            kind: ContextEntityKind(rawValue: columnRequiredString(statement, 2)) ?? .glossaryTerm,
+            observedValue: columnRequiredString(statement, 3),
+            canonicalValue: columnRequiredString(statement, 4),
+            decision: ContextEntityReviewAction(rawValue: columnRequiredString(statement, 5)) ?? .ignore,
+            source: columnRequiredString(statement, 6),
+            metadataJSON: columnString(statement, 7),
+            createdAt: columnRequiredDate(statement, 8),
+            updatedAt: columnRequiredDate(statement, 9)
         )
     }
 
@@ -2034,5 +2314,90 @@ private extension BarnOwlDatabase {
     );
 
     CREATE INDEX IF NOT EXISTS idx_rolling_transcription_session ON rolling_transcription_chunks(session_id, status, sequence_number);
+    """
+
+    static let schemaV6SQL = """
+    CREATE TABLE IF NOT EXISTS context_entities (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        canonical_name TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        is_confirmed INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS context_entity_aliases (
+        id TEXT PRIMARY KEY,
+        entity_id TEXT NOT NULL REFERENCES context_entities(id) ON DELETE CASCADE,
+        alias TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        is_confirmed INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS context_entity_evidence (
+        id TEXT PRIMARY KEY,
+        entity_id TEXT NOT NULL REFERENCES context_entities(id) ON DELETE CASCADE,
+        meeting_id TEXT REFERENCES meetings(id) ON DELETE SET NULL,
+        source TEXT NOT NULL,
+        observed_value TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS meeting_context_entity_links (
+        id TEXT PRIMARY KEY,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES context_entities(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_entities_kind ON context_entities(kind, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_context_entity_aliases_entity ON context_entity_aliases(entity_id, alias);
+    CREATE INDEX IF NOT EXISTS idx_context_entity_evidence_entity ON context_entity_evidence(entity_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_context_entity_evidence_meeting ON context_entity_evidence(meeting_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_meeting_context_entity_links_meeting ON meeting_context_entity_links(meeting_id, role);
+    """
+
+    static let schemaV7SQL = """
+    CREATE TABLE IF NOT EXISTS context_entity_feedback (
+        id TEXT PRIMARY KEY,
+        meeting_id TEXT REFERENCES meetings(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        observed_value TEXT NOT NULL,
+        canonical_value TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        source TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_context_entity_feedback_decision ON context_entity_feedback(decision, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_context_entity_feedback_pair ON context_entity_feedback(kind, observed_value, canonical_value);
+    """
+
+    static let schemaV8SQL = """
+    CREATE TABLE IF NOT EXISTS external_context_items (
+        id TEXT PRIMARY KEY,
+        meeting_id TEXT REFERENCES meetings(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        body TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        metadata_json TEXT,
+        used_in_note_generation INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_external_context_meeting ON external_context_items(meeting_id, state, created_at);
+    CREATE INDEX IF NOT EXISTS idx_external_context_state ON external_context_items(state, created_at);
+
+    ALTER TABLE external_context_items ADD COLUMN confidence REAL;
     """
 }

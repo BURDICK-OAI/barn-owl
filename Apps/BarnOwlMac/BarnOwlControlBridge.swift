@@ -1,4 +1,5 @@
 import BarnOwlCore
+import BarnOwlPersistence
 import Darwin
 import Foundation
 import Security
@@ -8,6 +9,7 @@ final class BarnOwlControlBridge: @unchecked Sendable {
 
     private weak var model: BarnOwlAppModel?
     private let openCurrentMeeting: @MainActor () -> Void
+    private let openSettings: @MainActor () -> Void
     private let port: UInt16
     private let tokenStore: BarnOwlControlBridgeTokenStore
     private var socketFileDescriptor: Int32 = -1
@@ -17,12 +19,14 @@ final class BarnOwlControlBridge: @unchecked Sendable {
         model: BarnOwlAppModel,
         port: UInt16 = BarnOwlControlBridge.defaultPort,
         tokenStore: BarnOwlControlBridgeTokenStore = BarnOwlControlBridgeTokenStore(),
-        openCurrentMeeting: @escaping @MainActor () -> Void
+        openCurrentMeeting: @escaping @MainActor () -> Void,
+        openSettings: @escaping @MainActor () -> Void = {}
     ) {
         self.model = model
         self.port = port
         self.tokenStore = tokenStore
         self.openCurrentMeeting = openCurrentMeeting
+        self.openSettings = openSettings
     }
 
     deinit {
@@ -49,7 +53,14 @@ final class BarnOwlControlBridge: @unchecked Sendable {
         guard preflightAuthorizationToken() else { return }
 
         let server = socket(AF_INET, SOCK_STREAM, 0)
-        guard server >= 0 else { return }
+        guard server >= 0 else {
+            await logBridge(
+                "Control bridge could not create its local server socket.",
+                level: .warning,
+                details: "errno=\(errno)"
+            )
+            return
+        }
         socketFileDescriptor = server
 
         var reuse: Int32 = 1
@@ -66,9 +77,25 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 Darwin.bind(server, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard bindResult == 0, listen(server, 16) == 0 else {
+        guard bindResult == 0 else {
             Darwin.close(server)
             socketFileDescriptor = -1
+            await logBridge(
+                "Control bridge could not bind its local loopback port.",
+                level: .warning,
+                details: "port=\(port) errno=\(errno)"
+            )
+            return
+        }
+
+        guard listen(server, 16) == 0 else {
+            Darwin.close(server)
+            socketFileDescriptor = -1
+            await logBridge(
+                "Control bridge could not listen on its local loopback port.",
+                level: .warning,
+                details: "port=\(port) errno=\(errno)"
+            )
             return
         }
 
@@ -92,7 +119,11 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             return true
         } catch {
             Task { @MainActor [weak self] in
-                self?.model?.recordExternalCommand("Control bridge could not create authorization token.")
+                self?.model?.recordExternalCommand(
+                    "Control bridge could not create authorization token.",
+                    level: .warning,
+                    details: BarnOwlErrorFormatter.message(for: error)
+                )
             }
             return false
         }
@@ -198,9 +229,18 @@ final class BarnOwlControlBridge: @unchecked Sendable {
         switch command.command {
         case .getStatus:
             return await model.controlCodexStatusResponse()
+        case .dashboardSnapshot:
+            return await model.controlDashboardSnapshotResponse()
         case .getCurrent, .current:
             return await model.controlCurrentResponse()
         case .wait:
+            if command.until?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "review" {
+                return await controlContextReviewWaitResponse(
+                    model: model,
+                    meetingID: command.meetingID ?? command.sessionID,
+                    latest: command.latest == true
+                )
+            }
             return await model.controlWaitSnapshotResponse(
                 meetingID: command.meetingID ?? command.sessionID,
                 latest: command.latest == true,
@@ -252,6 +292,72 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 return model.controlStatusResponse(ok: false, message: "meeting_context requires meetingID.", error: "missing_meeting_id")
             }
             return await model.controlMeetingContextResponse(meetingID: meetingID)
+        case .meetingContextReview:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review requires meetingID.", error: "missing_meeting_id")
+            }
+            return controlContextReviewResponse(model: model, meetingID: meetingID)
+        case .meetingContextReviewApply:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review_apply requires meetingID.", error: "missing_meeting_id")
+            }
+            guard var review = matchingContextReview(model: model, meetingID: meetingID) else {
+                return missingContextReviewResponse(model: model, meetingID: meetingID)
+            }
+            if let context = command.context {
+                review.freeformContextDraft = context
+                model.postRecordingContextReview = review
+            }
+            await model.approvePostRecordingContextReview()
+            var response = model.controlStatusResponse(
+                message: model.contextReviewStatus.isEmpty ? "Transcript suggestions applied." : model.contextReviewStatus,
+                activeMeetingID: meetingID
+            )
+            response.contextReviewReady = false
+            return response
+        case .meetingContextReviewDismiss:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review_dismiss requires meetingID.", error: "missing_meeting_id")
+            }
+            guard matchingContextReview(model: model, meetingID: meetingID) != nil else {
+                return missingContextReviewResponse(model: model, meetingID: meetingID)
+            }
+            model.dismissPostRecordingContextReviewForNow()
+            var response = controlContextReviewResponse(model: model, meetingID: meetingID)
+            response.message = model.noteActionStatus.isEmpty ? "Transcript suggestions dismissed for now." : model.noteActionStatus
+            return response
+        case .meetingContextReviewAcceptSuggestion:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review_accept_suggestion requires meetingID.", error: "missing_meeting_id")
+            }
+            guard matchingContextReview(model: model, meetingID: meetingID) != nil else {
+                return missingContextReviewResponse(model: model, meetingID: meetingID)
+            }
+            guard let suggestionID = command.suggestionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review_accept_suggestion requires suggestionID.", error: "missing_suggestion_id")
+            }
+            guard await model.acceptContextEntitySuggestion(suggestionID) else {
+                return model.controlStatusResponse(ok: false, message: model.noteActionStatus, activeMeetingID: meetingID, error: "context_suggestion_accept_failed")
+            }
+            var response = controlContextReviewResponse(model: model, meetingID: meetingID)
+            response.message = model.noteActionStatus
+            return response
+        case .meetingContextReviewIgnoreSuggestion:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review_ignore_suggestion requires meetingID.", error: "missing_meeting_id")
+            }
+            guard matchingContextReview(model: model, meetingID: meetingID) != nil else {
+                return missingContextReviewResponse(model: model, meetingID: meetingID)
+            }
+            guard let suggestionID = command.suggestionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_context_review_ignore_suggestion requires suggestionID.", error: "missing_suggestion_id")
+            }
+            guard await model.ignoreContextEntitySuggestion(suggestionID) else {
+                return model.controlStatusResponse(ok: false, message: model.noteActionStatus, activeMeetingID: meetingID, error: "context_suggestion_ignore_failed")
+            }
+            var response = controlContextReviewResponse(model: model, meetingID: meetingID)
+            response.message = model.noteActionStatus
+            return response
         case .meetingActions:
             guard let meetingID = command.meetingID ?? command.sessionID else {
                 return model.controlStatusResponse(ok: false, message: "meeting_actions requires meetingID.", error: "missing_meeting_id")
@@ -290,6 +396,23 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 return model.controlStatusResponse(ok: false, message: "context_delete requires contextItemID.", error: "missing_context_item_id")
             }
             return await model.controlContextDeleteResponse(itemID: contextItemID)
+        case .contextLibraryList:
+            return await model.controlContextLibraryListResponse(
+                kind: command.contextKind,
+                query: command.query
+            )
+        case .contextLibraryUpsert:
+            return await model.controlContextLibraryUpsertResponse(
+                entryID: command.contextLibraryEntryID,
+                kind: command.contextKind,
+                canonicalName: command.canonicalName,
+                aliases: command.aliases
+            )
+        case .contextLibraryDelete:
+            guard let entryID = command.contextLibraryEntryID else {
+                return model.controlStatusResponse(ok: false, message: "context_library_delete requires contextLibraryEntryID.", error: "missing_context_library_entry_id")
+            }
+            return await model.controlContextLibraryDeleteResponse(entryID: entryID)
         case .chat:
             return await model.controlChatResponse(question: command.query ?? command.prompt ?? "")
         case .diagnosticsExport:
@@ -298,6 +421,11 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             return model.controlPermissionsCheckResponse()
         case .permissionsTest:
             return await model.controlPermissionsTestResponse()
+        case .setAudioSources:
+            return await model.controlSetAudioSourcesResponse(
+                capturesMicrophone: command.capturesMicrophone,
+                capturesSystemAudio: command.capturesSystemAudio
+            )
         case .startRecording, .stopRecording, .addContext, .appendContext, .setTitle, .renameMeeting, .askNotes, .openLatestMeeting:
             guard let quickCommand = command.quickCommand else {
                 return model.controlStatusResponse(ok: false, message: "Unsupported quick command.", error: "unsupported_quick_command")
@@ -314,9 +442,20 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             let item = await model.setExternalContext(
                 context,
                 source: command.source ?? "cli",
-                meetingID: command.sessionID
+                meetingID: command.sessionID,
+                confidence: command.confidence
             )
-            return model.controlStatusResponse(message: "Context set.", contextItemID: item?.id)
+            let message: String
+            if let item {
+                message = item.state == .accepted ? "Context set." : "Context queued for review."
+            } else {
+                message = "Context was not set."
+            }
+            return model.controlStatusResponse(
+                ok: item != nil,
+                message: message,
+                contextItemID: item?.id
+            )
         case .setMeetingType:
             guard let meetingType = command.meetingType else {
                 return model.controlStatusResponse(ok: false, message: "set_meeting_type requires meeting_type.", error: "missing_meeting_type")
@@ -332,12 +471,108 @@ final class BarnOwlControlBridge: @unchecked Sendable {
         case .openCurrentMeeting:
             openCurrentMeeting()
             return model.controlStatusResponse(message: "Opened Barn Owl.")
+        case .openSettings:
+            openSettings()
+            return model.controlStatusResponse(message: "Opened Barn Owl Settings.")
+        case .openNotesFolder:
+            model.openLibraryInFinder()
+            return model.controlStatusResponse(message: "Opened the Barn Owl notes folder.")
         }
     }
 
     @MainActor
-    private func logBridge(_ message: String) {
-        model?.recordExternalCommand(message)
+    private func controlContextReviewWaitResponse(
+        model: BarnOwlAppModel,
+        meetingID requestedMeetingID: UUID?,
+        latest: Bool
+    ) async -> BarnOwlControlResponse {
+        var response = await model.controlWaitSnapshotResponse(
+            meetingID: requestedMeetingID,
+            latest: latest,
+            until: "review"
+        )
+        guard response.ok else { return response }
+
+        let meetingID = requestedMeetingID ?? response.meetingID ?? response.activeMeetingID
+        guard let review = matchingContextReview(model: model, meetingID: meetingID) else {
+            response.contextReviewReady = false
+            return response
+        }
+
+        response.message = "Wait condition satisfied: review."
+        response.meetingID = review.session.id
+        response.activeMeetingID = review.session.id
+        response.title = review.session.title
+        response.contextReview = controlContextReview(from: review)
+        response.contextReviewReady = true
+        response.nextCommand = "barnowl meeting context-review \(review.session.id.uuidString)"
+        return response
+    }
+
+    @MainActor
+    private func controlContextReviewResponse(
+        model: BarnOwlAppModel,
+        meetingID: UUID
+    ) -> BarnOwlControlResponse {
+        guard let review = matchingContextReview(model: model, meetingID: meetingID) else {
+            return missingContextReviewResponse(model: model, meetingID: meetingID)
+        }
+        var response = model.controlStatusResponse(
+            message: "Transcript suggestions are ready.",
+            activeMeetingID: meetingID,
+            nextCommand: "barnowl meeting context-review apply \(meetingID.uuidString)"
+        )
+        response.meetingID = meetingID
+        response.contextReview = controlContextReview(from: review)
+        response.contextReviewReady = true
+        return response
+    }
+
+    @MainActor
+    private func missingContextReviewResponse(
+        model: BarnOwlAppModel,
+        meetingID: UUID
+    ) -> BarnOwlControlResponse {
+        var response = model.controlStatusResponse(
+            message: "No transcript suggestions are ready for this meeting.",
+            activeMeetingID: meetingID
+        )
+        response.ok = false
+        response.meetingID = meetingID
+        response.contextReviewReady = false
+        response.errorCode = "context_review_not_found"
+        response.error = "context_review_not_found"
+        return response
+    }
+
+    @MainActor
+    private func matchingContextReview(
+        model: BarnOwlAppModel,
+        meetingID: UUID?
+    ) -> BarnOwlPostRecordingContextReview? {
+        guard let review = model.postRecordingContextReview else { return nil }
+        guard meetingID == nil || review.session.id == meetingID else { return nil }
+        return review
+    }
+
+    @MainActor
+    private func controlContextReview(from review: BarnOwlPostRecordingContextReview) -> BarnOwlContextReview {
+        BarnOwlContextReview(
+            meetingID: review.session.id,
+            suggestedSummary: review.suggestedSummary,
+            prompts: review.prompts,
+            facts: review.facts,
+            entitySuggestions: review.entitySuggestions
+        )
+    }
+
+    @MainActor
+    private func logBridge(
+        _ message: String,
+        level: DiagnosticsLogLevel = .info,
+        details: String? = nil
+    ) {
+        model?.recordExternalCommand(message, level: level, details: details)
     }
 
     private static func contentLength(in headerText: String) -> Int? {

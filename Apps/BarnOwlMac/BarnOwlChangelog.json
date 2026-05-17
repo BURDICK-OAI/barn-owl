@@ -1,0 +1,13 @@
+[
+  {
+    "version": "0.1.0",
+    "build": "18",
+    "date": "2026-05-17",
+    "title": "Context Library and review clarity",
+    "highlights": [
+      "Introduced Context Library management in Settings with search, type filters, entry creation, editing, and deletion.",
+      "Clarified post-meeting review so high-confidence machine context is accepted automatically while medium- and low-confidence suggestions stay review-gated.",
+      "Extended the Barn Owl CLI and Codex guidance with Context Library commands and review-aware workflows."
+    ]
+  }
+]

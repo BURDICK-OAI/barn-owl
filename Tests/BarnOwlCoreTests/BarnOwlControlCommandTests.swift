@@ -42,6 +42,44 @@ func controlResponseEncodesMachineReadableStatus() throws {
 }
 
 @Test
+func dashboardSnapshotResponseEncodesWidgetPayload() throws {
+    let dashboard = BarnOwlControlDashboardSnapshot(
+        status: "Recording",
+        recordingStatus: "recording",
+        activeMeetingID: UUID(uuidString: "00000000-0000-0000-0000-00000000D001"),
+        title: "Roadmap Review",
+        meetingType: "Team Meeting",
+        audioSources: BarnOwlControlAudioSources(capturesMicrophone: true, capturesSystemAudio: false),
+        liveTranscriptPreview: "Current preview",
+        captureStatus: "Capturing microphone audio.",
+        realtimeStatus: "Realtime connected.",
+        finalTranscriptionStatus: "Final pass queued.",
+        recordingElapsedText: "01:42",
+        readinessState: "ready",
+        setupReady: true,
+        apiKeyConfigured: true,
+        apiKeyVerified: true,
+        updateStatus: "Updater idle.",
+        updateAvailability: "Barn Owl is up to date.",
+        isUpdateInFlight: false,
+        recentMeetings: [],
+        jobState: "running",
+        contextReviewReady: false,
+        lastError: nil
+    )
+    let response = BarnOwlControlResponse(
+        ok: true,
+        message: "Barn Owl dashboard snapshot.",
+        dashboard: dashboard
+    )
+
+    let data = try JSONEncoder().encode(response)
+    let decoded = try JSONDecoder().decode(BarnOwlControlResponse.self, from: data)
+
+    #expect(decoded == response)
+}
+
+@Test
 func readCommandsDecodeMeetingSearchPayload() throws {
     let data = Data(
         """
@@ -84,6 +122,42 @@ func codexPrimaryControlCommandsDecodePayloads() throws {
 }
 
 @Test
+func contextReviewCommandsDecodeMeetingAndReviewedContext() throws {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000C024")!
+    let read = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"meeting_context_review","meetingID":"\#(meetingID.uuidString)"}"#.utf8)
+    )
+    let apply = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"meeting_context_review_apply","meetingID":"\#(meetingID.uuidString)","context":"Collin is spelled with two l's."}"#.utf8)
+    )
+    let dismiss = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"meeting_context_review_dismiss","meetingID":"\#(meetingID.uuidString)"}"#.utf8)
+    )
+    let suggestionID = UUID(uuidString: "00000000-0000-0000-0000-00000000C025")!
+    let acceptSuggestion = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"meeting_context_review_accept_suggestion","meetingID":"\#(meetingID.uuidString)","suggestionID":"\#(suggestionID.uuidString)"}"#.utf8)
+    )
+    let ignoreSuggestion = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"meeting_context_review_ignore_suggestion","meetingID":"\#(meetingID.uuidString)","suggestionID":"\#(suggestionID.uuidString)"}"#.utf8)
+    )
+
+    #expect(read.command == .meetingContextReview)
+    #expect(read.meetingID == meetingID)
+    #expect(apply.command == .meetingContextReviewApply)
+    #expect(apply.context == "Collin is spelled with two l's.")
+    #expect(dismiss.command == .meetingContextReviewDismiss)
+    #expect(acceptSuggestion.command == .meetingContextReviewAcceptSuggestion)
+    #expect(acceptSuggestion.suggestionID == suggestionID)
+    #expect(ignoreSuggestion.command == .meetingContextReviewIgnoreSuggestion)
+    #expect(ignoreSuggestion.suggestionID == suggestionID)
+}
+
+@Test
 func jobContextAndAdminCommandsDecodePayloads() throws {
     let jobID = UUID(uuidString: "00000000-0000-0000-0000-00000000C021")!
     let contextID = UUID(uuidString: "00000000-0000-0000-0000-00000000C022")!
@@ -112,6 +186,34 @@ func jobContextAndAdminCommandsDecodePayloads() throws {
 }
 
 @Test
+func contextLibraryCommandsDecodePayloads() throws {
+    let entryID = UUID(uuidString: "00000000-0000-0000-0000-00000000C026")!
+    let list = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"context_library_list","contextKind":"person","query":"Collin"}"#.utf8)
+    )
+    let upsert = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"context_library_upsert","contextLibraryEntryID":"\#(entryID.uuidString)","contextKind":"person","canonicalName":"Collin Burdick","aliases":["Colin Burdick"]}"#.utf8)
+    )
+    let delete = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"context_library_delete","contextLibraryEntryID":"\#(entryID.uuidString)"}"#.utf8)
+    )
+
+    #expect(list.command == .contextLibraryList)
+    #expect(list.contextKind == .person)
+    #expect(list.query == "Collin")
+    #expect(upsert.command == .contextLibraryUpsert)
+    #expect(upsert.contextLibraryEntryID == entryID)
+    #expect(upsert.contextKind == .person)
+    #expect(upsert.canonicalName == "Collin Burdick")
+    #expect(upsert.aliases == ["Colin Burdick"])
+    #expect(delete.command == .contextLibraryDelete)
+    #expect(delete.contextLibraryEntryID == entryID)
+}
+
+@Test
 func bridgeCurrentCommandDecodesProductAlias() throws {
     let data = Data(#"{"command":"current"}"#.utf8)
 
@@ -125,18 +227,47 @@ func controlCommandNameIncludesCodexPrimaryCases() {
     let names = Set(BarnOwlControlCommandName.allCases.map(\.rawValue))
 
     #expect(names.contains("wait"))
+    #expect(names.contains("dashboard_snapshot"))
+    #expect(names.contains("set_audio_sources"))
     #expect(names.contains("jobs_list"))
     #expect(names.contains("jobs_retry"))
     #expect(names.contains("jobs_dismiss"))
     #expect(names.contains("context_list"))
+    #expect(names.contains("meeting_context_review"))
+    #expect(names.contains("meeting_context_review_apply"))
+    #expect(names.contains("meeting_context_review_dismiss"))
+    #expect(names.contains("meeting_context_review_accept_suggestion"))
+    #expect(names.contains("meeting_context_review_ignore_suggestion"))
     #expect(names.contains("context_accept"))
     #expect(names.contains("context_ignore"))
     #expect(names.contains("context_delete"))
+    #expect(names.contains("context_library_list"))
+    #expect(names.contains("context_library_upsert"))
+    #expect(names.contains("context_library_delete"))
     #expect(names.contains("meeting_delete"))
     #expect(names.contains("meeting_purge_temp_audio"))
     #expect(names.contains("diagnostics_export"))
     #expect(names.contains("permissions_check"))
     #expect(names.contains("permissions_test"))
+    #expect(names.contains("open_settings"))
+    #expect(names.contains("open_notes_folder"))
+}
+
+@Test
+func dashboardAndAudioSourceCommandsDecodePayloads() throws {
+    let dashboard = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"dashboard_snapshot"}"#.utf8)
+    )
+    let audio = try JSONDecoder().decode(
+        BarnOwlControlCommand.self,
+        from: Data(#"{"command":"set_audio_sources","capturesMicrophone":false,"capturesSystemAudio":true}"#.utf8)
+    )
+
+    #expect(dashboard.command == .dashboardSnapshot)
+    #expect(audio.command == .setAudioSources)
+    #expect(audio.capturesMicrophone == false)
+    #expect(audio.capturesSystemAudio == true)
 }
 
 @Test
@@ -199,6 +330,7 @@ func quickCommandStartPreservesTitleContextAndMeetingType() {
         meetingType: "Planning / Review",
         context: "Discuss V1 command layer.",
         source: "codex",
+        confidence: 0.95,
         capturesMicrophone: false,
         capturesSystemAudio: true
     )
@@ -210,6 +342,7 @@ func quickCommandStartPreservesTitleContextAndMeetingType() {
     #expect(quickCommand?.meetingType == "Planning / Review")
     #expect(quickCommand?.context == "Discuss V1 command layer.")
     #expect(quickCommand?.source == "codex")
+    #expect(quickCommand?.confidence == 0.95)
     #expect(quickCommand?.capturesMicrophone == false)
     #expect(quickCommand?.capturesSystemAudio == true)
 }
@@ -274,6 +407,7 @@ func meetingReadResponseCanCarryNotesActionsAndContext() throws {
                 source: "codex",
                 body: "Acme is evaluating annual pricing.",
                 state: "accepted",
+                confidence: 0.95,
                 createdAt: Date(timeIntervalSince1970: 1_800_000_000)
             )
         ],
@@ -340,4 +474,42 @@ func controlResponseCarriesCodexPrimaryStatusJobsAndReadiness() throws {
     #expect(decoded.feedbackSuggested == true)
     #expect(decoded.feedbackCommand == "barnowl feedback slack")
     #expect(decoded.feedbackPostCommand == "barnowl feedback slack --yes")
+}
+
+@Test
+func controlResponseCarriesReadyContextReview() throws {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000C040")!
+    let response = BarnOwlControlResponse(
+        ok: true,
+        message: "Wait condition satisfied: review.",
+        meetingID: meetingID,
+        contextReview: BarnOwlContextReview(
+            meetingID: meetingID,
+            suggestedSummary: "Barn Owl thinks this was a customer workshop.",
+            prompts: [ContextReviewPrompt(kind: .participants, text: "Who else was in this?")],
+            facts: MeetingFacts(
+                title: "Acme Review",
+                participants: ["Collin Burdick"],
+                customers: ["Acme Corp."]
+            ),
+            entitySuggestions: [
+                ContextEntitySuggestion(
+                    id: UUID(uuidString: "00000000-0000-0000-0000-00000000C041")!,
+                    kind: .person,
+                    observedValue: "Colin",
+                    canonicalValue: "Collin Burdick",
+                    rationale: "Invite and transcript appear to refer to the same participant.",
+                    confidence: 0.98,
+                    evidenceSources: ["calendar", "transcript"]
+                )
+            ]
+        ),
+        contextReviewReady: true
+    )
+
+    let data = try JSONEncoder().encode(response)
+    let decoded = try JSONDecoder().decode(BarnOwlControlResponse.self, from: data)
+
+    #expect(decoded == response)
+    #expect(decoded.contextReview?.entitySuggestions.first?.canonicalValue == "Collin Burdick")
 }

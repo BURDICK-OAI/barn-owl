@@ -229,6 +229,7 @@ struct BarnOwlContextInboxItem: Identifiable, Equatable {
     var source: String
     var body: String
     var state: BarnOwlExternalContextState
+    var confidence: Double?
     var createdAt: Date
 
     var stateLabel: String {
@@ -241,6 +242,18 @@ struct BarnOwlContextInboxItem: Identifiable, Equatable {
             return "Ignored"
         }
     }
+
+    var confidenceLabel: String? {
+        guard let confidence else { return nil }
+        switch confidence {
+        case 0.85 ... 1:
+            return "High confidence"
+        case 0.55 ..< 0.85:
+            return "Medium confidence"
+        default:
+            return "Low confidence"
+        }
+    }
 }
 
 struct BarnOwlPostRecordingContextReview: Identifiable, Equatable {
@@ -250,6 +263,7 @@ struct BarnOwlPostRecordingContextReview: Identifiable, Equatable {
     var facts: MeetingFacts
     var freeformContextDraft: String
     var prompts: [ContextReviewPrompt]
+    var entitySuggestions: [ContextEntitySuggestion]
 
     var suggestedSummary: String {
         facts.displaySummary
@@ -626,11 +640,13 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     var lifecyclePresentation: BarnOwlLifecyclePresentation {
-        BarnOwlLifecyclePresentation.make(
+        let recordingAudioSources = activeSession?.audioSources ?? selectedAudioSources
+        return BarnOwlLifecyclePresentation.make(
             state: stateMachine.state,
             hasActiveProcessing: progressFraction != nil || Self.hasActiveProcessing(processingTimelineItems),
             hasFailedProcessing: Self.hasFailedProcessing(processingTimelineItems),
-            hasDisplayedNote: displayedNote != nil
+            hasDisplayedNote: displayedNote != nil,
+            recordingDetail: "Capturing \(Self.audioSourceDescription(recordingAudioSources))."
         )
     }
 
@@ -1053,15 +1069,115 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     func dismissPostRecordingContextReviewForNow() {
-        noteActionStatus = "Context review is still available when you want to improve the note."
+        noteActionStatus = "Transcript suggestions are still available when you want to improve the note."
     }
 
-    func addPostRecordingContext() async {
-        await applyPostRecordingContextReview(statusMessage: "Added context and updated meeting facts.")
+    func prepareContextReviewForDisplayedMeeting() async {
+        guard let meetingID = displayedNote?.id else {
+            noteActionStatus = "Open a saved meeting before reviewing context."
+            return
+        }
+        await preparePostProcessingContextReview(for: meetingID)
     }
 
-    func regenerateNotesFromPostRecordingContext() async {
-        await applyPostRecordingContextReview(statusMessage: "Regenerated notes from updated context.")
+    @discardableResult
+    func acceptContextEntitySuggestion(_ suggestionID: UUID) async -> Bool {
+        guard var review = postRecordingContextReview,
+              let suggestion = review.entitySuggestions.first(where: { $0.id == suggestionID })
+        else {
+            noteActionStatus = "That context suggestion is no longer available."
+            return false
+        }
+
+        do {
+            let database = try makeDatabase()
+            let now = Date()
+            let matchingEntity = try await database.contextEntities(kind: suggestion.kind, limit: 500).first {
+                $0.canonicalName.localizedCaseInsensitiveCompare(suggestion.canonicalValue) == .orderedSame
+            }
+            let entity = BarnOwlContextEntityRecord(
+                id: matchingEntity?.id ?? UUID(),
+                kind: suggestion.kind,
+                canonicalName: suggestion.canonicalValue,
+                confidence: max(matchingEntity?.confidence ?? 0, suggestion.confidence),
+                isConfirmed: true,
+                createdAt: matchingEntity?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertContextEntity(entity)
+            let matchingAlias = try await database.contextEntityAliases(entityID: entity.id).first {
+                $0.alias.localizedCaseInsensitiveCompare(suggestion.observedValue) == .orderedSame
+            }
+            try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+                id: matchingAlias?.id ?? UUID(),
+                entityID: entity.id,
+                alias: suggestion.observedValue,
+                confidence: max(matchingAlias?.confidence ?? 0, suggestion.confidence),
+                isConfirmed: true,
+                createdAt: matchingAlias?.createdAt ?? now,
+                updatedAt: now
+            ))
+            try await database.upsertContextEntityEvidence(BarnOwlContextEntityEvidenceRecord(
+                entityID: entity.id,
+                meetingID: review.session.id,
+                source: suggestion.evidenceSources.joined(separator: ","),
+                observedValue: suggestion.observedValue,
+                metadataJSON: #"{"decision":"accepted"}"#,
+                createdAt: now
+            ))
+            try await database.upsertMeetingContextEntityLink(BarnOwlMeetingContextEntityLinkRecord(
+                meetingID: review.session.id,
+                entityID: entity.id,
+                role: suggestion.kind.rawValue,
+                confidence: suggestion.confidence,
+                createdAt: now,
+                updatedAt: now
+            ))
+            review.entitySuggestions.removeAll { $0.id == suggestionID }
+            postRecordingContextReview = review
+            noteActionStatus = "Saved to the Context Library for future meetings."
+            contextReviewStatus = noteActionStatus
+            return true
+        } catch {
+            noteActionStatus = "Could not save to the Context Library: \(BarnOwlErrorFormatter.message(for: error))"
+            contextReviewStatus = noteActionStatus
+            return false
+        }
+    }
+
+    @discardableResult
+    func ignoreContextEntitySuggestion(_ suggestionID: UUID) async -> Bool {
+        guard var review = postRecordingContextReview,
+              let suggestion = review.entitySuggestions.first(where: { $0.id == suggestionID })
+        else {
+            noteActionStatus = "That context suggestion is no longer available."
+            return false
+        }
+
+        do {
+            let database = try makeDatabase()
+            let now = Date()
+            try await database.upsertContextEntityFeedback(BarnOwlContextEntityFeedbackRecord(
+                meetingID: review.session.id,
+                kind: suggestion.kind,
+                observedValue: suggestion.observedValue,
+                canonicalValue: suggestion.canonicalValue,
+                decision: .ignore,
+                source: suggestion.evidenceSources.joined(separator: ","),
+                metadataJSON: #"{"surface":"context_review"}"#,
+                createdAt: now,
+                updatedAt: now
+            ))
+            review.entitySuggestions.removeAll { $0.id == suggestionID }
+            postRecordingContextReview = review
+            noteActionStatus = "Ignored Context Library suggestion and remembered that choice."
+            contextReviewStatus = noteActionStatus
+            return true
+        } catch {
+            noteActionStatus = "Could not ignore Context Library suggestion: \(BarnOwlErrorFormatter.message(for: error))"
+            contextReviewStatus = noteActionStatus
+            return false
+        }
     }
 
     private func preparePostRecordingContextReview(for session: RecordingSession) {
@@ -1078,12 +1194,12 @@ final class BarnOwlAppModel: ObservableObject {
             ? "Add optional context when ready."
             : transcript
         captureStatus = "Final processing continues. Add context if Barn Owl missed anything."
-        contextReviewStatus = "Context review is ready."
-        noteActionStatus = "Context review is ready."
+        contextReviewStatus = "Transcript suggestions are ready."
+        noteActionStatus = "Transcript suggestions are ready."
         recordActivity(
             category: "context",
-            message: "Post-recording context review is ready.",
-            details: "Final processing is immediate; context review can update the finished notes afterward.",
+            message: "Post-recording transcript suggestions are ready.",
+            details: "Final processing is immediate; transcript suggestions can update the finished notes afterward.",
             sessionID: session.id,
             updatePreview: false
         )
@@ -1123,14 +1239,14 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
-    private func applyPostRecordingContextReview(statusMessage: String = "Updated note context from transcript review.") async {
+    private func applyPostRecordingContextReview(statusMessage: String = "Applied transcript suggestions to this meeting.") async {
         guard !isContextUpdateInFlight else {
             contextReviewStatus = "Reading context..."
             return
         }
         guard let review = postRecordingContextReview else {
-            contextReviewStatus = "No context review is waiting."
-            noteActionStatus = "No context review is waiting."
+            contextReviewStatus = "No transcript suggestions are waiting."
+            noteActionStatus = "No transcript suggestions are waiting."
             return
         }
         isContextUpdateInFlight = true
@@ -1157,8 +1273,8 @@ final class BarnOwlAppModel: ObservableObject {
             contextReviewStatus = statusMessage
             noteActionStatus = statusMessage
         } catch {
-            contextReviewStatus = "Context review update failed."
-            noteActionStatus = "Context review update failed: \(BarnOwlErrorFormatter.message(for: error))"
+            contextReviewStatus = "Transcript suggestion update failed."
+            noteActionStatus = "Transcript suggestion update failed: \(BarnOwlErrorFormatter.message(for: error))"
         }
     }
 
@@ -1232,7 +1348,7 @@ final class BarnOwlAppModel: ObservableObject {
                 meetingID: session.id,
                 actor: .user,
                 changeType: .meetingFactsUpdate,
-                summary: "Updated meeting facts from context review.",
+                summary: "Updated meeting facts from transcript suggestions.",
                 before: BarnOwlMeetingVersionSnapshot(state: beforeState),
                 after: BarnOwlMeetingVersionSnapshot(state: afterState)
             )
@@ -1722,12 +1838,27 @@ final class BarnOwlAppModel: ObservableObject {
         noteActionStatus = contextReviewStatus
     }
 
+    private static func defaultExternalContextState(
+        source: String,
+        confidence: Double?
+    ) -> BarnOwlExternalContextState {
+        let normalizedSource = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedSource == "codex" || normalizedSource == "barnowl" else {
+            return .accepted
+        }
+        guard let confidence else {
+            return .pending
+        }
+        return confidence >= 0.85 ? .accepted : .pending
+    }
+
     @discardableResult
     func addExternalContext(
         _ body: String,
         source: String,
         meetingID requestedMeetingID: UUID? = nil,
-        state: BarnOwlExternalContextState = .accepted,
+        confidence: Double? = nil,
+        state explicitState: BarnOwlExternalContextState? = nil,
         triggerNoteUpdate: Bool = true
     ) async -> BarnOwlExternalContextItemRecord? {
         let cleanedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1737,12 +1868,15 @@ final class BarnOwlAppModel: ObservableObject {
         }
 
         let meetingID = requestedMeetingID ?? activeSession?.id ?? displayedNote?.id
+        let normalizedSource = source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "cli" : source
+        let state = explicitState ?? Self.defaultExternalContextState(source: normalizedSource, confidence: confidence)
         let now = Date()
         let item = BarnOwlExternalContextItemRecord(
             meetingID: meetingID,
-            source: source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "cli" : source,
+            source: normalizedSource,
             body: cleanedBody,
             state: state,
+            confidence: confidence,
             createdAt: now,
             updatedAt: now,
             metadataJSON: #"{"surface":"control-bridge"}"#
@@ -1780,7 +1914,9 @@ final class BarnOwlAppModel: ObservableObject {
             if triggerNoteUpdate, let meetingID, state == .accepted {
                 await applyAcceptedExternalContextToNote(meetingID: meetingID)
             }
-            noteActionStatus = "Attached context from \(item.source)."
+            noteActionStatus = state == .accepted
+                ? "Attached context from \(item.source)."
+                : "Queued context from \(item.source) for review."
             return item
         } catch {
             noteActionStatus = "Could not attach context: \(BarnOwlErrorFormatter.message(for: error))"
@@ -1812,6 +1948,7 @@ final class BarnOwlAppModel: ObservableObject {
                     source: $0.source,
                     body: $0.body,
                     state: $0.state,
+                    confidence: $0.confidence,
                     createdAt: $0.createdAt
                 )
             }
@@ -1948,7 +2085,8 @@ final class BarnOwlAppModel: ObservableObject {
     func setExternalContext(
         _ body: String,
         source: String,
-        meetingID requestedMeetingID: UUID? = nil
+        meetingID requestedMeetingID: UUID? = nil,
+        confidence: Double? = nil
     ) async -> BarnOwlExternalContextItemRecord? {
         let meetingID = requestedMeetingID ?? activeSession?.id ?? displayedNote?.id
         if let meetingID,
@@ -1960,7 +2098,7 @@ final class BarnOwlAppModel: ObservableObject {
                 try? await database.upsertExternalContextItem(item)
             }
         }
-        return await addExternalContext(body, source: source, meetingID: meetingID, state: .accepted)
+        return await addExternalContext(body, source: source, meetingID: meetingID, confidence: confidence)
     }
 
     func deleteContextInboxItem(_ id: UUID) async {
@@ -2549,6 +2687,7 @@ final class BarnOwlAppModel: ObservableObject {
         ok: Bool = true,
         message: String,
         contextItemID: UUID? = nil,
+        contextLibraryEntryID: UUID? = nil,
         current: BarnOwlControlMeeting? = nil,
         meeting: BarnOwlControlMeeting? = nil,
         meetings: [BarnOwlControlMeeting]? = nil,
@@ -2557,11 +2696,13 @@ final class BarnOwlAppModel: ObservableObject {
         notes: String? = nil,
         summary: String? = nil,
         contextItems: [BarnOwlControlContextItem]? = nil,
+        contextLibraryEntries: [BarnOwlControlContextLibraryEntry]? = nil,
         actions: [String]? = nil,
         decisions: [String]? = nil,
         participants: [String]? = nil,
         answer: String? = nil,
         citations: [BarnOwlControlCitation]? = nil,
+        dashboard: BarnOwlControlDashboardSnapshot? = nil,
         activeMeetingID: UUID? = nil,
         liveTranscriptPreview: String? = nil,
         jobState: String? = nil,
@@ -2612,6 +2753,7 @@ final class BarnOwlAppModel: ObservableObject {
             captureStatus: Self.sanitizedControlString(captureStatus),
             liveTranscriptPreview: liveTranscriptPreview,
             contextItemID: contextItemID,
+            contextLibraryEntryID: contextLibraryEntryID,
             current: current,
             meeting: meeting,
             meetings: meetings,
@@ -2620,11 +2762,13 @@ final class BarnOwlAppModel: ObservableObject {
             notes: notes,
             summary: summary,
             contextItems: contextItems,
+            contextLibraryEntries: contextLibraryEntries,
             actions: actions,
             decisions: decisions,
             participants: participants,
             answer: answer,
             citations: citations,
+            dashboard: dashboard,
             jobState: jobState,
             readinessState: readinessState,
             setupReady: !firstRunReadiness.menuBarSetupNeeded,
@@ -2652,6 +2796,7 @@ final class BarnOwlAppModel: ObservableObject {
     nonisolated static let nonReportableFeedbackErrorCodes: Set<String> = [
         "confirmation_required",
         "context_item_not_found",
+        "context_review_not_found",
         "meeting_not_found",
         "missing_context",
         "missing_context_item_id",
@@ -2733,10 +2878,16 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
-    func recordExternalCommand(_ message: String) {
+    func recordExternalCommand(
+        _ message: String,
+        level: DiagnosticsLogLevel = .info,
+        details: String? = nil
+    ) {
         recordActivity(
+            level: level,
             category: "control-bridge",
             message: message,
+            details: details,
             sessionID: activeSession?.id ?? displayedNote?.id,
             updatePreview: false
         )
@@ -2777,7 +2928,7 @@ final class BarnOwlAppModel: ObservableObject {
                         context,
                         source: source,
                         meetingID: contextMeetingID,
-                        state: .accepted,
+                        confidence: command.confidence,
                         triggerNoteUpdate: false
                     )
                 }
@@ -2825,11 +2976,17 @@ final class BarnOwlAppModel: ObservableObject {
                 context,
                 source: command.source ?? "quick-command",
                 meetingID: meetingID,
-                state: .accepted
+                confidence: command.confidence
             )
+            let message: String
+            if let item {
+                message = item.state == .accepted ? "Context attached." : "Context queued for review."
+            } else {
+                message = "Context was not attached."
+            }
             return controlStatusResponse(
                 ok: item != nil,
-                message: item == nil ? "Context was not attached." : "Context attached.",
+                message: message,
                 contextItemID: item?.id,
                 activeMeetingID: meetingID,
                 jobState: await controlJobState(for: meetingID),
@@ -3007,6 +3164,86 @@ final class BarnOwlAppModel: ObservableObject {
         )
     }
 
+    func controlDashboardSnapshotResponse() async -> BarnOwlControlResponse {
+        let statusResponse = await controlCodexStatusResponse()
+        let recentMeetings = quickAccessSessions.map { session in
+            BarnOwlControlMeeting(
+                id: session.id,
+                title: session.title,
+                startedAt: session.startedAt,
+                endedAt: session.endedAt,
+                overview: session.overview,
+                meetingType: nil,
+                status: session.isProcessing ? session.processingSummary : "Processed"
+            )
+        }
+        let dashboard = BarnOwlControlDashboardSnapshot(
+            status: statusResponse.status ?? lifecyclePresentation.title,
+            recordingStatus: status.rawValue,
+            activeMeetingID: statusResponse.activeMeetingID,
+            title: statusResponse.title,
+            meetingType: statusResponse.meetingType,
+            audioSources: BarnOwlControlAudioSources(
+                capturesMicrophone: selectedAudioSources.capturesMicrophone,
+                capturesSystemAudio: selectedAudioSources.capturesSystemAudio
+            ),
+            liveTranscriptPreview: Self.sanitizedControlString(liveTranscriptPreview) ?? "",
+            captureStatus: Self.sanitizedControlString(captureStatus) ?? "",
+            realtimeStatus: Self.sanitizedControlString(realtimeStatus) ?? "",
+            finalTranscriptionStatus: Self.sanitizedControlString(finalTranscriptionStatus) ?? "",
+            recordingElapsedText: recordingElapsedText,
+            readinessState: statusResponse.readinessState,
+            setupReady: statusResponse.setupReady ?? false,
+            apiKeyConfigured: statusResponse.apiKeyConfigured ?? false,
+            apiKeyVerified: statusResponse.apiKeyVerified ?? false,
+            updateStatus: Self.sanitizedControlString(updateStatus) ?? "",
+            updateAvailability: updateAvailability.statusText,
+            isUpdateInFlight: isUpdateInFlight,
+            recentMeetings: recentMeetings,
+            jobState: statusResponse.jobState,
+            contextReviewReady: postRecordingContextReview != nil,
+            lastError: statusResponse.lastError
+        )
+        return controlStatusResponse(
+            message: "Barn Owl dashboard snapshot.",
+            dashboard: dashboard,
+            activeMeetingID: statusResponse.activeMeetingID,
+            liveTranscriptPreview: dashboard.liveTranscriptPreview,
+            jobState: statusResponse.jobState,
+            notesReady: statusResponse.notesReady,
+            transcriptReady: statusResponse.transcriptReady,
+            summaryReady: statusResponse.summaryReady,
+            nextCommand: statusResponse.nextCommand
+        )
+    }
+
+    func controlSetAudioSourcesResponse(
+        capturesMicrophone: Bool?,
+        capturesSystemAudio: Bool?
+    ) async -> BarnOwlControlResponse {
+        guard capturesMicrophone != nil || capturesSystemAudio != nil else {
+            return controlStatusResponse(
+                ok: false,
+                message: "set_audio_sources requires at least one audio source value.",
+                error: "missing_audio_sources"
+            )
+        }
+        guard status != .recording else {
+            return controlStatusResponse(
+                ok: false,
+                message: "Audio sources can be changed before the next recording.",
+                error: "recording_in_progress"
+            )
+        }
+        if let capturesMicrophone {
+            setMicrophoneCaptureEnabled(capturesMicrophone)
+        }
+        if let capturesSystemAudio {
+            setSystemAudioCaptureEnabled(capturesSystemAudio)
+        }
+        return await controlDashboardSnapshotResponse()
+    }
+
     func controlWaitSnapshotResponse(
         meetingID requestedMeetingID: UUID?,
         latest: Bool,
@@ -3165,13 +3402,13 @@ final class BarnOwlAppModel: ObservableObject {
             let items = try await database.externalContextItems(meetingID: meetingID, limit: 100)
                 .map(controlContextItem(from:))
             return controlStatusResponse(
-                message: items.isEmpty ? "No Barn Owl context items found." : "Barn Owl context inbox.",
+                message: items.isEmpty ? "No incoming meeting details found." : "Barn Owl incoming meeting details.",
                 contextItems: items,
                 activeMeetingID: meetingID,
                 jobState: await controlJobState(for: meetingID)
             )
         } catch {
-            return controlStatusResponse(ok: false, message: "Could not load context inbox.", error: BarnOwlErrorFormatter.message(for: error))
+            return controlStatusResponse(ok: false, message: "Could not load incoming meeting details.", error: BarnOwlErrorFormatter.message(for: error))
         }
     }
 
@@ -3231,6 +3468,129 @@ final class BarnOwlAppModel: ObservableObject {
             )
         } catch {
             return controlStatusResponse(ok: false, message: "Could not delete context item.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryListResponse(
+        kind: ContextEntityKind? = nil,
+        query: String? = nil
+    ) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let entries = try await controlContextLibraryEntries(
+                database: database,
+                kind: kind,
+                query: query
+            )
+            return controlStatusResponse(
+                message: entries.isEmpty ? "No Context Library entries found." : "Barn Owl Context Library entries.",
+                contextLibraryEntries: entries
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not load Context Library entries.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryUpsertResponse(
+        entryID: UUID?,
+        kind: ContextEntityKind?,
+        canonicalName: String?,
+        aliases: [String]?
+    ) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let knownEntities = try await database.contextEntities(limit: 500)
+            let existing = entryID.flatMap { requestedID in
+                knownEntities.first(where: { $0.id == requestedID })
+            }
+            if entryID != nil, existing == nil {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+
+            guard let resolvedKind = kind ?? existing?.kind else {
+                return controlStatusResponse(ok: false, message: "context_library_upsert requires contextKind when creating an entry.", error: "missing_context_kind")
+            }
+            guard let resolvedCanonicalName = canonicalName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? existing?.canonicalName,
+                  !resolvedCanonicalName.isEmpty else {
+                return controlStatusResponse(ok: false, message: "context_library_upsert requires canonicalName when creating an entry.", error: "missing_canonical_name")
+            }
+
+            let duplicate = knownEntities.contains { entity in
+                entity.id != existing?.id
+                    && entity.kind == resolvedKind
+                    && entity.canonicalName.localizedCaseInsensitiveCompare(resolvedCanonicalName) == .orderedSame
+            }
+            if duplicate {
+                return controlStatusResponse(ok: false, message: "That Context Library entry already exists for this type.", error: "duplicate_context_library_entry")
+            }
+
+            let currentAliases: [String] = if let existing {
+                try await database.contextEntityAliases(entityID: existing.id).map(\.alias)
+            } else {
+                []
+            }
+            let resolvedAliases = Self.normalizedContextLibraryAliases(
+                aliases ?? currentAliases,
+                canonicalName: resolvedCanonicalName
+            )
+
+            let now = Date()
+            let record = BarnOwlContextEntityRecord(
+                id: existing?.id ?? UUID(),
+                kind: resolvedKind,
+                canonicalName: resolvedCanonicalName,
+                confidence: existing?.confidence ?? 1,
+                isConfirmed: true,
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now
+            )
+            try await database.upsertContextEntity(record)
+            try await database.deleteContextEntityAliases(entityID: record.id)
+            for alias in resolvedAliases {
+                try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+                    entityID: record.id,
+                    alias: alias,
+                    confidence: 1,
+                    isConfirmed: true,
+                    createdAt: now,
+                    updatedAt: now
+                ))
+            }
+
+            let controlEntry = BarnOwlControlContextLibraryEntry(
+                id: record.id,
+                kind: record.kind,
+                canonicalName: record.canonicalName,
+                aliases: resolvedAliases,
+                confidence: record.confidence,
+                isConfirmed: record.isConfirmed,
+                createdAt: record.createdAt,
+                updatedAt: record.updatedAt
+            )
+            return controlStatusResponse(
+                message: existing == nil ? "Added Context Library entry." : "Updated Context Library entry.",
+                contextLibraryEntryID: record.id,
+                contextLibraryEntries: [controlEntry]
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not save Context Library entry.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlContextLibraryDeleteResponse(entryID: UUID) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let exists = try await database.contextEntities(limit: 500).contains(where: { $0.id == entryID })
+            guard exists else {
+                return controlStatusResponse(ok: false, message: "Context Library entry not found.", error: "context_library_entry_not_found")
+            }
+            try await database.deleteContextEntity(id: entryID)
+            return controlStatusResponse(
+                message: "Deleted Context Library entry.",
+                contextLibraryEntryID: entryID
+            )
+        } catch {
+            return controlStatusResponse(ok: false, message: "Could not delete Context Library entry.", error: BarnOwlErrorFormatter.message(for: error))
         }
     }
 
@@ -3563,9 +3923,10 @@ final class BarnOwlAppModel: ObservableObject {
             result.applyReadinessMarkers()
             publishRecordingReadinessSummary()
             captureStatus = result.summary
+            let readinessLines = BarnOwlSettingsReadinessChecks.lines() + result.currentTestDiagnosticLines
             return controlStatusResponse(
                 message: result.summary,
-                summary: BarnOwlSettingsReadinessChecks.lines().joined(separator: "\n"),
+                summary: readinessLines.joined(separator: "\n"),
                 nextCommand: result.capturedAllRequiredTracks ? "barnowl start" : "Play audio from another app, then rerun `barnowl permissions test`."
             )
         } catch {
@@ -3667,9 +4028,55 @@ final class BarnOwlAppModel: ObservableObject {
             source: item.source,
             body: item.body,
             state: item.state.rawValue,
+            confidence: item.confidence,
             createdAt: item.createdAt,
             usedInNoteGeneration: item.usedInNoteGeneration
         )
+    }
+
+    private func controlContextLibraryEntries(
+        database: BarnOwlDatabase,
+        kind: ContextEntityKind?,
+        query: String?
+    ) async throws -> [BarnOwlControlContextLibraryEntry] {
+        let normalizedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var entries: [BarnOwlControlContextLibraryEntry] = []
+        for entity in try await database.contextEntities(kind: kind, limit: 500) {
+            let aliases = try await database.contextEntityAliases(entityID: entity.id).map(\.alias)
+            let entry = BarnOwlControlContextLibraryEntry(
+                id: entity.id,
+                kind: entity.kind,
+                canonicalName: entity.canonicalName,
+                aliases: aliases,
+                confidence: entity.confidence,
+                isConfirmed: entity.isConfirmed,
+                createdAt: entity.createdAt,
+                updatedAt: entity.updatedAt
+            )
+            guard let normalizedQuery, !normalizedQuery.isEmpty else {
+                entries.append(entry)
+                continue
+            }
+            let searchableText = ([entry.canonicalName] + entry.aliases).joined(separator: " ")
+            if searchableText.localizedCaseInsensitiveContains(normalizedQuery) {
+                entries.append(entry)
+            }
+        }
+        return entries
+    }
+
+    private static func normalizedContextLibraryAliases(
+        _ aliases: [String],
+        canonicalName: String
+    ) -> [String] {
+        var seen = Set<String>()
+        return aliases
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { alias in
+                guard !alias.isEmpty else { return false }
+                guard alias.localizedCaseInsensitiveCompare(canonicalName) != .orderedSame else { return false }
+                return seen.insert(alias.lowercased()).inserted
+            }
     }
 
     private func controlContextItems(from state: BarnOwlMeetingState) -> [BarnOwlControlContextItem] {
@@ -3764,6 +4171,7 @@ final class BarnOwlAppModel: ObservableObject {
                 source: $0.source,
                 body: $0.body,
                 state: $0.state.rawValue,
+                confidence: $0.confidence,
                 createdAt: $0.createdAt,
                 usedInNoteGeneration: $0.usedInNoteGeneration
             )
@@ -3794,7 +4202,7 @@ final class BarnOwlAppModel: ObservableObject {
             }
         case .rejected(let failure):
             lastError = failure.message
-            status = .failed
+            status = stateMachine.status
         }
     }
 
@@ -4382,23 +4790,114 @@ final class BarnOwlAppModel: ObservableObject {
             let transcript = artifact.transcriptSegments
                 .map { "\($0.speakerLabel): \($0.text)" }
                 .joined(separator: "\n")
+            let reviewContextLines = await contextLinesForReview(meetingID: sessionID)
             var review = Self.suggestPostRecordingContext(
                 session: artifact.session,
-                transcriptPreview: transcript
+                transcriptPreview: transcript,
+                contextLines: reviewContextLines
+            )
+            review.entitySuggestions = await enrichedEntitySuggestions(
+                transcript: transcript,
+                existing: review.entitySuggestions
             )
             review.facts.title = artifact.session.title
             postRecordingContextReview = review
-            contextDraft = review.contextLines.joined(separator: "\n")
-            noteActionStatus = "Add optional context to improve the generated note."
+            let autoAcceptedSuggestionIDs = review.entitySuggestions
+                .filter { $0.confidence >= 0.85 }
+                .map(\.id)
+            for suggestionID in autoAcceptedSuggestionIDs {
+                _ = await acceptContextEntitySuggestion(suggestionID)
+            }
+
+            let currentReview = postRecordingContextReview ?? review
+            contextDraft = currentReview.contextLines.joined(separator: "\n")
+            noteActionStatus = autoAcceptedSuggestionIDs.isEmpty
+                ? "Add optional context to improve the generated note."
+                : "Saved \(autoAcceptedSuggestionIDs.count) high-confidence Context Library suggestion\(autoAcceptedSuggestionIDs.count == 1 ? "" : "s"). Review anything that remains."
+            contextReviewStatus = noteActionStatus
         } catch {
             recordActivity(
                 level: .warning,
                 category: "context",
-                message: "Could not prepare post-recording context review.",
+                message: "Could not prepare post-recording transcript suggestions.",
                 details: BarnOwlErrorFormatter.message(for: error),
                 sessionID: sessionID,
                 updatePreview: false
             )
+        }
+    }
+
+    private func contextLinesForReview(meetingID: UUID) async -> [String] {
+        do {
+            let database = try makeDatabase()
+            var lines: [String] = []
+
+            if let calendarRecord = try await database.meetingCalendarContext(meetingID: meetingID),
+               let persistedCalendarContext = Self.calendarContext(from: calendarRecord) {
+                lines += persistedCalendarContext.contextLines
+            }
+
+            let acceptedContextItems = try await database.externalContextItems(
+                meetingID: meetingID,
+                state: .accepted,
+                limit: 50
+            )
+            lines += acceptedContextItems.map { "External context (\($0.source)): \($0.body)" }
+            return lines
+        } catch {
+            return []
+        }
+    }
+
+    private func enrichedEntitySuggestions(
+        transcript: String,
+        existing: [ContextEntitySuggestion]
+    ) async -> [ContextEntitySuggestion] {
+        do {
+            let database = try makeDatabase()
+            let entities = try await database.contextEntities(limit: 100)
+            let ignoredFeedback = try await database.contextEntityFeedback(decision: .ignore, limit: 500)
+            var suggestions = existing.filter { suggestion in
+                !ignoredFeedback.contains {
+                    $0.kind == suggestion.kind
+                        && $0.observedValue.localizedCaseInsensitiveCompare(suggestion.observedValue) == .orderedSame
+                        && $0.canonicalValue.localizedCaseInsensitiveCompare(suggestion.canonicalValue) == .orderedSame
+                }
+            }
+            let lowercasedTranscript = transcript.lowercased()
+
+            for entity in entities {
+                let aliases = try await database.contextEntityAliases(entityID: entity.id)
+                for alias in aliases where alias.isConfirmed {
+                    guard lowercasedTranscript.contains(alias.alias.lowercased()),
+                          lowercasedTranscript.contains(entity.canonicalName.lowercased()) == false
+                    else {
+                        continue
+                    }
+                    let duplicate = suggestions.contains {
+                        $0.observedValue.localizedCaseInsensitiveCompare(alias.alias) == .orderedSame
+                            && $0.canonicalValue.localizedCaseInsensitiveCompare(entity.canonicalName) == .orderedSame
+                    }
+                    let suppressed = ignoredFeedback.contains {
+                        $0.kind == entity.kind
+                            && $0.observedValue.localizedCaseInsensitiveCompare(alias.alias) == .orderedSame
+                            && $0.canonicalValue.localizedCaseInsensitiveCompare(entity.canonicalName) == .orderedSame
+                    }
+                    guard !duplicate, !suppressed else { continue }
+                    suggestions.append(ContextEntitySuggestion(
+                        kind: entity.kind,
+                        observedValue: alias.alias,
+                        canonicalValue: entity.canonicalName,
+                        rationale: "Barn Owl has previously confirmed this alias locally.",
+                        confidence: max(entity.confidence, alias.confidence),
+                        evidenceSources: ["learned_context"]
+                    ))
+                }
+            }
+
+            return Array(suggestions.prefix(8))
+        } catch {
+            return existing
         }
     }
 
@@ -5327,19 +5826,26 @@ final class BarnOwlAppModel: ObservableObject {
 
     static func suggestPostRecordingContext(
         session: RecordingSession,
-        transcriptPreview: String
+        transcriptPreview: String,
+        contextLines: [String] = []
     ) -> BarnOwlPostRecordingContextReview {
         let facts = MeetingFactsExtractor().extract(
             transcript: transcriptPreview,
             currentTitle: session.title
         )
         let prompts = ContextPromptGenerator().prompts(for: facts, transcript: transcriptPreview)
+        let entitySuggestions = ContextEntitySuggestionGenerator().suggestions(
+            facts: facts,
+            transcript: transcriptPreview,
+            contextLines: contextLines
+        )
         return BarnOwlPostRecordingContextReview(
             session: session,
             transcriptPreview: transcriptPreview,
             facts: facts,
             freeformContextDraft: "",
-            prompts: prompts
+            prompts: prompts,
+            entitySuggestions: entitySuggestions
         )
     }
 

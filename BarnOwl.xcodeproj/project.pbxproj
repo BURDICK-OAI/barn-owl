@@ -16,6 +16,7 @@
 		15889DFA0882E4F4B79603CB /* RealtimeAudioMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE0C273F67F2CC2D8996040 /* RealtimeAudioMixer.swift */; };
 		165497AF4C2BB993A22031DA /* BarnOwlOpenAI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A49BD99FF6299A638F225620 /* BarnOwlOpenAI.framework */; };
 		166E0CC199BB80E43EC2454F /* BarnOwlCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 85484A825A18943E61DD5717 /* BarnOwlCore.framework */; };
+		16CB0644EE2708BF2F98F9B0 /* BarnOwlChangelog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A657C24626C50AC30B4D31C /* BarnOwlChangelog.swift */; };
 		1963FAF631060CE558FD5034 /* BarnOwlCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 85484A825A18943E61DD5717 /* BarnOwlCore.framework */; };
 		1A022A0C16EBE2BB644DA09D /* MicrophoneCaptureSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = D44D0BAA889DE2FFBB342E2B /* MicrophoneCaptureSource.swift */; };
 		1A0305ACF1CF04028F814A9B /* BarnOwlAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0AB09E6402DC4365D969E6 /* BarnOwlAppDelegate.swift */; };
@@ -164,6 +165,7 @@
 		FBF0B1E413A8B7EBDB49F695 /* OpenAIConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A92C0CF9D5B2C889BFD0472 /* OpenAIConfigurationTests.swift */; };
 		FD6EA8EAF86ED31CF5FAD074 /* RealtimeTranscriptionComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0779E02595BC7C3533A412 /* RealtimeTranscriptionComposition.swift */; };
 		FD7579FD8A1EE2D3187B7A40 /* LocalLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461D9543A9D336CFDB350990 /* LocalLibraryStore.swift */; };
+		FE747E1E8DCC12E1A27A1D4E /* BarnOwlChangelog.json in Resources */ = {isa = PBXBuildFile; fileRef = 2D69689BC108413FAC139B50 /* BarnOwlChangelog.json */; };
 		FF8B1E3CEDFE11B054EF67B2 /* BarnOwlNotes.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 70F46D9891E8FC7ECDF6C356 /* BarnOwlNotes.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -572,6 +574,7 @@
 		27EF37D025E7A5ABECADED5B /* DiagnosticsLogStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsLogStoreTests.swift; sourceTree = "<group>"; };
 		28EB7BC09F4B99E450896F77 /* RecorderWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderWindow.swift; sourceTree = "<group>"; };
 		2AA77D1A372980CF3E7637A1 /* TempAudioChunkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempAudioChunkStore.swift; sourceTree = "<group>"; };
+		2D69689BC108413FAC139B50 /* BarnOwlChangelog.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = BarnOwlChangelog.json; sourceTree = "<group>"; };
 		2D709F4D132AB0EB4A0DE057 /* SystemAudioCaptureSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioCaptureSourceTests.swift; sourceTree = "<group>"; };
 		2DBE49865D3818B92BE6F3D0 /* OpenAIModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIModelCatalog.swift; sourceTree = "<group>"; };
 		305B334C4DD3B391A157087C /* BarnOwlDeveloperDiagnosticsExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlDeveloperDiagnosticsExporter.swift; sourceTree = "<group>"; };
@@ -623,6 +626,7 @@
 		869ECEE854DD7EED8D8B0469 /* BarnOwlContextTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BarnOwlContextTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		87B532BA48CAE47332550D1B /* ScreenCaptureKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 		8921318C63F3CB224A43BC28 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		8A657C24626C50AC30B4D31C /* BarnOwlChangelog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlChangelog.swift; sourceTree = "<group>"; };
 		8C0D4A23D5E2DE02643E10B9 /* EventKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = EventKit.framework; path = System/Library/Frameworks/EventKit.framework; sourceTree = SDKROOT; };
 		8D2E19E33D9D141C7C222BF1 /* OpenAITranscriptionAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAITranscriptionAdapter.swift; sourceTree = "<group>"; };
 		91684DFAEACEE8E7577BEE51 /* BarnOwlContext.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = BarnOwlContext.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1094,6 +1098,8 @@
 				7C8C880CB040C63DD2CFF37E /* BarnOwlApp.swift */,
 				7E0AB09E6402DC4365D969E6 /* BarnOwlAppDelegate.swift */,
 				D8FA677064F6C8CBA0CF23CF /* BarnOwlAppModel.swift */,
+				2D69689BC108413FAC139B50 /* BarnOwlChangelog.json */,
+				8A657C24626C50AC30B4D31C /* BarnOwlChangelog.swift */,
 				985F2B3ECC479ACFFE913390 /* BarnOwlCodexIntegration.swift */,
 				348FE7B9601D5D9B537E02B7 /* BarnOwlControlBridge.swift */,
 				305B334C4DD3B391A157087C /* BarnOwlDeveloperDiagnosticsExporter.swift */,
@@ -1519,6 +1525,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B3897EAA749951AB599F228E /* Assets.xcassets in Resources */,
+				FE747E1E8DCC12E1A27A1D4E /* BarnOwlChangelog.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1690,6 +1697,7 @@
 				1B05D55C89BACB1482BDE520 /* BarnOwlApp.swift in Sources */,
 				1A0305ACF1CF04028F814A9B /* BarnOwlAppDelegate.swift in Sources */,
 				95D1F8E993198FDE22FC679F /* BarnOwlAppModel.swift in Sources */,
+				16CB0644EE2708BF2F98F9B0 /* BarnOwlChangelog.swift in Sources */,
 				3F20D4E9F646F92B0A69DF8C /* BarnOwlCodexIntegration.swift in Sources */,
 				0F90F8B95C9233686F80872B /* BarnOwlControlBridge.swift in Sources */,
 				5967D3B0DB3779FA5769393D /* BarnOwlDeveloperDiagnosticsExporter.swift in Sources */,
@@ -1921,7 +1929,8 @@
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
-				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
 				EXECUTABLE_NAME = BarnOwlApp;
 				INFOPLIST_FILE = Apps/BarnOwlMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1942,7 +1951,8 @@
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
-				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
 				EXECUTABLE_NAME = BarnOwlApp;
 				INFOPLIST_FILE = Apps/BarnOwlMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class BarnOwlAppDelegate: NSObject, NSApplicationDelegate {
-    let model = BarnOwlAppModel()
+    private var model: BarnOwlAppModel?
 
     private var statusBarController: BarnOwlStatusBarController?
     private var recorderWindow: NSWindow?
@@ -11,14 +11,20 @@ final class BarnOwlAppDelegate: NSObject, NSApplicationDelegate {
     private var controlBridge: BarnOwlControlBridge?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let environment = ProcessInfo.processInfo.environment
+        let arguments = ProcessInfo.processInfo.arguments
+
+        NSApp.setActivationPolicy(.accessory)
+
         guard Self.shouldInstallAppRuntime(
-            environment: ProcessInfo.processInfo.environment,
-            arguments: ProcessInfo.processInfo.arguments
+            environment: environment,
+            arguments: arguments
         ) else {
             return
         }
 
-        NSApp.setActivationPolicy(.accessory)
+        let model = BarnOwlAppModel()
+        self.model = model
 
         statusBarController = BarnOwlStatusBarController(
             model: model,
@@ -29,7 +35,8 @@ final class BarnOwlAppDelegate: NSObject, NSApplicationDelegate {
 
         let bridge = BarnOwlControlBridge(
             model: model,
-            openCurrentMeeting: { [weak self] in self?.showRecorderWindow() }
+            openCurrentMeeting: { [weak self] in self?.showRecorderWindow() },
+            openSettings: { [weak self] in self?.showSettingsWindow() }
         )
         bridge.start()
         controlBridge = bridge
@@ -39,10 +46,23 @@ final class BarnOwlAppDelegate: NSObject, NSApplicationDelegate {
         environment: [String: String],
         arguments: [String]
     ) -> Bool {
+        !isRunningUnderXCTest(environment: environment, arguments: arguments)
+    }
+
+    nonisolated static func isRunningUnderXCTest(
+        environment: [String: String],
+        arguments: [String]
+    ) -> Bool {
         if environment["XCTestConfigurationFilePath"] != nil {
-            return false
+            return true
         }
-        return !arguments.contains { argument in
+        if environment["XCInjectBundleInto"] != nil {
+            return true
+        }
+        if environment["DYLD_INSERT_LIBRARIES"]?.contains("libXCTestBundleInject.dylib") == true {
+            return true
+        }
+        return arguments.contains { argument in
             argument.hasSuffix(".xctest") || argument.contains(".xctest/")
         }
     }
@@ -52,6 +72,7 @@ final class BarnOwlAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showRecorderWindow() {
+        guard let model else { return }
         if recorderWindow == nil {
             let hostingController = NSHostingController(rootView: RecorderWindow(model: model))
             let window = NSWindow(contentViewController: hostingController)

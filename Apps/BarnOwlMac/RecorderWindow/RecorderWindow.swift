@@ -34,10 +34,37 @@ private enum RecorderWorkspaceTab: String, CaseIterable {
 
 private enum RecorderUtilityPanel: String, Identifiable {
     case updateNotes
-    case addContext
-    case contextInbox
+    case addDetails
+    case review
 
     var id: String { rawValue }
+}
+
+struct RecorderContextPresentation {
+    static let addDetailsToolbarTitle = "Add Details"
+    static let reviewToolbarTitle = "Review Auto Context"
+    static let addDetailsPanelDetail = "Add facts Barn Owl should use for this meeting. Nothing here enters the Context Library unless you approve that separately in Review Auto Context."
+    static let reviewPanelDetail = "Review proposed updates before they change this meeting or enter the Context Library for future meetings."
+    static let addDetailsSectionTitle = "This meeting"
+    static let transcriptReviewSectionTitle = "From the transcript"
+    static let importedReviewSectionTitle = "Imported suggestions"
+    static let reusableKnowledgeTitle = "Corrections for future meetings"
+    static let applyTranscriptSuggestionsTitle = "Apply to this meeting"
+    static let keepCurrentNoteTitle = "Keep current note"
+    static let meetingUpdatesSummaryTitle = "Meeting updates"
+    static let reusableCorrectionsSummaryTitle = "Reusable corrections"
+    static let importedSuggestionsSummaryTitle = "Imported suggestions"
+}
+
+struct RecorderNoteSurfacePresentation: Equatable {
+    let title: String
+    let systemImage: String
+
+    static func make(hasDisplayedNote: Bool) -> RecorderNoteSurfacePresentation {
+        hasDisplayedNote
+            ? RecorderNoteSurfacePresentation(title: "Markdown Note", systemImage: "doc.plaintext")
+            : RecorderNoteSurfacePresentation(title: "Realtime Preview", systemImage: "waveform")
+    }
 }
 
 private enum RecorderWindowLayout: Equatable {
@@ -656,15 +683,23 @@ struct RecorderWindow: View {
     private func noteWorkspace(layout: RecorderWindowLayout) -> some View {
         Group {
             if layout == .compact {
-                noteWorkspaceContent(layout: layout)
+                noteWorkspaceContent(layout: layout, usesFlexibleEditor: false)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            } else if shouldUseScrollableWorkspace {
+                ScrollView {
+                    noteWorkspaceContent(layout: layout, usesFlexibleEditor: false)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
             } else {
-                noteWorkspaceContent(layout: layout)
+                noteWorkspaceContent(layout: layout, usesFlexibleEditor: true)
             }
         }
     }
 
-    private func noteWorkspaceContent(layout: RecorderWindowLayout) -> some View {
+    private func noteWorkspaceContent(
+        layout: RecorderWindowLayout,
+        usesFlexibleEditor: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             progressSection
 
@@ -674,7 +709,7 @@ struct RecorderWindow: View {
 
             utilityPanel
 
-            if shouldShowPostRecordingContextReview {
+            if shouldShowPostRecordingContextReview, activeUtilityPanel != .review {
                 postRecordingContextReviewPanel
             }
 
@@ -684,11 +719,13 @@ struct RecorderWindow: View {
                     selectedTabContent(minHeight: 220, maxHeight: 360)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-            } else {
+            } else if usesFlexibleEditor {
                 mainEditorColumn
                     .frame(minWidth: 300, maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                boundedMainEditorColumn(layout: layout)
             }
 
             if let lastError = model.lastError {
@@ -701,6 +738,29 @@ struct RecorderWindow: View {
 
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func boundedMainEditorColumn(layout: RecorderWindowLayout) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            noteTabs
+            selectedTabContent(
+                minHeight: 260,
+                maxHeight: boundedWorkspaceContentHeight(for: layout)
+            )
+        }
+        .padding(.trailing, 18)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func boundedWorkspaceContentHeight(for layout: RecorderWindowLayout) -> CGFloat {
+        switch layout {
+        case .regular:
+            560
+        case .medium:
+            480
+        case .compact:
+            360
+        }
     }
 
     private var mainEditorColumn: some View {
@@ -1178,7 +1238,7 @@ struct RecorderWindow: View {
     private var postRecordingContextReviewPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                Label("Context Review", systemImage: "text.badge.checkmark")
+                Label("Review transcript suggestions", systemImage: "text.badge.checkmark")
                     .font(.headline)
                 Spacer()
                 Text("Final notes already generated")
@@ -1191,10 +1251,14 @@ struct RecorderWindow: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Add messy context, corrections, acronyms, people, customer details, or goals. Barn Owl will keep structured meeting facts behind the scenes.")
+            Text("These are meeting details Barn Owl inferred from the transcript. Review them before applying them to this meeting. Reusable corrections are shown separately below.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let review = model.postRecordingContextReview {
+                contextSavePreview(review)
+            }
 
             if let prompts = model.postRecordingContextReview?.prompts, !prompts.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -1210,14 +1274,59 @@ struct RecorderWindow: View {
                 .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
             }
 
+            if let entitySuggestions = model.postRecordingContextReview?.entitySuggestions,
+               !entitySuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(RecorderContextPresentation.reusableKnowledgeTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(entitySuggestions) { suggestion in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(suggestion.kind.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(BarnOwlDesign.moss)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 4)
+                                    .background(BarnOwlDesign.moss.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+
+                                Text("\(suggestion.observedValue) -> \(suggestion.canonicalValue)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Text(suggestion.rationale)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 8) {
+                                    suggestionActionButtons(for: suggestion.id)
+                                }
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    suggestionActionButtons(for: suggestion.id)
+                                }
+                            }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+
             CommandTextEditor(
                 text: reviewFreeformContextBinding,
-                placeholder: "Add anything Barn Owl should know: people, project, customer, goals, corrections, acronyms, prior context...",
+                placeholder: "Optional details to include before applying these suggestions to this meeting...",
                 minHeight: 88,
                 maxHeight: 140,
                 isEnabled: !model.isContextUpdateInFlight,
                 onSubmit: {
-                    Task { await model.addPostRecordingContext() }
+                    Task { await model.approvePostRecordingContextReview() }
                 }
             )
             .frame(minHeight: 88, maxHeight: 140)
@@ -1238,25 +1347,13 @@ struct RecorderWindow: View {
 
             ViewThatFits(in: .horizontal) {
                 HStack {
-                    Button(model.isContextUpdateInFlight ? "Working..." : "Looks right") {
+                    Button(model.isContextUpdateInFlight ? "Applying..." : RecorderContextPresentation.applyTranscriptSuggestionsTitle) {
                         Task { await model.approvePostRecordingContextReview() }
                     }
                     .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
                     .disabled(model.isContextUpdateInFlight)
 
-                    Button(model.isContextUpdateInFlight ? "Reading..." : "Add context") {
-                        Task { await model.addPostRecordingContext() }
-                    }
-                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
-                    .disabled(model.isContextUpdateInFlight)
-
-                    Button(model.isContextUpdateInFlight ? "Regenerating..." : "Regenerate notes") {
-                        Task { await model.regenerateNotesFromPostRecordingContext() }
-                    }
-                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
-                    .disabled(model.isContextUpdateInFlight)
-
-                    Button("Not now") {
+                    Button(RecorderContextPresentation.keepCurrentNoteTitle) {
                         Task { await model.processPostRecordingContextWithoutEdits() }
                     }
                     .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
@@ -1264,25 +1361,13 @@ struct RecorderWindow: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Button(model.isContextUpdateInFlight ? "Working..." : "Looks right") {
+                    Button(model.isContextUpdateInFlight ? "Applying..." : RecorderContextPresentation.applyTranscriptSuggestionsTitle) {
                         Task { await model.approvePostRecordingContextReview() }
                     }
                     .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
                     .disabled(model.isContextUpdateInFlight)
 
-                    Button(model.isContextUpdateInFlight ? "Reading..." : "Add context") {
-                        Task { await model.addPostRecordingContext() }
-                    }
-                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
-                    .disabled(model.isContextUpdateInFlight)
-
-                    Button(model.isContextUpdateInFlight ? "Regenerating..." : "Regenerate notes") {
-                        Task { await model.regenerateNotesFromPostRecordingContext() }
-                    }
-                    .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary))
-                    .disabled(model.isContextUpdateInFlight)
-
-                    Button("Not now") {
+                    Button(RecorderContextPresentation.keepCurrentNoteTitle) {
                         Task { await model.processPostRecordingContextWithoutEdits() }
                     }
                     .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
@@ -1410,16 +1495,16 @@ struct RecorderWindow: View {
                 perform: { toggleUtilityPanel(.updateNotes) }
             ),
             NoteToolbarAction(
-                title: "Add Recording Context",
+                title: RecorderContextPresentation.addDetailsToolbarTitle,
                 isDisabled: model.displayedNote == nil && model.activeSession == nil,
                 keyboardShortcut: nil,
-                perform: { toggleUtilityPanel(.addContext) }
+                perform: { toggleUtilityPanel(.addDetails) }
             ),
             NoteToolbarAction(
-                title: "Context Inbox",
-                isDisabled: model.displayedNote == nil && model.activeSession == nil && model.contextInboxItems.isEmpty,
+                title: RecorderContextPresentation.reviewToolbarTitle,
+                isDisabled: model.displayedNote == nil && model.activeSession == nil,
                 keyboardShortcut: nil,
-                perform: { toggleUtilityPanel(.contextInbox) }
+                perform: { toggleUtilityPanel(.review) }
             ),
             NoteToolbarAction(
                 title: "Open Markdown in Finder",
@@ -1447,25 +1532,215 @@ struct RecorderWindow: View {
         switch activeUtilityPanel {
         case .updateNotes:
             promptBar
-        case .addContext:
-            addContextPanel
-        case .contextInbox:
-            contextInboxPanel
+        case .addDetails:
+            addDetailsPanel
+        case .review:
+            reviewPanel
         case nil:
             EmptyView()
         }
     }
 
-    private var addContextPanel: some View {
+    private var addDetailsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(RecorderContextPresentation.addDetailsToolbarTitle, systemImage: "plus.bubble")
+                        .font(.headline)
+                    Text(RecorderContextPresentation.addDetailsPanelDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Close") {
+                    toggleUtilityPanel(.addDetails)
+                }
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
+            }
+
+            contextSection(
+                title: RecorderContextPresentation.addDetailsSectionTitle,
+                systemImage: "plus.bubble",
+                detail: "Type names, customer references, acronyms, or corrections that belong in the selected meeting."
+            ) {
+                meetingDetailsContent
+            }
+        }
+        .padding(12)
+        .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
+    }
+
+    private var reviewPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(RecorderContextPresentation.reviewToolbarTitle, systemImage: "text.badge.checkmark")
+                        .font(.headline)
+                    Text(RecorderContextPresentation.reviewPanelDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Close") {
+                    toggleUtilityPanel(.review)
+                }
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet))
+            }
+
+            reviewPanelSummary
+
+            contextSection(
+                title: RecorderContextPresentation.transcriptReviewSectionTitle,
+                systemImage: "text.badge.checkmark",
+                detail: "Apply transcript-derived details to this meeting. Any reusable corrections are called out separately before they are remembered."
+            ) {
+                transcriptSuggestionsContent
+            }
+
+            contextSection(
+                title: RecorderContextPresentation.importedReviewSectionTitle,
+                systemImage: "tray.full",
+                detail: "Review details sent from the CLI or Codex before they affect the selected meeting."
+            ) {
+                contextInboxContent
+            }
+        }
+        .padding(12)
+        .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
+    }
+
+    private var reviewPanelSummary: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                reviewSummaryTile(
+                    title: RecorderContextPresentation.meetingUpdatesSummaryTitle,
+                    value: hasPendingReviewForDisplayedMeeting ? "Ready" : "None",
+                    systemImage: "doc.text.magnifyingglass",
+                    tint: hasPendingReviewForDisplayedMeeting ? BarnOwlDesign.amber : .secondary
+                )
+                reviewSummaryTile(
+                    title: RecorderContextPresentation.reusableCorrectionsSummaryTitle,
+                    value: "\(pendingReusableCorrectionCount)",
+                    systemImage: "text.badge.checkmark",
+                    tint: pendingReusableCorrectionCount > 0 ? BarnOwlDesign.moss : .secondary
+                )
+                reviewSummaryTile(
+                    title: RecorderContextPresentation.importedSuggestionsSummaryTitle,
+                    value: "\(pendingImportedSuggestionCount)",
+                    systemImage: "tray.full",
+                    tint: pendingImportedSuggestionCount > 0 ? BarnOwlDesign.amber : .secondary
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                reviewSummaryTile(
+                    title: RecorderContextPresentation.meetingUpdatesSummaryTitle,
+                    value: hasPendingReviewForDisplayedMeeting ? "Ready" : "None",
+                    systemImage: "doc.text.magnifyingglass",
+                    tint: hasPendingReviewForDisplayedMeeting ? BarnOwlDesign.amber : .secondary
+                )
+                reviewSummaryTile(
+                    title: RecorderContextPresentation.reusableCorrectionsSummaryTitle,
+                    value: "\(pendingReusableCorrectionCount)",
+                    systemImage: "text.badge.checkmark",
+                    tint: pendingReusableCorrectionCount > 0 ? BarnOwlDesign.moss : .secondary
+                )
+                reviewSummaryTile(
+                    title: RecorderContextPresentation.importedSuggestionsSummaryTitle,
+                    value: "\(pendingImportedSuggestionCount)",
+                    systemImage: "tray.full",
+                    tint: pendingImportedSuggestionCount > 0 ? BarnOwlDesign.amber : .secondary
+                )
+            }
+        }
+    }
+
+    private func reviewSummaryTile(
+        title: String,
+        value: String,
+        systemImage: String,
+        tint: Color
+    ) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 24, height: 24)
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
+    }
+
+    private var pendingReusableCorrectionCount: Int {
+        model.postRecordingContextReview?.entitySuggestions.count ?? 0
+    }
+
+    private var pendingImportedSuggestionCount: Int {
+        model.contextInboxItems.filter { $0.state == .pending }.count
+    }
+
+    private func contextSection<Content: View>(
+        title: String,
+        systemImage: String,
+        detail: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Add Recording Context", systemImage: "plus.bubble")
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Label(title, systemImage: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            content()
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(BarnOwlDesign.warmStroke)
+        }
+    }
+
+    private var meetingDetailsContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
             commandContextEditor(
                 text: $model.contextDraft,
-                placeholder: "Add names, project context, acronyms, meeting type, corrections, or customer details.",
+                placeholder: "Add names, project details, acronyms, meeting type, corrections, or customer specifics.",
                 minHeight: 80,
                 maxHeight: 130
             )
+            attachedContextDraftPreview(model.contextDraft)
             HStack(spacing: 8) {
                 Button {
                     Task { await model.appendContextToDisplayedNote() }
@@ -1475,12 +1750,12 @@ struct RecorderWindow: View {
                             ProgressView()
                                 .controlSize(.small)
                         }
-                        Text(model.isContextUpdateInFlight ? "Adding..." : "Add Context")
+                        Text(model.isContextUpdateInFlight ? "Adding..." : "Save meeting details")
                     }
                 }
                 .disabled(contextDisabledReason != nil)
                 .buttonStyle(BarnOwlActionButtonStyle(prominence: .primary))
-                .help(contextDisabledReason ?? "Attach context")
+                .help(contextDisabledReason ?? "Save meeting details")
 
                 if !model.contextReviewStatus.isEmpty {
                     inlineActionStatus(
@@ -1495,23 +1770,117 @@ struct RecorderWindow: View {
                 }
             }
         }
-        .padding(12)
-        .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private var transcriptSuggestionsContent: some View {
+        if hasPendingReviewForDisplayedMeeting {
+            postRecordingContextReviewPanel
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("No transcript suggestions are waiting for this meeting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("Check transcript suggestions") {
+                    Task { await model.prepareContextReviewForDisplayedMeeting() }
+                }
+                .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary, size: .small))
+                .disabled(model.displayedNote == nil || model.isContextUpdateInFlight)
+
+                if !model.contextReviewStatus.isEmpty {
+                    inlineActionStatus(
+                        text: model.contextReviewStatus,
+                        isRunning: model.isContextUpdateInFlight,
+                        isError: model.contextReviewStatus.localizedCaseInsensitiveContains("failed")
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionActionButtons(for suggestionID: UUID) -> some View {
+        Button("Save correction for future meetings") {
+            Task { await model.acceptContextEntitySuggestion(suggestionID) }
+        }
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .secondary, size: .small))
+        .disabled(model.isContextUpdateInFlight)
+
+        Button("Ignore suggestion") {
+            Task { await model.ignoreContextEntitySuggestion(suggestionID) }
+        }
+        .buttonStyle(BarnOwlActionButtonStyle(prominence: .quiet, size: .small))
+        .disabled(model.isContextUpdateInFlight)
+    }
+
+    private func contextSavePreview(_ review: BarnOwlPostRecordingContextReview) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What Barn Owl will save for this meeting")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if review.contextLines.isEmpty {
+                Text("No meeting-context lines are ready yet. Add detail below or keep the current notes unchanged.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(Array(review.contextLines.enumerated()), id: \.offset) { _, line in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(BarnOwlDesign.moss)
+                            .padding(.top, 2)
+
+                        Text(line)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                            .lineLimit(4)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(BarnOwlDesign.warmStroke)
         }
     }
 
-    private var contextInboxPanel: some View {
-        inspectorCard(title: "Context Inbox", systemImage: "tray.full") {
-            contextInboxContent
+    private func attachedContextDraftPreview(_ draft: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("What Barn Owl will add to this meeting")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(
+                draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Nothing queued yet. Type meeting details above to preview the exact text Barn Owl will add here."
+                    : draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+                .font(.caption)
+                .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
+                .lineLimit(4)
+                .textSelection(.enabled)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(BarnOwlDesign.warmStroke)
         }
     }
 
     private func noteEditor(minHeight: CGFloat, maxHeight: CGFloat?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(model.displayedNote == nil ? "Realtime Preview" : "Markdown Note", systemImage: model.displayedNote == nil ? "waveform" : "doc.plaintext")
+        let noteSurface = RecorderNoteSurfacePresentation.make(hasDisplayedNote: model.displayedNote != nil)
+        return VStack(alignment: .leading, spacing: 8) {
+            Label(noteSurface.title, systemImage: noteSurface.systemImage)
                 .font(.headline)
 
             if model.displayedNote == nil {
@@ -1819,74 +2188,6 @@ struct RecorderWindow: View {
         .help(chatDisabledReason ?? "Ask Barn Owl")
     }
 
-    private func promptAndContextPanel(width: CGFloat?) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Prompt", systemImage: "sparkles")
-                    .font(.headline)
-                CommandTextEditor(
-                    text: $model.notePrompt,
-                    placeholder: "Ask Barn Owl to tighten decisions, extract follow-ups, rewrite the note, or rename the meeting.",
-                    minHeight: 120,
-                    maxHeight: 160,
-                    isEnabled: !model.isNoteUpdateInFlight,
-                    onSubmit: {
-                        Task { await model.applyPromptToDisplayedNote() }
-                    }
-                )
-                .frame(minHeight: 120, maxHeight: 160)
-                .padding(8)
-                .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(BarnOwlDesign.warmStroke)
-                }
-
-                promptUpdateButton
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Context Inbox", systemImage: "tray.full")
-                    .font(.headline)
-                contextInboxContent
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Context", systemImage: "plus.bubble")
-                    .font(.headline)
-                commandContextEditor(
-                    text: $model.contextDraft,
-                    placeholder: "Add names, project context, acronyms, meeting type, or corrections.",
-                    minHeight: 110,
-                    maxHeight: 150
-                )
-                Button {
-                    Task { await model.appendContextToDisplayedNote() }
-                } label: {
-                    HStack(spacing: 6) {
-                        if model.isContextUpdateInFlight {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                        Text(model.isContextUpdateInFlight ? "Adding..." : "Add Context")
-                    }
-                }
-                .disabled(contextDisabledReason != nil)
-                .help(contextDisabledReason ?? "Attach context")
-            }
-
-        }
-        .padding(12)
-        .background(BarnOwlDesign.warmPanel, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(BarnOwlDesign.warmStroke)
-        }
-        .frame(width: width)
-        .frame(maxWidth: width == nil ? .infinity : width, maxHeight: .infinity)
-        .tint(BarnOwlDesign.amber)
-    }
-
     private func inspectorCard<Content: View>(
         title: String,
         systemImage: String,
@@ -1950,15 +2251,25 @@ struct RecorderWindow: View {
     @ViewBuilder
     private var contextInboxContent: some View {
         if model.contextInboxItems.isEmpty {
-            Text("CLI, Codex, and manual context will appear here.")
+            Text("Imported context that still needs a decision will appear here. High-confidence Codex and Barn Owl context can be applied automatically.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
+            Text("Review imported context that still needs a decision. High-confidence Codex and Barn Owl entries may already be applied; medium- and low-confidence entries stay pending until you act.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             ForEach(model.contextInboxItems.prefix(6)) { item in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Text(item.source.capitalized)
                             .font(.caption.weight(.semibold))
+                        if let confidenceLabel = item.confidenceLabel {
+                            Text(confidenceLabel)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
                         Text(item.stateLabel)
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(contextStateColor(item.state))
@@ -1967,6 +2278,9 @@ struct RecorderWindow: View {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
+                    Text("Preview of imported context")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     Text(item.body)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1986,7 +2300,7 @@ struct RecorderWindow: View {
                 .background(BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 8))
             }
 
-            Button("Refresh Context") {
+            Button("Refresh Suggestions") {
                 Task { await model.refreshContextInbox() }
             }
             .controlSize(.small)
@@ -1996,7 +2310,7 @@ struct RecorderWindow: View {
 
     @ViewBuilder
     private func contextInboxButtons(_ item: BarnOwlContextInboxItem) -> some View {
-        Button("Accept") {
+        Button("Apply") {
             Task { await model.setContextInboxItemState(item.id, state: .accepted) }
         }
         .controlSize(.small)
@@ -2215,6 +2529,20 @@ struct RecorderWindow: View {
         guard model.postRecordingContextReview != nil else { return false }
         let markdown = model.displayedNote?.markdown.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return markdown.isEmpty || markdown == "No Markdown export has been generated yet."
+    }
+
+    private var shouldUseScrollableWorkspace: Bool {
+        RecorderWorkspacePresentation.shouldUseScrollableWorkspace(
+            hasActiveUtilityPanel: activeUtilityPanel != nil,
+            hasPostRecordingReview: shouldShowPostRecordingContextReview
+        )
+    }
+
+    private var hasPendingReviewForDisplayedMeeting: Bool {
+        guard let displayedMeetingID = model.displayedNote?.id else {
+            return false
+        }
+        return model.postRecordingContextReview?.id == displayedMeetingID
     }
 
     private var hasSearchFilters: Bool {
@@ -2516,6 +2844,13 @@ enum RecorderInspectorPresentation {
 }
 
 enum RecorderWorkspacePresentation {
+    static func shouldUseScrollableWorkspace(
+        hasActiveUtilityPanel: Bool,
+        hasPostRecordingReview: Bool
+    ) -> Bool {
+        hasActiveUtilityPanel || hasPostRecordingReview
+    }
+
     static func finalTranscriptPlaceholder(
         status: RecordingStatus,
         hasProcessingTimeline: Bool

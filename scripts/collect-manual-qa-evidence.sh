@@ -108,6 +108,10 @@ inspect_installed_app() {
   local cli_path="$app_path/Contents/MacOS/barnowl"
   local skill_path="$app_path/Contents/Resources/CodexSkill/barnowl/SKILL.md"
   local skill_wrapper="$app_path/Contents/Resources/CodexSkill/barnowl/scripts/barnowl"
+  local mcp_server="$app_path/Contents/Resources/CodexMCPApp/server.js"
+  local mcp_client="$app_path/Contents/Resources/CodexMCPApp/lib/barnowl-client.js"
+  local mcp_capability_adapter="$app_path/Contents/Resources/CodexMCPApp/lib/codex-capability-adapter.js"
+  local mcp_widget="$app_path/Contents/Resources/CodexMCPApp/public/barnowl-widget.html"
   printf -- '- Installed app: `%s`\n' "$(redact_path "$app_path")"
   printf -- '- Installed bundle ID: `%s`\n' "$(plist_value "$plist" CFBundleIdentifier)"
   printf -- '- Installed version: `%s (%s)`\n' "$(plist_value "$plist" CFBundleShortVersionString)" "$(plist_value "$plist" CFBundleVersion)"
@@ -137,6 +141,13 @@ inspect_installed_app() {
   else
     printf -- '- Installed Codex skill: `missing`\n'
   fi
+
+  if [[ -f "$mcp_server" && -f "$mcp_client" && -f "$mcp_capability_adapter" && -f "$mcp_widget" ]]; then
+    printf -- '- Installed Codex MCP app: `present`\n'
+  else
+    printf -- '- Installed Codex MCP app: `missing`\n'
+  fi
+
 }
 
 file_count() {
@@ -228,6 +239,9 @@ Fill these in during the pass:
 - [ ] Realtime preview produced visible text while recording
 - [ ] Final notes and transcript are visible
 - [ ] Live preview stayed visually separate from final transcript
+- [ ] Transcript utility panels preserve app scrolling and remain responsive
+- [ ] Add Details, Review Auto Context, and Context Library labels are clear
+- [ ] Settings Context Library stays compact and opens management for view create edit and delete
 - [ ] No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors
 EOF
 
@@ -241,6 +255,8 @@ Fill these in during the pass:
 - [ ] CLI feedback Slack draft produced a redacted draft without posting
 - [ ] CLI feedback Slack post requires explicit confirmation and configured webhook
 - [ ] Bundled Codex skill guidance matches the installed CLI behavior
+- [ ] Bundled Codex MCP app resources are present
+- [ ] Installed Codex MCP app smoke passed
 EOF
 
   append_section "Temp Audio Evidence"

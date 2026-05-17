@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -13,20 +14,36 @@ import urllib.request
 
 DEFAULT_URL = "http://127.0.0.1:8765"
 DEFAULT_APP_PATH = "/Applications/Barn Owl.app"
+DEFAULT_MCP_HEALTH_URL = "http://127.0.0.1:8787/"
 DEFAULT_TOKEN_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "control-bridge-token"
 DEFAULT_LAUNCH_TIMEOUT_SECONDS = 20
 DEFAULT_FEEDBACK_ERROR_PATH = Path.home() / "Library" / "Application Support" / "Barn Owl" / "last-cli-error.json"
 DEFAULT_FEEDBACK_OWNER_USERNAME = "burdick"
+CONTEXT_LIBRARY_TYPES = [
+    "person",
+    "organization",
+    "customer_account",
+    "internal_function",
+    "product",
+    "project",
+    "glossary_term",
+]
 FEEDBACK_WEBHOOK_ENV = "BARNOWL_SLACK_FEEDBACK_WEBHOOK_URL"
 FEEDBACK_CHANNEL_ENV = "BARNOWL_SLACK_FEEDBACK_CHANNEL"
 FEEDBACK_ERROR_PATH_ENV = "BARNOWL_FEEDBACK_ERROR_PATH"
 FEEDBACK_MAX_DIAGNOSTICS_CHARS = 12_000
 NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
     "confirmation_required",
+    "context_review_not_found",
     "context_item_not_found",
+    "context_library_entry_not_found",
+    "duplicate_context_library_entry",
     "meeting_not_found",
     "missing_context",
     "missing_context_item_id",
+    "missing_context_kind",
+    "missing_context_library_entry_id",
+    "missing_canonical_name",
     "missing_job_id",
     "missing_meeting_id",
     "missing_meeting_type",
@@ -150,6 +167,7 @@ def bridge_headers() -> dict:
 
 
 def open_barn_owl() -> None:
+    maybe_start_mcp_server()
     app_path = os.environ.get("BARNOWL_APP", DEFAULT_APP_PATH)
     commands = [["open", "-a", "Barn Owl"]]
     if os.path.exists(app_path):
@@ -159,6 +177,80 @@ def open_barn_owl() -> None:
             subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except Exception:
         pass
+
+
+def env_flag_enabled(name: str, default: bool = True) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def mcp_healthcheck(url: str = DEFAULT_MCP_HEALTH_URL) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=0.4) as response:
+            if response.status < 200 or response.status >= 300:
+                return False
+            body = response.read(160).decode("utf-8", errors="ignore")
+            return "Barn Owl MCP server" in body
+    except Exception:
+        return False
+
+
+def mcp_server_candidates() -> list[Path]:
+    configured = os.environ.get("BARNOWL_MCP_SERVER", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    app_path = Path(os.environ.get("BARNOWL_APP", DEFAULT_APP_PATH)).expanduser()
+    candidates.append(app_path / "Contents" / "Resources" / "CodexMCPApp" / "server.js")
+
+    script_path = Path(__file__).resolve()
+    candidates.append(script_path.parents[1] / "mcp-app" / "server.js")
+
+    return candidates
+
+
+def resolve_mcp_server():
+    for candidate in mcp_server_candidates():
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def resolve_node_binary():
+    configured = os.environ.get("BARNOWL_NODE", "").strip()
+    if configured:
+        expanded = os.path.expanduser(configured)
+        if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            return expanded
+    return shutil.which("node")
+
+
+def maybe_start_mcp_server() -> bool:
+    if not env_flag_enabled("BARNOWL_MCP_AUTOSTART", default=True):
+        return False
+    if mcp_healthcheck():
+        return True
+
+    server_path = resolve_mcp_server()
+    node_binary = resolve_node_binary()
+    if server_path is None or node_binary is None:
+        return False
+
+    try:
+        subprocess.Popen(
+            [node_binary, str(server_path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            env=os.environ.copy(),
+        )
+        return True
+    except Exception:
+        return False
 
 
 def post_once(payload: dict, base_url: str) -> dict:
@@ -182,6 +274,31 @@ def post_once(payload: dict, base_url: str) -> dict:
         return unavailable_response(error)
 
 
+def start_request_pending_response(payload: dict, base_url: str, response: dict):
+    if payload.get("command") != "start_recording":
+        return None
+    if "unavailable" not in response.get("message", "").lower():
+        return None
+    status = get_status_once(base_url)
+    if not status.get("ok"):
+        return None
+
+    recording_status = status.get("recordingStatus")
+    capture_status = status.get("captureStatus", "")
+    if recording_status == "recording":
+        status["message"] = "Recording started."
+        return status
+    if recording_status == "preparing" or capture_status.startswith("Requesting "):
+        status["ok"] = True
+        status["message"] = (
+            "Recording start is still in progress. "
+            "Barn Owl may be waiting for a macOS permission prompt."
+        )
+        status["nextCommand"] = "barnowl status --format json"
+        return status
+    return None
+
+
 def retry_after_launch(operation, launch: bool = True) -> dict:
     response = operation()
     if response.get("ok") or not launch or "unavailable" not in response.get("message", "").lower():
@@ -201,7 +318,28 @@ def retry_after_launch(operation, launch: bool = True) -> dict:
 
 
 def post(payload: dict, base_url: str, launch: bool = True) -> dict:
-    return retry_after_launch(lambda: post_once(payload, base_url), launch=launch)
+    response = post_once(payload, base_url)
+    pending_start = start_request_pending_response(payload, base_url, response)
+    if pending_start is not None:
+        return pending_start
+    if response.get("ok") or not launch or "unavailable" not in response.get("message", "").lower():
+        return response
+
+    open_barn_owl()
+    try:
+        launch_timeout = float(os.environ.get("BARNOWL_LAUNCH_TIMEOUT_SECONDS", DEFAULT_LAUNCH_TIMEOUT_SECONDS))
+    except ValueError:
+        launch_timeout = DEFAULT_LAUNCH_TIMEOUT_SECONDS
+    deadline = time.monotonic() + max(1.0, launch_timeout)
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        response = post_once(payload, base_url)
+        pending_start = start_request_pending_response(payload, base_url, response)
+        if pending_start is not None:
+            return pending_start
+        if response.get("ok") or "unavailable" not in response.get("message", "").lower():
+            return response
+    return response
 
 
 def get_status_once(base_url: str) -> dict:
@@ -240,6 +378,8 @@ def wait_condition_met(response: dict, until: str) -> bool:
         return response.get("recordingStatus") != "recording" and response.get("status") != "Recording"
     if until == "notes":
         return response.get("notesReady") is True
+    if until == "review":
+        return response.get("contextReviewReady") is True and response.get("contextReview") is not None
     if until == "complete":
         return response.get("jobState") == "complete" and response.get("notesReady") is True
     return False
@@ -691,7 +831,7 @@ def build_parser() -> argparse.ArgumentParser:
     wait_target = wait.add_mutually_exclusive_group(required=True)
     wait_target.add_argument("--session")
     wait_target.add_argument("--latest", action="store_true")
-    wait.add_argument("--until", choices=["complete", "notes", "stopped"], default="complete")
+    wait.add_argument("--until", choices=["complete", "notes", "review", "stopped"], default="complete")
     wait.add_argument("--timeout", type=parse_duration, default=parse_duration("10m"))
     add_format(wait)
 
@@ -700,12 +840,15 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--type", dest="meeting_type")
     start.add_argument("--context")
     start.add_argument("--source", default="cli")
+    start.add_argument("--confidence", type=float, help="Confidence for machine-supplied context, from 0.0 to 1.0.")
     start.add_argument("--with-mic", dest="captures_microphone", action="store_true", default=True)
     start.add_argument("--no-mic", dest="captures_microphone", action="store_false")
     start.add_argument("--with-system-audio", dest="captures_system_audio", action="store_true", default=True)
     start.add_argument("--no-system-audio", "--mic-only", dest="captures_system_audio", action="store_false")
 
-    subparsers.add_parser("stop")
+    stop = subparsers.add_parser("stop")
+    stop.add_argument("--wait-review", action="store_true", help="Wait until post-recording transcript suggestions are ready.")
+    stop.add_argument("--timeout", type=parse_duration, default=parse_duration("10m"))
 
     meetings = subparsers.add_parser("meetings")
     meetings_subparsers = meetings.add_subparsers(dest="meetings_command", required=True)
@@ -723,6 +866,12 @@ def build_parser() -> argparse.ArgumentParser:
         leaf = meeting_subparsers.add_parser(name)
         leaf.add_argument("meeting_id")
         add_format(leaf)
+    meeting_review = meeting_subparsers.add_parser("context-review")
+    meeting_review.add_argument("review_action_or_meeting_id")
+    meeting_review.add_argument("meeting_id", nargs="?")
+    meeting_review.add_argument("suggestion_id", nargs="?")
+    meeting_review.add_argument("--context", help="Optional reviewed freeform context to apply before accepting the review.")
+    add_format(meeting_review)
     meeting_delete = meeting_subparsers.add_parser("delete")
     meeting_delete.add_argument("meeting_id")
     meeting_delete.add_argument("--yes", action="store_true")
@@ -768,10 +917,12 @@ def build_parser() -> argparse.ArgumentParser:
     context_add.add_argument("context", nargs="?")
     context_add.add_argument("--session")
     context_add.add_argument("--source", default="cli")
+    context_add.add_argument("--confidence", type=float, help="Confidence for machine-supplied context, from 0.0 to 1.0.")
     context_set = context_subparsers.add_parser("set")
     context_set.add_argument("context", nargs="?")
     context_set.add_argument("--session")
     context_set.add_argument("--source", default="cli")
+    context_set.add_argument("--confidence", type=float, help="Confidence for machine-supplied context, from 0.0 to 1.0.")
     context_list = context_subparsers.add_parser("list")
     context_list.add_argument("--session")
     add_format(context_list)
@@ -779,6 +930,29 @@ def build_parser() -> argparse.ArgumentParser:
         leaf = context_subparsers.add_parser(name)
         leaf.add_argument("context_id")
         add_format(leaf)
+
+    context_library = subparsers.add_parser("context-library")
+    context_library_subparsers = context_library.add_subparsers(dest="context_library_command", required=True)
+    context_library_list = context_library_subparsers.add_parser("list")
+    context_library_list.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES)
+    context_library_list.add_argument("--query")
+    add_format(context_library_list)
+    context_library_add = context_library_subparsers.add_parser("add")
+    context_library_add.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES, required=True)
+    context_library_add.add_argument("--name", dest="canonical_name", required=True)
+    context_library_add.add_argument("--alias", dest="aliases", action="append", default=[])
+    add_format(context_library_add)
+    context_library_update = context_library_subparsers.add_parser("update")
+    context_library_update.add_argument("entry_id")
+    context_library_update.add_argument("--type", dest="context_kind", choices=CONTEXT_LIBRARY_TYPES)
+    context_library_update.add_argument("--name", dest="canonical_name")
+    context_library_update.add_argument("--alias", dest="aliases", action="append")
+    context_library_update.add_argument("--clear-aliases", action="store_true")
+    add_format(context_library_update)
+    context_library_delete = context_library_subparsers.add_parser("delete")
+    context_library_delete.add_argument("entry_id")
+    context_library_delete.add_argument("--yes", action="store_true")
+    add_format(context_library_delete)
 
     diagnostics = subparsers.add_parser("diagnostics")
     diagnostics_subparsers = diagnostics.add_subparsers(dest="diagnostics_command", required=True)
@@ -863,11 +1037,30 @@ def main(argv: list[str]) -> int:
             "meetingType": args.meeting_type,
             "context": args.context,
             "source": args.source,
+            "confidence": args.confidence,
             "capturesMicrophone": args.captures_microphone,
             "capturesSystemAudio": args.captures_system_audio,
         }
     elif args.command == "stop":
         payload = {"command": "stop_recording"}
+        if args.wait_review:
+            stop_response = post(payload, args.url, launch=launch)
+            if stop_response.get("ok") is False:
+                return print_response(stop_response, output_format, human)
+            meeting_id = stop_response.get("meetingID") or stop_response.get("activeMeetingID") or stop_response.get("sessionID")
+            wait_payload = {
+                "command": "wait",
+                "sessionID": meeting_id,
+                "latest": meeting_id is None,
+                "until": "review",
+                "format": output_format,
+            }
+            wait_payload = {key: value for key, value in wait_payload.items() if value is not None}
+            return print_response(
+                wait_for_condition(wait_payload, args.url, timeout_seconds=args.timeout, launch=launch),
+                output_format,
+                human,
+            )
     elif args.command == "meetings" and args.meetings_command == "search":
         payload = {
             "command": "meetings_search",
@@ -892,6 +1085,36 @@ def main(argv: list[str]) -> int:
             "delete": "meeting_delete",
             "purge-temp-audio": "meeting_purge_temp_audio",
         }
+        if args.meeting_command == "context-review":
+            if args.review_action_or_meeting_id in {"apply", "dismiss"}:
+                if args.meeting_id is None:
+                    raise SystemExit("barnowl meeting context-review apply|dismiss requires a meeting id.")
+                if args.suggestion_id is not None:
+                    raise SystemExit("barnowl meeting context-review apply|dismiss accepts only a meeting id.")
+                review_command = f"meeting_context_review_{args.review_action_or_meeting_id}"
+                meeting_id = args.meeting_id
+                suggestion_id = None
+            elif args.review_action_or_meeting_id in {"accept-suggestion", "ignore-suggestion"}:
+                if args.meeting_id is None or args.suggestion_id is None:
+                    raise SystemExit("barnowl meeting context-review accept-suggestion|ignore-suggestion requires a meeting id and suggestion id.")
+                review_command = f"meeting_context_review_{args.review_action_or_meeting_id.replace('-', '_')}"
+                meeting_id = args.meeting_id
+                suggestion_id = args.suggestion_id
+            else:
+                if args.meeting_id is not None or args.suggestion_id is not None:
+                    raise SystemExit("barnowl meeting context-review accepts <meeting-id>, apply|dismiss <meeting-id>, or accept-suggestion|ignore-suggestion <meeting-id> <suggestion-id>.")
+                review_command = "meeting_context_review"
+                meeting_id = args.review_action_or_meeting_id
+                suggestion_id = None
+            payload = {
+                "command": review_command,
+                "meetingID": meeting_id,
+                "suggestionID": suggestion_id,
+                "context": args.context,
+                "format": output_format,
+            }
+            payload = {key: value for key, value in payload.items() if value is not None}
+            return print_response(post(payload, args.url, launch=launch), output_format, human)
         if args.meeting_command in {"delete", "purge-temp-audio"} and not args.yes:
             response = {
                 "ok": False,
@@ -955,6 +1178,7 @@ def main(argv: list[str]) -> int:
             "sessionID": args.session,
             "context": context,
             "source": args.source,
+            "confidence": args.confidence,
         }
     elif args.command == "context" and args.context_command == "list":
         payload = {
@@ -966,6 +1190,48 @@ def main(argv: list[str]) -> int:
         payload = {
             "command": f"context_{args.context_command}",
             "contextItemID": args.context_id,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "list":
+        payload = {
+            "command": "context_library_list",
+            "contextKind": args.context_kind,
+            "query": args.query,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "add":
+        payload = {
+            "command": "context_library_upsert",
+            "contextKind": args.context_kind,
+            "canonicalName": args.canonical_name,
+            "aliases": args.aliases,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "update":
+        if args.clear_aliases and args.aliases:
+            raise SystemExit("barnowl context-library update accepts either --alias or --clear-aliases, not both.")
+        aliases = [] if args.clear_aliases else args.aliases
+        payload = {
+            "command": "context_library_upsert",
+            "contextLibraryEntryID": args.entry_id,
+            "contextKind": args.context_kind,
+            "canonicalName": args.canonical_name,
+            "aliases": aliases,
+            "format": output_format,
+        }
+    elif args.command == "context-library" and args.context_library_command == "delete":
+        if not args.yes:
+            response = {
+                "ok": False,
+                "message": "`barnowl context-library delete` is destructive and requires --yes.",
+                "contextLibraryEntryID": args.entry_id,
+                "errorCode": "confirmation_required",
+                "error": "Pass --yes to confirm.",
+            }
+            return print_response(response, output_format, human)
+        payload = {
+            "command": "context_library_delete",
+            "contextLibraryEntryID": args.entry_id,
             "format": output_format,
         }
     elif args.command == "diagnostics" and args.diagnostics_command == "export":

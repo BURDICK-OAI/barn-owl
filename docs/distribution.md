@@ -20,6 +20,7 @@ This creates:
 - `dist/BarnOwl-source-handoff.zip`
 - `dist/BarnOwl.app.zip`
 - `dist/BarnOwl-release-manifest.json`
+- `dist/BarnOwl-update-manifest.json`
 - `dist/SHA256SUMS`
 
 Send those files only. `dist/` is ignored by Git and can be regenerated any time
@@ -109,6 +110,7 @@ Expected output:
 dist/BarnOwl-source-handoff.zip
 dist/BarnOwl.app.zip
 dist/BarnOwl-release-manifest.json
+dist/BarnOwl-update-manifest.json
 dist/SHA256SUMS
 ```
 
@@ -143,6 +145,10 @@ Owl local data/keychain/TCC decisions when `--reset-state` is passed. Use
 `BarnOwl-release-manifest.json` records the app version, build number, packaging
 time, source commit when available, signing mode, and the SHA-256 values for the
 source and app zips. Use it as the audit record for an internal GitHub release.
+Before packaging a new release, add its version/build and highlights to
+`Apps/BarnOwlMac/BarnOwlChangelog.json`. The app exposes these release notes from
+Settings, `scripts/package-all.sh` fails when the current build has no latest
+changelog entry, and the generated update manifest reuses those notes.
 
 If packaging fails, check the build log:
 
@@ -170,7 +176,7 @@ The source package excludes:
 
 - `.git/`
 - `.env`, `.env.*` except `.env.example`
-- `DerivedData/`
+- `DerivedData*/`
 - `.tools/`
 - `.build/`, `build/`, `dist/`
 - generated release artifacts such as `BarnOwl.app.zip`,
@@ -182,6 +188,10 @@ The script also runs `scripts/scan-secrets.sh` against the staged source before
 creating the archive. The scan checks for common OpenAI keys, non-empty key
 environment assignments, private keys, GitHub tokens, and Slack tokens while
 excluding generated build output and `.env.example`.
+
+Source handoff packaging also refuses untracked files that would otherwise be
+copied into the archive. Stage release files intentionally or keep unrelated
+side work out of the release workspace before packaging.
 
 Because `.tools/` is excluded, source handoff recipients need XcodeGen available
 on `PATH` to regenerate the project. `scripts/verify.sh` uses the bundled local
@@ -196,8 +206,9 @@ scripts/package-app.sh
 ```
 
 The app package builds `BarnOwl.app`, stages it under `.build/package/`, bundles
-the local CLI and Codex skill resources, strips debug symbols, re-signs the
-staged app ad hoc with hardened runtime enabled, and zips it into `dist/`.
+the local CLI, Codex skill resources, and Codex MCP app resources, strips debug
+symbols, re-signs the staged app ad hoc with hardened runtime enabled, and zips
+it into `dist/`.
 
 The app package does not include local recordings, meeting databases, generated
 notes, or OpenAI API keys. Recipients need to add their own OpenAI API key in
@@ -226,7 +237,7 @@ scripts/publish-git-update.sh
 git add Updates/BarnOwl
 git commit
 git push origin main
-gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/BarnOwl-update-manifest.json dist/SHA256SUMS
 ```
 
 Installed apps default to:
@@ -254,6 +265,19 @@ xcrun notarytool store-credentials "BarnOwlNotary" \
   --password "APP_SPECIFIC_PASSWORD"
 ```
 
+Barn Owl can also create that `notarytool` profile from Apple notarization API
+key inputs, which matches common internal CI secret layouts:
+
+```sh
+export APPLE_NOTARIZATION_KEY_P8="/path/to/AuthKey_ABC123.p8"
+export APPLE_NOTARIZATION_KEY_ID="ABC123"
+export APPLE_NOTARIZATION_ISSUER_ID="00000000-0000-0000-0000-000000000000"
+```
+
+`APPLE_NOTARIZATION_KEY_P8` may be either a `.p8` file path or the raw key
+contents. If `BARNOWL_NOTARY_PROFILE` is already set, Barn Owl uses that profile
+directly and does not create a replacement.
+
 Then build, sign, notarize, staple, and zip. Prefer
 `scripts/release-direct-download.sh` above for a release candidate; use this lower
 level command only when you need to debug packaging:
@@ -264,6 +288,16 @@ BARNOWL_NOTARIZE=1 \
 BARNOWL_NOTARY_PROFILE="BarnOwlNotary" \
 scripts/package-app.sh dist/BarnOwl.app.zip
 ```
+
+For shared release work, prefer:
+
+```sh
+BARNOWL_CODESIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)" \
+scripts/release-direct-download.sh
+```
+
+That command accepts either `BARNOWL_NOTARY_PROFILE` or the
+`APPLE_NOTARIZATION_*` variables above.
 
 The script signs the staged app with hardened runtime and a timestamp, submits a
 temporary zip to Apple notarization, staples the accepted ticket to the app, and
@@ -294,8 +328,9 @@ scripts/verify-release.sh dist/BarnOwl.app.zip
 `scripts/package-all.sh` runs this local/developer release check automatically.
 The check verifies the archive shape, bundle identifier, code signature,
 hardened runtime flag, required code-signing entitlements, bundled CLI, bundled
-Codex skill resources, and rejects bundled local/private state such as databases,
-logs, raw audio, tokens, update manifests, manual QA evidence, and `.env` files.
+Codex skill resources, bundled Codex MCP app resources, and rejects bundled
+local/private state such as databases, logs, raw audio, tokens, update manifests,
+manual QA evidence, and `.env` files.
 
 For a direct-download build, sign with Developer ID, notarize, staple the ticket,
 then run:

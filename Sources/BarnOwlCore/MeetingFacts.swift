@@ -171,6 +171,75 @@ public struct ContextReviewPrompt: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum ContextEntityKind: String, Codable, CaseIterable, Equatable, Sendable {
+    case person
+    case organization
+    case customerAccount = "customer_account"
+    case internalFunction = "internal_function"
+    case product
+    case project
+    case glossaryTerm = "glossary_term"
+}
+
+public enum ContextEntityReviewAction: String, Codable, Equatable, Sendable {
+    case accept
+    case edit
+    case ignore
+}
+
+public struct ContextEntitySuggestion: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var kind: ContextEntityKind
+    public var observedValue: String
+    public var canonicalValue: String
+    public var rationale: String
+    public var confidence: Double
+    public var evidenceSources: [String]
+
+    public init(
+        id: UUID = UUID(),
+        kind: ContextEntityKind,
+        observedValue: String,
+        canonicalValue: String,
+        rationale: String,
+        confidence: Double,
+        evidenceSources: [String]
+    ) {
+        self.id = id
+        self.kind = kind
+        self.observedValue = observedValue
+        self.canonicalValue = canonicalValue
+        self.rationale = rationale
+        self.confidence = min(max(confidence, 0), 1)
+        self.evidenceSources = MeetingFacts.normalizedList(evidenceSources)
+    }
+}
+
+public struct BarnOwlContextReview: Codable, Equatable, Sendable {
+    public var meetingID: UUID
+    public var suggestedSummary: String
+    public var prompts: [ContextReviewPrompt]
+    public var facts: MeetingFacts
+    public var entitySuggestions: [ContextEntitySuggestion]
+    public var ready: Bool
+
+    public init(
+        meetingID: UUID,
+        suggestedSummary: String,
+        prompts: [ContextReviewPrompt],
+        facts: MeetingFacts,
+        entitySuggestions: [ContextEntitySuggestion] = [],
+        ready: Bool = true
+    ) {
+        self.meetingID = meetingID
+        self.suggestedSummary = suggestedSummary
+        self.prompts = prompts
+        self.facts = facts
+        self.entitySuggestions = entitySuggestions
+        self.ready = ready
+    }
+}
+
 public struct MeetingFactsExtractor: Sendable {
     public init() {}
 
@@ -479,5 +548,173 @@ public struct ContextPromptGenerator: Sendable {
             counts[acronym, default: 0] += 1
         }
         return counts.first { $0.value >= 2 }?.key
+    }
+}
+
+public struct ContextEntitySuggestionGenerator: Sendable {
+    public init() {}
+
+    public func suggestions(
+        facts: MeetingFacts,
+        transcript: String,
+        contextLines: [String]
+    ) -> [ContextEntitySuggestion] {
+        let contextText = contextLines.joined(separator: "\n")
+        var suggestions: [ContextEntitySuggestion] = []
+        suggestions += personNameSuggestions(facts: facts, transcript: transcript, contextText: contextText)
+        suggestions += organizationSuggestions(facts: facts, contextText: contextText)
+        suggestions += glossarySuggestions(facts: facts)
+        return Array(suggestions.prefix(8))
+    }
+
+    private func personNameSuggestions(
+        facts: MeetingFacts,
+        transcript: String,
+        contextText: String
+    ) -> [ContextEntitySuggestion] {
+        let contextNames = contextualList(after: #"(?i)\b(?:calendar attendees|participants|attendees):\s+"#, in: contextText)
+        guard !contextNames.isEmpty else { return [] }
+
+        let transcriptNames = transcript
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let colon = trimmed.firstIndex(of: ":") else { return nil }
+                return MeetingFacts.clean(String(trimmed[..<colon]))
+            }
+        let observed = MeetingFacts.normalizedList(facts.participants + transcriptNames)
+
+        return observed.compactMap { candidate in
+            guard let canonical = bestNearMatch(for: candidate, in: contextNames),
+                  canonical.localizedCaseInsensitiveCompare(candidate) != .orderedSame
+            else {
+                return nil
+            }
+            return ContextEntitySuggestion(
+                kind: .person,
+                observedValue: candidate,
+                canonicalValue: canonical,
+                rationale: "A nearby attendee name in saved meeting context appears to be the canonical spelling.",
+                confidence: 0.94,
+                evidenceSources: ["transcript", "meeting_context"]
+            )
+        }
+    }
+
+    private func organizationSuggestions(
+        facts: MeetingFacts,
+        contextText: String
+    ) -> [ContextEntitySuggestion] {
+        let contextualOrganizations = contextualList(
+            after: #"(?i)\b(?:customers?|organizations?|accounts?):\s+"#,
+            in: contextText
+        )
+        guard !contextualOrganizations.isEmpty else { return [] }
+
+        let observed = MeetingFacts.normalizedList(facts.customers + facts.organizations)
+        return observed.compactMap { candidate in
+            guard let canonical = bestContainmentMatch(for: candidate, in: contextualOrganizations),
+                  canonical.localizedCaseInsensitiveCompare(candidate) != .orderedSame
+            else {
+                return nil
+            }
+            return ContextEntitySuggestion(
+                kind: facts.customers.contains(candidate) ? .customerAccount : .organization,
+                observedValue: candidate,
+                canonicalValue: canonical,
+                rationale: "Saved context contains a fuller organization/customer form for this mention.",
+                confidence: 0.90,
+                evidenceSources: ["meeting_facts", "meeting_context"]
+            )
+        }
+    }
+
+    private func glossarySuggestions(facts: MeetingFacts) -> [ContextEntitySuggestion] {
+        facts.glossary.compactMap { key, value in
+            guard let acronym = MeetingFacts.clean(key),
+                  let expansion = MeetingFacts.clean(value),
+                  acronym.localizedCaseInsensitiveCompare(expansion) != .orderedSame
+            else {
+                return nil
+            }
+            return ContextEntitySuggestion(
+                kind: .glossaryTerm,
+                observedValue: acronym,
+                canonicalValue: expansion,
+                rationale: "The meeting glossary defines a durable acronym expansion.",
+                confidence: 0.98,
+                evidenceSources: ["meeting_facts.glossary"]
+            )
+        }
+        .sorted { $0.observedValue < $1.observedValue }
+    }
+
+    private func contextualList(after prefixPattern: String, in text: String) -> [String] {
+        let pattern = prefixPattern + #"([^.\n]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        let values = regex.matches(in: text, range: nsRange).compactMap { match -> String? in
+            guard match.numberOfRanges > 1,
+                  let range = Range(match.range(at: 1), in: text)
+            else {
+                return nil
+            }
+            return String(text[range])
+        }
+        .flatMap { value in
+            value
+                .replacingOccurrences(of: " and ", with: ", ")
+                .split(separator: ",")
+                .map { String($0) }
+        }
+        return MeetingFacts.normalizedList(values)
+    }
+
+    private func bestNearMatch(for candidate: String, in canonicalValues: [String]) -> String? {
+        let normalizedCandidate = normalized(candidate)
+        return canonicalValues
+            .filter { normalized($0) != normalizedCandidate }
+            .min { lhs, rhs in
+                editDistance(normalizedCandidate, normalized(lhs)) < editDistance(normalizedCandidate, normalized(rhs))
+            }
+            .flatMap { canonical in
+                editDistance(normalizedCandidate, normalized(canonical)) <= 1 ? canonical : nil
+            }
+    }
+
+    private func bestContainmentMatch(for candidate: String, in canonicalValues: [String]) -> String? {
+        let normalizedCandidate = normalized(candidate)
+        return canonicalValues.first { canonical in
+            let normalizedCanonical = normalized(canonical)
+            return normalizedCanonical != normalizedCandidate
+                && (normalizedCanonical.contains(normalizedCandidate) || normalizedCandidate.contains(normalizedCanonical))
+        }
+    }
+
+    private func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
+    private func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        let left = Array(lhs)
+        let right = Array(rhs)
+        guard !left.isEmpty else { return right.count }
+        guard !right.isEmpty else { return left.count }
+
+        var previous = Array(0...right.count)
+        for (leftIndex, leftCharacter) in left.enumerated() {
+            var current = [leftIndex + 1]
+            for (rightIndex, rightCharacter) in right.enumerated() {
+                let substitution = previous[rightIndex] + (leftCharacter == rightCharacter ? 0 : 1)
+                let insertion = current[rightIndex] + 1
+                let deletion = previous[rightIndex + 1] + 1
+                current.append(min(substitution, insertion, deletion))
+            }
+            previous = current
+        }
+        return previous[right.count]
     }
 }

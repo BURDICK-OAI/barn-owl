@@ -119,10 +119,14 @@ update_version="$(/usr/bin/plutil -extract version raw -o - "$UPDATE_MANIFEST" 2
 update_build="$(/usr/bin/plutil -extract build raw -o - "$UPDATE_MANIFEST" 2>/dev/null || true)"
 update_archive_url="$(/usr/bin/plutil -extract archive_url raw -o - "$UPDATE_MANIFEST" 2>/dev/null || true)"
 update_sha="$(/usr/bin/plutil -extract sha256 raw -o - "$UPDATE_MANIFEST" 2>/dev/null || true)"
+update_notes="$(/usr/bin/plutil -extract notes raw -o - "$UPDATE_MANIFEST" 2>/dev/null || true)"
 [[ -n "$update_version" ]] || fail "update manifest version is missing"
 [[ -n "$update_build" ]] || fail "update manifest build is missing"
 [[ "$update_archive_url" == "BarnOwl.app.zip" ]] || fail "update manifest archive_url is unexpected: $update_archive_url"
 [[ "$update_sha" == "$actual_app_sha" ]] || fail "update manifest SHA-256 does not match app artifact"
+[[ -n "$update_notes" ]] || fail "update manifest release notes are missing"
+expected_update_notes="$("$ROOT_DIR/scripts/changelog-notes.sh" "$update_version" "$update_build")"
+[[ "$update_notes" == "$expected_update_notes" ]] || fail "update manifest release notes do not match the app changelog"
 
 if [[ "$DIRECT_DOWNLOAD" -eq 1 ]]; then
   "$ROOT_DIR/scripts/verify-release.sh" --direct-download "$APP_ZIP" >/dev/null

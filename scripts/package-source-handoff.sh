@@ -13,6 +13,32 @@ trap cleanup EXIT
 PACKAGE_ROOT="$STAGING_DIR/BarnOwl"
 mkdir -p "$PACKAGE_ROOT"
 
+if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  included_untracked_files=()
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    case "$path" in
+      .DS_Store|.env|.env.*|BarnOwl-source-handoff.zip|BarnOwl.app.zip|BarnOwl-release-manifest.json|SHA256SUMS|BarnOwl.dmg)
+        ;;
+      .tools/*|.build/*|DerivedData*/*|build/*|dist/*|*.xcuserdata/*|*.xcuserstate)
+        ;;
+      *)
+        included_untracked_files+=("$path")
+        ;;
+    esac
+  done < <(git -C "$ROOT_DIR" ls-files --others --exclude-standard)
+
+  if [[ "${#included_untracked_files[@]}" -gt 0 ]]; then
+    echo "Refusing to package source handoff with untracked files that would be included:" >&2
+    printf '  %s\n' "${included_untracked_files[@]:0:40}" >&2
+    if [[ "${#included_untracked_files[@]}" -gt 40 ]]; then
+      echo "  ... $(( ${#included_untracked_files[@]} - 40 )) more" >&2
+    fi
+    echo "Stage or remove those files before packaging the source handoff." >&2
+    exit 1
+  fi
+fi
+
 rsync -a \
   --include '.env.example' \
   --exclude '.git/' \
@@ -21,7 +47,7 @@ rsync -a \
   --exclude '.env.*' \
   --exclude '.tools/' \
   --exclude '.build/' \
-  --exclude 'DerivedData/' \
+  --exclude 'DerivedData*/' \
   --exclude 'build/' \
   --exclude 'dist/' \
   --exclude 'BarnOwl-source-handoff.zip' \

@@ -14,7 +14,7 @@ Default mode validates a local/developer Barn Owl app package:
   - code signature verifies
   - hardened runtime flag is present
   - required code-signing entitlements are present
-  - bundled CLI and Codex skill resources are present
+  - bundled CLI, Codex skill, and Codex MCP app resources are present
 
 --direct-download additionally requires:
   - non-ad-hoc Developer ID style signature
@@ -110,11 +110,22 @@ INFO_PLIST="$APP_PATH/Contents/Info.plist"
 EXECUTABLE="$APP_PATH/Contents/MacOS/BarnOwlApp"
 CLI="$APP_PATH/Contents/MacOS/barnowl"
 SKILL="$APP_PATH/Contents/Resources/CodexSkill/barnowl/SKILL.md"
+MCP_APP_DIR="$APP_PATH/Contents/Resources/CodexMCPApp"
+MCP_PACKAGE="$MCP_APP_DIR/package.json"
+MCP_SERVER="$MCP_APP_DIR/server.js"
+MCP_CLIENT="$MCP_APP_DIR/lib/barnowl-client.js"
+MCP_CAPABILITY_ADAPTER="$MCP_APP_DIR/lib/codex-capability-adapter.js"
+MCP_WIDGET="$MCP_APP_DIR/public/barnowl-widget.html"
 
 [[ -f "$INFO_PLIST" ]] || fail "missing Info.plist"
 [[ -x "$EXECUTABLE" ]] || fail "missing executable: Contents/MacOS/BarnOwlApp"
 [[ -x "$CLI" ]] || fail "missing bundled CLI: Contents/MacOS/barnowl"
 [[ -f "$SKILL" ]] || fail "missing bundled Codex skill"
+[[ -f "$MCP_PACKAGE" ]] || fail "missing bundled Codex MCP app package metadata"
+[[ -f "$MCP_SERVER" ]] || fail "missing bundled Codex MCP app server"
+[[ -f "$MCP_CLIENT" ]] || fail "missing bundled Codex MCP app bridge client"
+[[ -f "$MCP_CAPABILITY_ADAPTER" ]] || fail "missing bundled Codex MCP capability adapter"
+[[ -f "$MCP_WIDGET" ]] || fail "missing bundled Codex MCP app widget"
 
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")"
 [[ "$BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] || fail "unexpected bundle id: $BUNDLE_ID"
@@ -152,7 +163,7 @@ SIGNATURE_INFO="$(/usr/bin/codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
 echo "$SIGNATURE_INFO" | grep -q 'flags=.*runtime' \
   || fail "hardened runtime flag is missing"
 
-ENTITLEMENTS_PLIST="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/barnowl-entitlements.XXXXXX.plist")"
+ENTITLEMENTS_PLIST="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/barnowl-entitlements.XXXXXX")"
 /usr/bin/codesign -d --entitlements :- "$APP_PATH" >"$ENTITLEMENTS_PLIST" 2>/dev/null \
   || fail "could not read code-signing entitlements"
 

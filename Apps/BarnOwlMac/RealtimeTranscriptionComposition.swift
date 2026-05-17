@@ -598,6 +598,7 @@ actor BarnOwlRealtimeTranscriptionController {
         receiveTask?.cancel()
         receiveTask = nil
         await client.close()
+        await healthHandler(.fallbackActive)
         await healthHandler(.reconnecting)
         scheduleReconnect(reason: reason)
     }

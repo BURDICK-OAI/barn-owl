@@ -16,13 +16,12 @@ if [[ "$BARNOWL_NOTARIZE" == "1" ]]; then
     echo "BARNOWL_NOTARIZE=1 requires BARNOWL_CODESIGN_IDENTITY to be a Developer ID Application identity." >&2
     exit 1
   fi
-  if [[ -z "$BARNOWL_NOTARY_PROFILE" ]]; then
-    echo "BARNOWL_NOTARIZE=1 requires BARNOWL_NOTARY_PROFILE to name an xcrun notarytool keychain profile." >&2
-    exit 1
-  fi
   if ! command -v xcrun >/dev/null 2>&1; then
     echo "xcrun is required for notarization." >&2
     exit 1
+  fi
+  if [[ -z "$BARNOWL_NOTARY_PROFILE" ]]; then
+    BARNOWL_NOTARY_PROFILE="$("$ROOT_DIR/scripts/resolve-notary-profile.sh")"
   fi
 fi
 

@@ -131,6 +131,11 @@ This writes sanitized outputs under `dist/`:
 - `BarnOwl-update-manifest.json` for app update checks
 - `SHA256SUMS` for verifying downloaded artifacts
 
+Every pushed release must add the current version/build to
+`Apps/BarnOwlMac/BarnOwlChangelog.json`. Settings renders that changelog in-app,
+and packaging fails if the current bundle version is missing from the latest
+entry. The same notes are written into `BarnOwl-update-manifest.json`.
+
 `scripts/package-all.sh` runs `scripts/verify-dist.sh` before returning. You can
 rerun that package-integrity gate directly with:
 
@@ -156,7 +161,7 @@ scripts/publish-git-update.sh
 git add Updates/BarnOwl
 git commit
 git push origin main
-gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/BarnOwl-update-manifest.json dist/SHA256SUMS
 ```
 
 Barn Owl defaults to this manifest URL for installed apps:
@@ -194,7 +199,9 @@ retrieve Markdown notes or query meeting memory.
 ```sh
 scripts/barnowl status
 scripts/barnowl start --title "Design Review"
-scripts/barnowl context add --session SESSION_ID --source codex "Relevant context from calendar, Slack, local files, or prior notes."
+scripts/barnowl context add --session SESSION_ID --source codex --confidence 0.95 "Relevant context from calendar, Slack, local files, or prior notes."
+scripts/barnowl context-library add --type person --name "Collin Burdick" --alias "Colin Burdick"
+scripts/barnowl context-library list --type person --query "Collin"
 scripts/barnowl stop
 scripts/barnowl wait --latest --until complete --timeout 10m
 scripts/barnowl meetings recent --limit 5

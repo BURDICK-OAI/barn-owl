@@ -14,6 +14,7 @@ UPDATE_MANIFEST_PATH="$DIST_DIR/BarnOwl-update-manifest.json"
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Apps/BarnOwlMac/Info.plist")"
 APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ROOT_DIR/Apps/BarnOwlMac/Info.plist")"
+RELEASE_NOTES_JSON="$("$ROOT_DIR/scripts/changelog-notes.sh" "$APP_VERSION" "$APP_BUILD" json)"
 SOURCE_SHA256="$(/usr/bin/shasum -a 256 "$SOURCE_ZIP" | awk '{print $1}')"
 APP_SHA256="$(/usr/bin/shasum -a 256 "$APP_ZIP" | awk '{print $1}')"
 PACKAGED_AT="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -77,7 +78,7 @@ cat >"$UPDATE_MANIFEST_PATH" <<EOF
   "build": "$APP_BUILD",
   "archive_url": "$(basename "$APP_ZIP")",
   "sha256": "$APP_SHA256",
-  "notes": "Barn Owl $APP_VERSION ($APP_BUILD)"
+  "notes": $RELEASE_NOTES_JSON
 }
 EOF
 
