@@ -227,7 +227,9 @@ public struct MeetingFactsExtractor: Sendable {
 
         let contextOrganizations = organizationsFromContext(freeformContext)
         let transcriptOrganizations = organizationsFromTranscript(transcript)
-        let organizations = Self.merge(facts.organizations, contextOrganizations, transcriptOrganizations)
+        let organizations = contextOrganizations.isEmpty
+            ? Self.merge(facts.organizations, transcriptOrganizations)
+            : Self.merge(facts.organizations, contextOrganizations)
         facts.organizations = organizations
         facts.customers = Self.merge(
             facts.customers,
@@ -342,6 +344,11 @@ public struct MeetingFactsExtractor: Sendable {
         names += firstMatches(in: text, pattern: #"\b(?:about|for|with|related to|customer|account)\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
         names += firstMatches(in: text, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:renewal|rollout|pricing|implementation|workshop|pitch|account)\b"#)
         names += firstMatches(in: text, pattern: #"(?im)^\s*Known (?:organization|company):\s+([^\n.]+)"#)
+        names += firstMatches(in: text, pattern: #"(?im)^\s*Calendar (?:organization|company|customer):\s+([^\n.]+)"#)
+        names += firstMatches(
+            in: text,
+            pattern: #"(?im)^\s*Calendar event:\s*(?:OpenAI|OAI)\s*(?:<>|x|X|-|\|)\s*([A-Z][A-Za-z0-9&.-]{2,})\b"#
+        )
         return names.filter(Self.isLikelyOrganizationName)
     }
 

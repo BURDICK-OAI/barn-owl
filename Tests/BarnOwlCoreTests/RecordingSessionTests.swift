@@ -1,5 +1,6 @@
 @testable import BarnOwl
 import BarnOwlAudio
+import BarnOwlContext
 import BarnOwlCore
 import BarnOwlOpenAI
 import BarnOwlPersistence
@@ -563,6 +564,50 @@ func controlResponsesRedactUserVisibleErrorFields() async throws {
     #expect(!jobError.contains("/Users/alex"))
     #expect(jobError.contains("[redacted API key]"))
     #expect(jobError.contains("[redacted local path]"))
+}
+
+@Test
+@MainActor
+func calendarContextControlAttachPersistsAcceptedRepairEvidence() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000C022")!
+    let now = Date(timeIntervalSince1970: 1_800_004_600)
+    try await database.upsertMeeting(BarnOwlMeetingRecord(
+        id: meetingID,
+        title: "Moderna CEO Meeting",
+        startedAt: now,
+        createdAt: now,
+        updatedAt: now
+    ))
+    let context = CalendarMeetingContext(
+        id: "calendar-event-moderna",
+        provider: "Google Calendar",
+        title: "OpenAI <> Moderna",
+        startsAt: now,
+        endsAt: now.addingTimeInterval(1_800),
+        attendees: ["stephane@example.com"],
+        confidence: 0.97,
+        matchReason: "unique accepted invite match"
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let contextJSON = String(decoding: try encoder.encode(context), as: UTF8.self)
+
+    let attached = await model.controlCalendarContextAttachResponse(
+        meetingID: meetingID,
+        contextJSON: contextJSON,
+        state: "accepted",
+        selectedAutomatically: false
+    )
+    let state = try #require(await database.meetingState(id: meetingID))
+    let listed = await model.controlCalendarContextListResponse(meetingID: meetingID)
+
+    #expect(attached.ok)
+    #expect(attached.calendarMatches?.first?.state == "accepted")
+    #expect(state.calendarContext?.calendarEventID == "calendar-event-moderna")
+    #expect(listed.calendarMatches?.count == 1)
+    #expect(listed.calendarMatches?.first?.title == "OpenAI <> Moderna")
 }
 
 @Test
@@ -2952,6 +2997,24 @@ func meetingFactsExtractorRejectsObservedJunkOrganizationsProjectsAndWeakGoals()
 }
 
 @Test
+func meetingFactsExtractorKeepsAcceptedCalendarOrganizationAheadOfTranscriptInference() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: """
+        Speaker: Rosalind is moving quickly, and we should keep the partnership discussion focused.
+        Speaker: Rosalind came up again as part of the implementation thread.
+        """,
+        freeformContext: """
+        Calendar event: OpenAI <> Moderna
+        Calendar match: High confidence (unique accepted invite match)
+        Calendar attendees: stephane@example.com, adrian@example.com
+        """
+    )
+
+    #expect(facts.organizations == ["Moderna"])
+    #expect(!facts.organizations.contains("Rosalind"))
+}
+
+@Test
 func meetingFactsExtractorDoesNotPromoteEveryTranscriptOrganizationToCustomer() {
     let facts = MeetingFactsExtractor().extract(
         transcript: """
@@ -3080,6 +3143,66 @@ func durabilityRepairFactsRecomputesStaleJunkPayloadsFromTrustedInputs() {
     #expect(repairedFacts.goals == ["Stabilize first-pass transcript accuracy for recurring account vocabulary"])
     #expect(!repairedFacts.customers.contains("Room"))
     #expect(!repairedFacts.projects.contains { $0.localizedCaseInsensitiveContains("frameworks") })
+}
+
+@MainActor
+@Test
+func durabilityRepairFactsUsesAcceptedCalendarContextAheadOfTranscriptInference() throws {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000005003")!
+    let now = Date(timeIntervalSince1970: 1_800_005_200)
+    let context = CalendarMeetingContext(
+        id: "moderna-ceo-invite",
+        provider: "Google Calendar",
+        title: "OpenAI <> Moderna",
+        startsAt: now,
+        endsAt: now.addingTimeInterval(1_800),
+        attendees: ["stephane@example.com", "adrian@example.com"],
+        confidence: 0.96,
+        matchReason: "unique accepted invite match"
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let contextJSON = String(decoding: try encoder.encode(context), as: UTF8.self)
+    let state = BarnOwlMeetingState(
+        meeting: BarnOwlMeetingRecord(
+            id: meetingID,
+            title: "Moderna: Stephane CEO and CIOs Meeting",
+            startedAt: now,
+            createdAt: now,
+            updatedAt: now
+        ),
+        transcriptSegments: [
+            BarnOwlTranscriptSegmentRecord(
+                meetingID: meetingID,
+                sequence: 0,
+                speakerLabel: "Speaker",
+                text: "Rosalind came up repeatedly while discussing architecture and rollout.",
+                startTime: 0,
+                endTime: 1
+            )
+        ],
+        meetingFacts: MeetingFacts(
+            title: "Moderna: Stephane CEO and CIOs Meeting",
+            organizations: ["Rosalind"]
+        ),
+        calendarContext: BarnOwlMeetingCalendarContextRecord(
+            meetingID: meetingID,
+            calendarEventID: context.id,
+            title: context.title,
+            startsAt: context.startsAt,
+            endsAt: context.endsAt,
+            attendeesJSON: #"["stephane@example.com","adrian@example.com"]"#,
+            rawContextJSON: contextJSON,
+            createdAt: now,
+            updatedAt: now
+        )
+    )
+
+    let repairedFacts = BarnOwlAppModel.durabilityRepairFacts(from: state)
+
+    #expect(repairedFacts.title == "Moderna: Stephane CEO and CIOs Meeting")
+    #expect(repairedFacts.organizations == ["Moderna"])
+    #expect(!repairedFacts.organizations.contains("Rosalind"))
 }
 
 @Test

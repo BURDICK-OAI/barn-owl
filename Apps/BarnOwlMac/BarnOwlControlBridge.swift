@@ -226,6 +226,34 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             )
         case .durabilityRepair:
             return await model.controlDurabilityRepairResponse()
+        case .calendarContextList:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "calendar_context_list requires meetingID.", error: "missing_meeting_id")
+            }
+            return await model.controlCalendarContextListResponse(meetingID: meetingID)
+        case .calendarContextAttach:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "calendar_context_attach requires meetingID.", error: "missing_meeting_id")
+            }
+            guard let contextJSON = command.calendarContextJSON else {
+                return model.controlStatusResponse(ok: false, message: "calendar_context_attach requires calendarContextJSON.", error: "missing_calendar_context")
+            }
+            return await model.controlCalendarContextAttachResponse(
+                meetingID: meetingID,
+                contextJSON: contextJSON,
+                state: command.calendarContextState,
+                selectedAutomatically: command.selectedAutomatically == true
+            )
+        case .calendarContextAccept:
+            guard let calendarMatchID = command.calendarMatchID else {
+                return model.controlStatusResponse(ok: false, message: "calendar_context_accept requires calendarMatchID.", error: "missing_calendar_match_id")
+            }
+            return await model.controlCalendarContextSelectionResponse(matchID: calendarMatchID, state: .accepted)
+        case .calendarContextReject:
+            guard let calendarMatchID = command.calendarMatchID else {
+                return model.controlStatusResponse(ok: false, message: "calendar_context_reject requires calendarMatchID.", error: "missing_calendar_match_id")
+            }
+            return await model.controlCalendarContextSelectionResponse(matchID: calendarMatchID, state: .rejected)
         case .meetingsRecent:
             return await model.controlRecentMeetingsResponse(limit: command.limit ?? 10)
         case .meetingsSearch:

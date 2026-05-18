@@ -42,6 +42,56 @@ func controlResponseEncodesMachineReadableStatus() throws {
 }
 
 @Test
+func calendarContextAttachCommandDecodesRepairPayload() throws {
+    let data = Data(
+        """
+        {
+          "command": "calendar_context_attach",
+          "meetingID": "00000000-0000-0000-0000-00000000C019",
+          "calendarContextJSON": "{\\"id\\":\\"event-123\\"}",
+          "calendarContextState": "accepted",
+          "selectedAutomatically": true
+        }
+        """.utf8
+    )
+
+    let command = try JSONDecoder().decode(BarnOwlControlCommand.self, from: data)
+
+    #expect(command.command == .calendarContextAttach)
+    #expect(command.meetingID == UUID(uuidString: "00000000-0000-0000-0000-00000000C019"))
+    #expect(command.calendarContextJSON == #"{"id":"event-123"}"#)
+    #expect(command.calendarContextState == "accepted")
+    #expect(command.selectedAutomatically == true)
+}
+
+@Test
+func controlResponseEncodesCalendarRepairMatches() throws {
+    let matchID = UUID(uuidString: "00000000-0000-0000-0000-00000000C020")!
+    let response = BarnOwlControlResponse(
+        ok: true,
+        message: "Barn Owl calendar context matches.",
+        calendarMatches: [
+            BarnOwlControlCalendarMatch(
+                id: matchID,
+                meetingID: UUID(uuidString: "00000000-0000-0000-0000-00000000C021")!,
+                calendarEventID: "event-123",
+                title: "OpenAI <> Moderna",
+                state: "accepted",
+                selectedAutomatically: false,
+                matchReason: "unique accepted invite match",
+                confidence: 0.96
+            )
+        ]
+    )
+
+    let data = try JSONEncoder().encode(response)
+    let decoded = try JSONDecoder().decode(BarnOwlControlResponse.self, from: data)
+
+    #expect(decoded == response)
+    #expect(decoded.calendarMatches?.first?.state == "accepted")
+}
+
+@Test
 func controlResponseEncodesEnrichmentConceptHistory() throws {
     let response = BarnOwlControlResponse(
         ok: true,

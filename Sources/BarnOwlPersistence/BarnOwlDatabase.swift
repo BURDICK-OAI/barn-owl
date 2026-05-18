@@ -25,7 +25,7 @@ public enum BarnOwlDatabaseError: Error, Equatable, Sendable {
 }
 
 public actor BarnOwlDatabase {
-    public static let latestSchemaVersion = 14
+    public static let latestSchemaVersion = 15
 
     private let url: URL
     private let database: SQLiteDatabaseHandle
@@ -1031,6 +1031,80 @@ public actor BarnOwlDatabase {
         try withStatement("DELETE FROM meeting_calendar_context WHERE meeting_id = ?") { statement, sql in
             try bind(meetingID, at: 1, in: statement, sql: sql)
             try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func upsertMeetingCalendarMatch(_ match: BarnOwlMeetingCalendarMatchRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO meeting_calendar_matches (
+                id, meeting_id, calendar_event_id, title, starts_at, ends_at, attendees_json,
+                raw_context_json, state, selected_automatically, match_reason, confidence,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                meeting_id = excluded.meeting_id,
+                calendar_event_id = excluded.calendar_event_id,
+                title = excluded.title,
+                starts_at = excluded.starts_at,
+                ends_at = excluded.ends_at,
+                attendees_json = excluded.attendees_json,
+                raw_context_json = excluded.raw_context_json,
+                state = excluded.state,
+                selected_automatically = excluded.selected_automatically,
+                match_reason = excluded.match_reason,
+                confidence = excluded.confidence,
+                updated_at = excluded.updated_at
+            """
+        ) { statement, sql in
+            try bind(match.id, at: 1, in: statement, sql: sql)
+            try bind(match.meetingID, at: 2, in: statement, sql: sql)
+            try bind(match.calendarEventID, at: 3, in: statement, sql: sql)
+            try bind(match.title, at: 4, in: statement, sql: sql)
+            try bind(match.startsAt, at: 5, in: statement, sql: sql)
+            try bind(match.endsAt, at: 6, in: statement, sql: sql)
+            try bind(match.attendeesJSON, at: 7, in: statement, sql: sql)
+            try bind(match.rawContextJSON, at: 8, in: statement, sql: sql)
+            try bind(match.state.rawValue, at: 9, in: statement, sql: sql)
+            try bind(match.selectedAutomatically ? 1 : 0, at: 10, in: statement, sql: sql)
+            try bind(match.matchReason, at: 11, in: statement, sql: sql)
+            try bind(match.confidence, at: 12, in: statement, sql: sql)
+            try bind(match.createdAt, at: 13, in: statement, sql: sql)
+            try bind(match.updatedAt, at: 14, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func meetingCalendarMatches(
+        meetingID: UUID,
+        state: BarnOwlMeetingCalendarMatchState? = nil
+    ) throws -> [BarnOwlMeetingCalendarMatchRecord] {
+        let sql: String
+        if state == nil {
+            sql = "SELECT * FROM meeting_calendar_matches WHERE meeting_id = ? ORDER BY updated_at DESC, created_at DESC"
+        } else {
+            sql = "SELECT * FROM meeting_calendar_matches WHERE meeting_id = ? AND state = ? ORDER BY updated_at DESC, created_at DESC"
+        }
+        return try withStatement(sql) { statement, sql in
+            try bind(meetingID, at: 1, in: statement, sql: sql)
+            if let state {
+                try bind(state.rawValue, at: 2, in: statement, sql: sql)
+            }
+            var matches: [BarnOwlMeetingCalendarMatchRecord] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                matches.append(try readMeetingCalendarMatch(statement))
+            }
+            return matches
+        }
+    }
+
+    public func meetingCalendarMatch(id: UUID) throws -> BarnOwlMeetingCalendarMatchRecord? {
+        try withStatement("SELECT * FROM meeting_calendar_matches WHERE id = ?") { statement, sql in
+            try bind(id, at: 1, in: statement, sql: sql)
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return nil
+            }
+            return try readMeetingCalendarMatch(statement)
         }
     }
 
@@ -2311,6 +2385,7 @@ private extension BarnOwlDatabase {
             realtimeStatus: realtimeStatus,
             meetingFacts: facts,
             speakerMappings: Self.speakerMappings(from: meeting.metadataJSON, outputs: outputs),
+            calendarContext: calendarContext,
             externalContextItems: context,
             generatedNotes: markdown,
             summary: summary,
@@ -2480,6 +2555,17 @@ private extension BarnOwlDatabase {
             try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
             do {
                 try execute(schemaV14SQL, database: database)
+                try execute("PRAGMA user_version = 14", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 15 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV15SQL, database: database)
                 try execute("PRAGMA user_version = \(latestSchemaVersion)", database: database)
                 try execute("COMMIT", database: database)
             } catch {
@@ -2755,6 +2841,12 @@ private extension BarnOwlDatabase {
         if version < 14 {
             try transaction {
                 try execute(Self.schemaV14SQL)
+                try execute("PRAGMA user_version = 14")
+            }
+        }
+        if version < 15 {
+            try transaction {
+                try execute(Self.schemaV15SQL)
                 try execute("PRAGMA user_version = \(Self.latestSchemaVersion)")
             }
         }
@@ -3060,6 +3152,25 @@ private extension BarnOwlDatabase {
             rawContextJSON: columnString(statement, 7),
             createdAt: columnRequiredDate(statement, 8),
             updatedAt: columnRequiredDate(statement, 9)
+        )
+    }
+
+    func readMeetingCalendarMatch(_ statement: OpaquePointer) throws -> BarnOwlMeetingCalendarMatchRecord {
+        BarnOwlMeetingCalendarMatchRecord(
+            id: try columnRequiredUUID(statement, 0),
+            meetingID: try columnRequiredUUID(statement, 1),
+            calendarEventID: columnString(statement, 2),
+            title: columnString(statement, 3),
+            startsAt: columnDate(statement, 4),
+            endsAt: columnDate(statement, 5),
+            attendeesJSON: columnString(statement, 6),
+            rawContextJSON: columnString(statement, 7),
+            state: BarnOwlMeetingCalendarMatchState(rawValue: columnRequiredString(statement, 8)) ?? .candidate,
+            selectedAutomatically: sqlite3_column_int(statement, 9) != 0,
+            matchReason: columnString(statement, 10),
+            confidence: columnDouble(statement, 11),
+            createdAt: columnRequiredDate(statement, 12),
+            updatedAt: columnRequiredDate(statement, 13)
         )
     }
 
@@ -3957,5 +4068,30 @@ private extension BarnOwlDatabase {
 
     CREATE INDEX IF NOT EXISTS idx_meeting_export_events_cursor
         ON meeting_export_events(occurred_at, id);
+    """
+
+    static let schemaV15SQL = """
+    CREATE TABLE IF NOT EXISTS meeting_calendar_matches (
+        id TEXT PRIMARY KEY,
+        meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        calendar_event_id TEXT,
+        title TEXT,
+        starts_at REAL,
+        ends_at REAL,
+        attendees_json TEXT,
+        raw_context_json TEXT,
+        state TEXT NOT NULL,
+        selected_automatically INTEGER NOT NULL DEFAULT 0,
+        match_reason TEXT,
+        confidence REAL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_calendar_matches_event
+        ON meeting_calendar_matches(meeting_id, calendar_event_id);
+
+    CREATE INDEX IF NOT EXISTS idx_meeting_calendar_matches_state
+        ON meeting_calendar_matches(meeting_id, state, updated_at);
     """
 }

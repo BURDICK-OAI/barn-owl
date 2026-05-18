@@ -28,6 +28,7 @@ public struct BarnOwlMeetingState: Equatable, Identifiable, Sendable {
     public var realtimeStatus: String
     public var meetingFacts: MeetingFacts?
     public var speakerMappings: [String: String]
+    public var calendarContext: BarnOwlMeetingCalendarContextRecord?
     public var externalContextItems: [BarnOwlExternalContextItemRecord]
     public var generatedNotes: String
     public var summary: MeetingSummary?
@@ -48,6 +49,7 @@ public struct BarnOwlMeetingState: Equatable, Identifiable, Sendable {
         realtimeStatus: String = "",
         meetingFacts: MeetingFacts? = nil,
         speakerMappings: [String: String] = [:],
+        calendarContext: BarnOwlMeetingCalendarContextRecord? = nil,
         externalContextItems: [BarnOwlExternalContextItemRecord] = [],
         generatedNotes: String = "",
         summary: MeetingSummary? = nil,
@@ -67,6 +69,7 @@ public struct BarnOwlMeetingState: Equatable, Identifiable, Sendable {
         self.realtimeStatus = realtimeStatus
         self.meetingFacts = meetingFacts
         self.speakerMappings = speakerMappings
+        self.calendarContext = calendarContext
         self.externalContextItems = externalContextItems
         self.generatedNotes = generatedNotes
         self.summary = summary
@@ -145,6 +148,12 @@ public struct BarnOwlMeetingState: Equatable, Identifiable, Sendable {
             + artifacts.map(\.updatedAt))
             .max() ?? meeting.updatedAt
     }
+}
+
+public enum BarnOwlMeetingCalendarMatchState: String, Codable, Equatable, Sendable {
+    case candidate
+    case accepted
+    case rejected
 }
 
 public enum BarnOwlProcessingTimelineStep: String, Codable, CaseIterable, Equatable, Sendable {
@@ -744,6 +753,55 @@ public struct BarnOwlMeetingCalendarContextRecord: Equatable, Identifiable, Send
         self.endsAt = endsAt
         self.attendeesJSON = attendeesJSON
         self.rawContextJSON = rawContextJSON
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlMeetingCalendarMatchRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var meetingID: UUID
+    public var calendarEventID: String?
+    public var title: String?
+    public var startsAt: Date?
+    public var endsAt: Date?
+    public var attendeesJSON: String?
+    public var rawContextJSON: String?
+    public var state: BarnOwlMeetingCalendarMatchState
+    public var selectedAutomatically: Bool
+    public var matchReason: String?
+    public var confidence: Double?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        meetingID: UUID,
+        calendarEventID: String? = nil,
+        title: String? = nil,
+        startsAt: Date? = nil,
+        endsAt: Date? = nil,
+        attendeesJSON: String? = nil,
+        rawContextJSON: String? = nil,
+        state: BarnOwlMeetingCalendarMatchState = .candidate,
+        selectedAutomatically: Bool = false,
+        matchReason: String? = nil,
+        confidence: Double? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.meetingID = meetingID
+        self.calendarEventID = calendarEventID
+        self.title = title
+        self.startsAt = startsAt
+        self.endsAt = endsAt
+        self.attendeesJSON = attendeesJSON
+        self.rawContextJSON = rawContextJSON
+        self.state = state
+        self.selectedAutomatically = selectedAutomatically
+        self.matchReason = matchReason
+        self.confidence = confidence
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

@@ -35,6 +35,10 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case jobsDismiss = "jobs_dismiss"
     case summariesRetry = "summaries_retry"
     case durabilityRepair = "durability_repair"
+    case calendarContextList = "calendar_context_list"
+    case calendarContextAttach = "calendar_context_attach"
+    case calendarContextAccept = "calendar_context_accept"
+    case calendarContextReject = "calendar_context_reject"
     case contextList = "context_list"
     case contextAccept = "context_accept"
     case contextIgnore = "context_ignore"
@@ -83,6 +87,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var latest: Bool?
     public var jobID: UUID?
     public var contextItemID: UUID?
+    public var calendarMatchID: UUID?
+    public var calendarContextJSON: String?
+    public var calendarContextState: String?
+    public var selectedAutomatically: Bool?
     public var confirmed: Bool?
     public var outputPath: String?
     public var all: Bool?
@@ -135,6 +143,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         latest: Bool? = nil,
         jobID: UUID? = nil,
         contextItemID: UUID? = nil,
+        calendarMatchID: UUID? = nil,
+        calendarContextJSON: String? = nil,
+        calendarContextState: String? = nil,
+        selectedAutomatically: Bool? = nil,
         confirmed: Bool? = nil,
         outputPath: String? = nil,
         all: Bool? = nil,
@@ -186,6 +198,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.latest = latest
         self.jobID = jobID
         self.contextItemID = contextItemID
+        self.calendarMatchID = calendarMatchID
+        self.calendarContextJSON = calendarContextJSON
+        self.calendarContextState = calendarContextState
+        self.selectedAutomatically = selectedAutomatically
         self.confirmed = confirmed
         self.outputPath = outputPath
         self.all = all
@@ -1653,6 +1669,46 @@ public struct BarnOwlMeetingExportEventBatch: Codable, Equatable, Sendable {
     }
 }
 
+public struct BarnOwlControlCalendarMatch: Codable, Equatable, Sendable {
+    public var id: UUID
+    public var meetingID: UUID
+    public var calendarEventID: String?
+    public var title: String?
+    public var startsAt: Date?
+    public var endsAt: Date?
+    public var attendees: [String]
+    public var state: String
+    public var selectedAutomatically: Bool
+    public var matchReason: String?
+    public var confidence: Double?
+
+    public init(
+        id: UUID,
+        meetingID: UUID,
+        calendarEventID: String? = nil,
+        title: String? = nil,
+        startsAt: Date? = nil,
+        endsAt: Date? = nil,
+        attendees: [String] = [],
+        state: String,
+        selectedAutomatically: Bool,
+        matchReason: String? = nil,
+        confidence: Double? = nil
+    ) {
+        self.id = id
+        self.meetingID = meetingID
+        self.calendarEventID = calendarEventID
+        self.title = title
+        self.startsAt = startsAt
+        self.endsAt = endsAt
+        self.attendees = attendees
+        self.state = state
+        self.selectedAutomatically = selectedAutomatically
+        self.matchReason = matchReason
+        self.confidence = confidence
+    }
+}
+
 public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var ok: Bool
     public var message: String
@@ -1690,6 +1746,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var notes: String?
     public var summary: String?
     public var contextItems: [BarnOwlControlContextItem]?
+    public var calendarMatches: [BarnOwlControlCalendarMatch]?
     public var actions: [String]?
     public var decisions: [String]?
     public var participants: [String]?
@@ -1751,6 +1808,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         notes: String? = nil,
         summary: String? = nil,
         contextItems: [BarnOwlControlContextItem]? = nil,
+        calendarMatches: [BarnOwlControlCalendarMatch]? = nil,
         actions: [String]? = nil,
         decisions: [String]? = nil,
         participants: [String]? = nil,
@@ -1811,6 +1869,7 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.notes = notes
         self.summary = summary
         self.contextItems = contextItems
+        self.calendarMatches = calendarMatches
         self.actions = actions
         self.decisions = decisions
         self.participants = participants

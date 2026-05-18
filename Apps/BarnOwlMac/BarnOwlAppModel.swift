@@ -3017,6 +3017,7 @@ final class BarnOwlAppModel: ObservableObject {
         notes: String? = nil,
         summary: String? = nil,
         contextItems: [BarnOwlControlContextItem]? = nil,
+        calendarMatches: [BarnOwlControlCalendarMatch]? = nil,
         actions: [String]? = nil,
         decisions: [String]? = nil,
         participants: [String]? = nil,
@@ -3092,6 +3093,7 @@ final class BarnOwlAppModel: ObservableObject {
             notes: notes,
             summary: summary,
             contextItems: contextItems,
+            calendarMatches: calendarMatches,
             actions: actions,
             decisions: decisions,
             participants: participants,
@@ -4979,6 +4981,113 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
+    func controlCalendarContextListResponse(meetingID: UUID) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let matches = try await database.meetingCalendarMatches(meetingID: meetingID)
+            return controlStatusResponse(
+                message: matches.isEmpty ? "No Barn Owl calendar context matches found." : "Barn Owl calendar context matches.",
+                calendarMatches: matches.map(Self.controlCalendarMatch(from:)),
+                activeMeetingID: meetingID
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not load calendar context matches.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlCalendarContextAttachResponse(
+        meetingID: UUID,
+        contextJSON: String,
+        state rawState: String?,
+        selectedAutomatically: Bool
+    ) async -> BarnOwlControlResponse {
+        let state = rawState.flatMap(BarnOwlMeetingCalendarMatchState.init(rawValue:)) ?? .candidate
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let data = contextJSON.data(using: .utf8),
+              let context = try? decoder.decode(CalendarMeetingContext.self, from: data)
+        else {
+            return controlStatusResponse(
+                ok: false,
+                message: "calendar_context_attach requires valid CalendarMeetingContext JSON.",
+                error: "invalid_calendar_context"
+            )
+        }
+
+        do {
+            let database = try makeDatabase()
+            let now = Date()
+            let attendeesData = try JSONEncoder().encode(context.attendees)
+            let attendeesJSON = String(decoding: attendeesData, as: UTF8.self)
+            try await database.upsertMeetingCalendarMatch(BarnOwlMeetingCalendarMatchRecord(
+                meetingID: meetingID,
+                calendarEventID: context.id,
+                title: context.title,
+                startsAt: context.startsAt,
+                endsAt: context.endsAt,
+                attendeesJSON: attendeesJSON,
+                rawContextJSON: contextJSON,
+                state: state,
+                selectedAutomatically: selectedAutomatically,
+                matchReason: context.matchReason,
+                confidence: context.confidence,
+                createdAt: now,
+                updatedAt: now
+            ))
+            if state == .accepted {
+                await persistCalendarContext(context, meetingID: meetingID)
+            }
+            let matches = try await database.meetingCalendarMatches(meetingID: meetingID)
+            return controlStatusResponse(
+                message: state == .accepted ? "Accepted Barn Owl calendar context." : "Stored Barn Owl calendar context candidate.",
+                calendarMatches: matches.map(Self.controlCalendarMatch(from:)),
+                activeMeetingID: meetingID
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not attach calendar context.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlCalendarContextSelectionResponse(
+        matchID: UUID,
+        state: BarnOwlMeetingCalendarMatchState
+    ) async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            guard var match = try await database.meetingCalendarMatch(id: matchID) else {
+                return controlStatusResponse(ok: false, message: "Calendar match not found.", error: "calendar_match_not_found")
+            }
+            match.state = state
+            match.selectedAutomatically = false
+            match.updatedAt = Date()
+            try await database.upsertMeetingCalendarMatch(match)
+            if state == .accepted,
+               let context = Self.calendarContext(from: match) {
+                await persistCalendarContext(context, meetingID: match.meetingID)
+            }
+            let matches = try await database.meetingCalendarMatches(meetingID: match.meetingID)
+            return controlStatusResponse(
+                message: state == .accepted ? "Accepted Barn Owl calendar context match." : "Rejected Barn Owl calendar context match.",
+                calendarMatches: matches.map(Self.controlCalendarMatch(from:)),
+                activeMeetingID: match.meetingID
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not update calendar context match.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
     func controlMeetingActionsResponse(meetingID: UUID) async -> BarnOwlControlResponse {
         do {
             let database = try makeDatabase()
@@ -6488,7 +6597,10 @@ final class BarnOwlAppModel: ObservableObject {
             let transcript = state.transcriptSegments
                 .map { "\($0.speakerLabel ?? "Speaker"): \($0.text)" }
                 .joined(separator: "\n")
-            let freeformContext = acceptedItems.map(\.body).joined(separator: "\n")
+            let calendarLines = state.calendarContext
+                .flatMap(Self.calendarContext(from:))?
+                .contextLines ?? []
+            let freeformContext = (calendarLines + acceptedItems.map(\.body)).joined(separator: "\n")
             let updatedFacts = MeetingFactsExtractor().extract(
                 transcript: transcript,
                 freeformContext: freeformContext,
@@ -7593,8 +7705,10 @@ final class BarnOwlAppModel: ObservableObject {
         let transcript = state.transcriptSegments
             .map { "\($0.speakerLabel ?? "Speaker"): \($0.text)" }
             .joined(separator: "\n")
-        let freeformContext = state.externalContextItems
-            .map(\.body)
+        let calendarLines = state.calendarContext
+            .flatMap(Self.calendarContext(from:))?
+            .contextLines ?? []
+        let freeformContext = (calendarLines + state.externalContextItems.map(\.body))
             .joined(separator: "\n")
         var repairSeed = state.meetingFacts ?? MeetingFacts(title: canonicalTitle)
         repairSeed.title = canonicalTitle
@@ -8561,6 +8675,71 @@ final class BarnOwlAppModel: ObservableObject {
             attendees: attendees,
             confidence: 0.70,
             matchReason: "saved calendar context"
+        )
+    }
+
+    private nonisolated static func calendarContext(from record: BarnOwlMeetingCalendarMatchRecord) -> CalendarMeetingContext? {
+        if let rawContextJSON = record.rawContextJSON,
+           let data = rawContextJSON.data(using: .utf8) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let decoded = try? decoder.decode(CalendarMeetingContext.self, from: data) {
+                return decoded
+            }
+        }
+
+        guard let title = record.title,
+              let startsAt = record.startsAt,
+              let endsAt = record.endsAt
+        else {
+            return nil
+        }
+
+        let attendees: [String]
+        if let attendeesJSON = record.attendeesJSON,
+           let data = attendeesJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            attendees = decoded
+        } else {
+            attendees = []
+        }
+
+        return CalendarMeetingContext(
+            id: record.calendarEventID ?? record.id.uuidString,
+            provider: "calendar",
+            title: title,
+            startsAt: startsAt,
+            endsAt: endsAt,
+            attendees: attendees,
+            confidence: record.confidence ?? 0.70,
+            matchReason: record.matchReason ?? "saved calendar context candidate"
+        )
+    }
+
+    private nonisolated static func controlCalendarMatch(
+        from record: BarnOwlMeetingCalendarMatchRecord
+    ) -> BarnOwlControlCalendarMatch {
+        let attendees: [String]
+        if let attendeesJSON = record.attendeesJSON,
+           let data = attendeesJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            attendees = decoded
+        } else {
+            attendees = []
+        }
+
+        return BarnOwlControlCalendarMatch(
+            id: record.id,
+            meetingID: record.meetingID,
+            calendarEventID: record.calendarEventID,
+            title: record.title,
+            startsAt: record.startsAt,
+            endsAt: record.endsAt,
+            attendees: attendees,
+            state: record.state.rawValue,
+            selectedAutomatically: record.selectedAutomatically,
+            matchReason: record.matchReason,
+            confidence: record.confidence
         )
     }
 

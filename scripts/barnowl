@@ -1059,6 +1059,22 @@ def build_parser() -> argparse.ArgumentParser:
     durability_repair = subparsers.add_parser("repair-durability")
     add_format(durability_repair)
 
+    calendar_context = subparsers.add_parser("calendar-context")
+    calendar_context_subparsers = calendar_context.add_subparsers(dest="calendar_context_command", required=True)
+    calendar_context_list = calendar_context_subparsers.add_parser("list")
+    calendar_context_list.add_argument("--session", required=True)
+    add_format(calendar_context_list)
+    calendar_context_attach = calendar_context_subparsers.add_parser("attach")
+    calendar_context_attach.add_argument("context_json", nargs="?")
+    calendar_context_attach.add_argument("--session", required=True)
+    calendar_context_attach.add_argument("--state", choices=["candidate", "accepted", "rejected"], default="candidate")
+    calendar_context_attach.add_argument("--selected-automatically", action="store_true")
+    add_format(calendar_context_attach)
+    for name in ["accept", "reject"]:
+        leaf = calendar_context_subparsers.add_parser(name)
+        leaf.add_argument("match_id")
+        add_format(leaf)
+
     chat = subparsers.add_parser("chat")
     chat.add_argument("query")
     add_format(chat)
@@ -1370,6 +1386,28 @@ def main(argv: list[str]) -> int:
     elif args.command == "repair-durability":
         payload = {
             "command": "durability_repair",
+            "format": output_format,
+        }
+    elif args.command == "calendar-context" and args.calendar_context_command == "list":
+        payload = {
+            "command": "calendar_context_list",
+            "sessionID": args.session,
+            "format": output_format,
+        }
+    elif args.command == "calendar-context" and args.calendar_context_command == "attach":
+        context_json = args.context_json if args.context_json is not None else sys.stdin.read()
+        payload = {
+            "command": "calendar_context_attach",
+            "sessionID": args.session,
+            "calendarContextJSON": context_json,
+            "calendarContextState": args.state,
+            "selectedAutomatically": args.selected_automatically,
+            "format": output_format,
+        }
+    elif args.command == "calendar-context" and args.calendar_context_command in {"accept", "reject"}:
+        payload = {
+            "command": f"calendar_context_{args.calendar_context_command}",
+            "calendarMatchID": args.match_id,
             "format": output_format,
         }
     elif args.command == "chat":

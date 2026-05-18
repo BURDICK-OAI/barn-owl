@@ -956,6 +956,64 @@ func deletingMeetingCalendarContextKeepsMeetingButRemovesContext() async throws 
 }
 
 @Test
+func calendarRepairMatchesPersistStateAndAcceptedMeetingStateContext() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001311")!
+    let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000001312")!
+    let contextID = UUID(uuidString: "00000000-0000-0000-0000-000000001313")!
+    let now = Date(timeIntervalSince1970: 1_800_003_100)
+
+    try await database.upsertMeeting(makeDatabaseMeeting(id: meetingID, title: "Calendar Repair", createdAt: now, updatedAt: now))
+    let match = BarnOwlMeetingCalendarMatchRecord(
+        id: matchID,
+        meetingID: meetingID,
+        calendarEventID: "event-repair",
+        title: "OpenAI <> Moderna",
+        startsAt: now,
+        endsAt: now.addingTimeInterval(1_800),
+        attendeesJSON: #"["stephane@example.com"]"#,
+        rawContextJSON: #"{"provider":"calendar"}"#,
+        state: .candidate,
+        selectedAutomatically: true,
+        matchReason: "single bounded overlap",
+        confidence: 0.91,
+        createdAt: now,
+        updatedAt: now
+    )
+    try await database.upsertMeetingCalendarMatch(match)
+
+    let candidate = try #require(await database.meetingCalendarMatch(id: matchID))
+    #expect(candidate.state == .candidate)
+    #expect(candidate.selectedAutomatically)
+    #expect(try await database.meetingCalendarMatches(meetingID: meetingID, state: .candidate) == [match])
+
+    var accepted = candidate
+    accepted.state = .accepted
+    accepted.selectedAutomatically = false
+    accepted.updatedAt = now.addingTimeInterval(5)
+    try await database.upsertMeetingCalendarMatch(accepted)
+    try await database.upsertMeetingCalendarContext(BarnOwlMeetingCalendarContextRecord(
+        id: contextID,
+        meetingID: meetingID,
+        calendarEventID: accepted.calendarEventID,
+        title: accepted.title,
+        startsAt: accepted.startsAt,
+        endsAt: accepted.endsAt,
+        attendeesJSON: accepted.attendeesJSON,
+        rawContextJSON: accepted.rawContextJSON,
+        createdAt: now,
+        updatedAt: accepted.updatedAt
+    ))
+
+    let acceptedMatches = try await database.meetingCalendarMatches(meetingID: meetingID, state: .accepted)
+    let state = try #require(await database.meetingState(id: meetingID))
+
+    #expect(acceptedMatches == [accepted])
+    #expect(state.calendarContext?.id == contextID)
+    #expect(state.calendarContext?.title == "OpenAI <> Moderna")
+}
+
+@Test
 func enrichmentSourcesPersistPerOwnerAndKeepStatusMetadata() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_003_500)
