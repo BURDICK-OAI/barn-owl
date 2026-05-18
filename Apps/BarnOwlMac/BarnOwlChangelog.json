@@ -1,0 +1,35 @@
+[
+  {
+    "version": "0.1.0",
+    "build": "29",
+    "date": "2026-05-18",
+    "title": "Settings clarity and release history",
+    "highlights": [
+      "Settings now shows useful release TLDR notes all the time, with the latest release visible first and earlier releases available in a bounded scrolling history.",
+      "Enrichment-source examples and active connection rows are much denser, so source setup and health are easier to scan without losing important status detail.",
+      "Recent concept-memory display filters more low-signal transcript residue, reducing junk concepts that should not be treated as durable knowledge."
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "build": "28",
+    "date": "2026-05-17",
+    "title": "Recurring concept cleanup",
+    "highlights": [
+      "Automatic recurring-concept enrichment no longer promotes ambiguous single-token transcript leftovers into durable memory on its own.",
+      "Suppressed Context Library rows stay hidden from active listings while still remaining available to audit-oriented flows.",
+      "Regression coverage was added for observed junk seeds such as API, Hey, MIT, Nice, Very, and XYZ."
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "build": "27",
+    "date": "2026-05-17",
+    "title": "Grounded meeting-fact precision",
+    "highlights": [
+      "Meeting fact extraction keeps structured accepted context line-oriented instead of flattening separate evidence lines into one blob.",
+      "Durable knowledge explanations no longer leak into customer or organization facts as if they were meeting participants.",
+      "Markdown regeneration keeps accepted context synchronized without recreating flattened duplicate context blocks."
+    ]
+  }
+]

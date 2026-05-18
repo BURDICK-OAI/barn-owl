@@ -16,6 +16,8 @@ APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$
 APP_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ROOT_DIR/Apps/BarnOwlMac/Info.plist")"
 SOURCE_SHA256="$(/usr/bin/shasum -a 256 "$SOURCE_ZIP" | awk '{print $1}')"
 APP_SHA256="$(/usr/bin/shasum -a 256 "$APP_ZIP" | awk '{print $1}')"
+RELEASE_NOTES="$("$ROOT_DIR/scripts/changelog-notes.sh" "$APP_VERSION" "$APP_BUILD" json)"
+RELEASE_NOTES_HISTORY="$("$ROOT_DIR/scripts/changelog-notes.sh" "$APP_VERSION" "$APP_BUILD" history-json)"
 PACKAGED_AT="$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
 if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   GIT_AVAILABLE="true"
@@ -77,7 +79,8 @@ cat >"$UPDATE_MANIFEST_PATH" <<EOF
   "build": "$APP_BUILD",
   "archive_url": "$(basename "$APP_ZIP")",
   "sha256": "$APP_SHA256",
-  "notes": "Barn Owl $APP_VERSION ($APP_BUILD)"
+  "notes": $RELEASE_NOTES,
+  "release_notes": $RELEASE_NOTES_HISTORY
 }
 EOF
 

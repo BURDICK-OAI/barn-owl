@@ -56,46 +56,8 @@ fi
 RELEASE_BASE_URL="https://github.com/${REPO_SLUG}/releases/download/${RELEASE_TAG}"
 
 actual_app_sha="$(/usr/bin/shasum -a 256 "$DIST_DIR/BarnOwl.app.zip" | awk '{print $1}')"
-release_notes_json="$(
-  /usr/bin/python3 - "$UPDATE_DIR/BarnOwl-update-manifest.json" "$APP_VERSION" "$APP_BUILD" <<'PY'
-import json
-import pathlib
-import sys
-
-manifest_path = pathlib.Path(sys.argv[1])
-version = sys.argv[2]
-build = sys.argv[3]
-latest_notes = f"Barn Owl {version} ({build})"
-
-entries = [{
-    "version": version,
-    "build": build,
-    "notes": latest_notes,
-}]
-seen = {(version, build)}
-
-try:
-    payload = json.loads(manifest_path.read_text())
-except (FileNotFoundError, json.JSONDecodeError):
-    payload = {}
-
-for entry in payload.get("release_notes", []):
-    note_version = str(entry.get("version", "")).strip()
-    note_build = str(entry.get("build", "")).strip()
-    note_text = str(entry.get("notes", "")).strip()
-    key = (note_version, note_build)
-    if not note_version or not note_build or not note_text or key in seen:
-        continue
-    entries.append({
-        "version": note_version,
-        "build": note_build,
-        "notes": note_text,
-    })
-    seen.add(key)
-
-print(json.dumps(entries, indent=2))
-PY
-)"
+release_notes="$("$ROOT_DIR/scripts/changelog-notes.sh" "$APP_VERSION" "$APP_BUILD" json)"
+release_notes_json="$("$ROOT_DIR/scripts/changelog-notes.sh" "$APP_VERSION" "$APP_BUILD" history-json)"
 
 cat >"$UPDATE_DIR/BarnOwl-update-manifest.json" <<EOF
 {
@@ -103,7 +65,7 @@ cat >"$UPDATE_DIR/BarnOwl-update-manifest.json" <<EOF
   "build": "$APP_BUILD",
   "archive_url": "$RELEASE_BASE_URL/BarnOwl.app.zip",
   "sha256": "$actual_app_sha",
-  "notes": "Barn Owl $APP_VERSION ($APP_BUILD)",
+  "notes": $release_notes,
   "release_notes": $release_notes_json
 }
 EOF
