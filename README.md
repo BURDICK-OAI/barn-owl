@@ -150,14 +150,17 @@ Send those files only. Do not send the raw working folder. See [docs/distributio
 To refresh the shareable zips after making changes, rerun `scripts/package-all.sh`.
 It replaces the files in `dist/` with packages built from the current source.
 
-To publish the GitHub-backed update feed, run:
+Before publishing, add the latest release TLDR entry to
+`Apps/BarnOwlMac/BarnOwlChangelog.json`. Packaging and GitHub update publishing
+reuse that entry for the in-app release notes feed. Then run:
 
 ```sh
 scripts/publish-git-update.sh
 git add Updates/BarnOwl
 git commit
 git push origin main
-gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+release_notes="$(scripts/changelog-notes.sh VERSION BUILD text)"
+gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS --notes "$release_notes"
 ```
 
 Barn Owl defaults to this manifest URL for installed apps:

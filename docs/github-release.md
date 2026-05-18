@@ -11,7 +11,12 @@ Local update manifests are for development and smoke testing only.
    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Apps/BarnOwlMac/Info.plist
    ```
 
-2. Build and verify the release artifacts. Developer ID/notarized releases are
+2. Add or update the latest release entry in
+   `Apps/BarnOwlMac/BarnOwlChangelog.json`. Packaging and GitHub update
+   publishing require that changelog entry so Barn Owl Settings and the GitHub
+   Release page describe what changed.
+
+3. Build and verify the release artifacts. Developer ID/notarized releases are
    preferred, but internal updates may use a stable local signing identity when
    Developer ID is unavailable:
 
@@ -20,7 +25,7 @@ Local update manifests are for development and smoke testing only.
    scripts/package-all.sh
    ```
 
-3. Generate the tracked GitHub update manifest:
+4. Generate the tracked GitHub update manifest:
 
    ```sh
    BARNOWL_CODESIGN_IDENTITY="Barn Owl Local Code Signing" \
@@ -28,7 +33,7 @@ Local update manifests are for development and smoke testing only.
    scripts/publish-git-update.sh
    ```
 
-4. Commit and push the source and `Updates/BarnOwl` manifest changes:
+5. Commit and push the source and `Updates/BarnOwl` manifest changes:
 
    ```sh
    git add Apps/BarnOwlMac/Info.plist Updates/BarnOwl
@@ -36,16 +41,17 @@ Local update manifests are for development and smoke testing only.
    git push origin main
    ```
 
-5. Create the GitHub Release and attach the app artifacts:
+6. Create the GitHub Release and attach the app artifacts:
 
    ```sh
+   release_notes="$(scripts/changelog-notes.sh 0.1.0 12 text)"
    gh release create v0.1.0-build.12 \
      dist/BarnOwl.app.zip \
      dist/BarnOwl-source-handoff.zip \
      dist/BarnOwl-release-manifest.json \
      dist/SHA256SUMS \
      --title "Barn Owl 0.1.0 build 12" \
-     --notes "Internal Barn Owl release."
+     --notes "$release_notes"
    ```
 
 Installed apps check this manifest by default:

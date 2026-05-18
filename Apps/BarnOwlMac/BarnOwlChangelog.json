@@ -31,5 +31,48 @@
       "Durable knowledge explanations no longer leak into customer or organization facts as if they were meeting participants.",
       "Markdown regeneration keeps accepted context synchronized without recreating flattened duplicate context blocks."
     ]
+  },
+  {
+    "version": "0.1.0",
+    "build": "25",
+    "date": "2026-05-17",
+    "title": "Priority enrichment source planning",
+    "highlights": [
+      "Barn Owl gained clearer product and verification guidance for priority enrichment sources, including how higher-value context should be assembled and evaluated.",
+      "CLI and Codex-facing documentation were tightened so enrichment setup, QA, and handoff flows are easier to execute consistently.",
+      "Focused tests and source-handoff verification were expanded around the release workflow."
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "build": "24",
+    "date": "2026-05-17",
+    "title": "Transcript durability and context grounding",
+    "highlights": [
+      "Realtime hinting, transcript context handling, and meeting-fact extraction were strengthened so trusted context stays better aligned with final notes and local artifacts.",
+      "Persistence and local library update paths were tightened to keep regenerated content synchronized across stored meeting outputs.",
+      "The app, CLI, and test coverage expanded around repair, enrichment, and production-readiness workflows."
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "build": "22",
+    "date": "2026-05-17",
+    "title": "Meeting evidence export and control surface",
+    "highlights": [
+      "Barn Owl added a richer control/export surface for meeting evidence, allowing downstream consumers and operator workflows to inspect more structured recording state.",
+      "Settings, recorder, and menu-bar experiences were broadened alongside control-command and persistence support.",
+      "The release included substantial architecture docs and automated coverage for evidence export, enrichment operations, and local durability."
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "build": "21",
+    "date": "2026-05-17",
+    "title": "Packaging hardening",
+    "highlights": [
+      "Packaging scripts were tightened for Barn Owl app distribution and source handoff generation.",
+      "Release artifact creation was made more resilient so later update-feed work had a cleaner base."
+    ]
   }
 ]

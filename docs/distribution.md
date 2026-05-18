@@ -219,14 +219,17 @@ ad hoc. In Settings, point Barn Owl at the manifest URL or local manifest path.
 The app checks on launch, periodically while idle, and when the user clicks
 Update.
 
-For the default GitHub-backed feed, run:
+For the default GitHub-backed feed, first add the latest release TLDR entry to
+`Apps/BarnOwlMac/BarnOwlChangelog.json`. The update manifest and GitHub Release
+notes both reuse that source. Then run:
 
 ```sh
 scripts/publish-git-update.sh
 git add Updates/BarnOwl
 git commit
 git push origin main
-gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS
+release_notes="$(scripts/changelog-notes.sh VERSION BUILD text)"
+gh release create v0.1.0-build.BUILD dist/BarnOwl.app.zip dist/BarnOwl-source-handoff.zip dist/BarnOwl-release-manifest.json dist/SHA256SUMS --notes "$release_notes"
 ```
 
 Installed apps default to:

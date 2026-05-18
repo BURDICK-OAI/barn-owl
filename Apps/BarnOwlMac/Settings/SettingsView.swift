@@ -730,10 +730,7 @@ struct SettingsView: View {
                     .font(.caption.weight(.semibold))
             }
 
-            Text(note.notes)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            releaseNoteBody(note.notes)
         }
     }
 
@@ -741,14 +738,62 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Barn Owl \(note.version) (\(note.build))")
                 .font(.caption.weight(.semibold))
-            Text(note.notes)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            releaseNoteBody(note.notes)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func releaseNoteBody(_ notes: String) -> some View {
+        let parsed = parseReleaseNoteBody(notes)
+        VStack(alignment: .leading, spacing: 4) {
+            if let title = parsed.title {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if parsed.highlights.isEmpty {
+                Text(parsed.fallback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(parsed.highlights, id: \.self) { highlight in
+                    HStack(alignment: .top, spacing: 5) {
+                        Text("-")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                        Text(highlight)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private func parseReleaseNoteBody(_ notes: String) -> (title: String?, highlights: [String], fallback: String) {
+        let lines = notes
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard let firstLine = lines.first else {
+            return (nil, [], "")
+        }
+
+        let title = firstLine.hasPrefix("- ") ? nil : firstLine
+        let bulletLines = (title == nil ? lines : Array(lines.dropFirst()))
+        let highlights = bulletLines.compactMap { line -> String? in
+            guard line.hasPrefix("- ") else { return nil }
+            return String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return (title, highlights, notes.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private var header: some View {

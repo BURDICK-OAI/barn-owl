@@ -14,6 +14,12 @@ fi
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
 ARCHIVE_PATH="$UPDATE_DIR/BarnOwl-${VERSION}-${BUILD}.zip"
+if RELEASE_NOTES="$("$ROOT_DIR/scripts/changelog-notes.sh" "$VERSION" "$BUILD" json 2>/dev/null)"; then
+  RELEASE_NOTES_HISTORY="$("$ROOT_DIR/scripts/changelog-notes.sh" "$VERSION" "$BUILD" history-json)"
+else
+  RELEASE_NOTES='"Local Barn Owl development build."'
+  RELEASE_NOTES_HISTORY="[]"
+fi
 
 /bin/mkdir -p "$UPDATE_DIR"
 "$ROOT_DIR/scripts/package-barnowl-resources.sh" "$APP_PATH"
@@ -32,7 +38,8 @@ SHA256="$(/usr/bin/shasum -a 256 "$ARCHIVE_PATH" | /usr/bin/awk '{print $1}')"
   "build": "$BUILD",
   "archive_url": "$ARCHIVE_PATH",
   "sha256": "$SHA256",
-  "notes": "Local Barn Owl development build."
+  "notes": $RELEASE_NOTES,
+  "release_notes": $RELEASE_NOTES_HISTORY
 }
 JSON
 
