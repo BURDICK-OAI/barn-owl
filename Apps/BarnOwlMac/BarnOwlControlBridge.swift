@@ -228,6 +228,20 @@ final class BarnOwlControlBridge: @unchecked Sendable {
             return await model.controlRecentMeetingsResponse(limit: command.limit ?? 10)
         case .meetingsSearch:
             return await model.controlSearchMeetingsResponse(query: command.query ?? "", limit: command.limit ?? 10)
+        case .meetingsEvidence:
+            return await model.controlMeetingEvidenceBatchResponse(
+                since: command.since,
+                cursor: command.cursor,
+                limit: command.limit ?? 100,
+                exportPolicy: command.exportPolicy,
+                includeTranscriptSegments: command.includeTranscriptSegments == true
+            )
+        case .meetingExportEvents:
+            return await model.controlMeetingExportEventBatchResponse(
+                since: command.since,
+                cursor: command.cursor,
+                limit: command.limit ?? 100
+            )
         case .meetingGet:
             guard let meetingID = command.meetingID ?? command.sessionID else {
                 return model.controlStatusResponse(ok: false, message: "meeting_get requires meetingID.", error: "missing_meeting_id")
@@ -258,6 +272,15 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 return model.controlStatusResponse(ok: false, message: "meeting_actions requires meetingID.", error: "missing_meeting_id")
             }
             return await model.controlMeetingActionsResponse(meetingID: meetingID)
+        case .meetingEvidence:
+            guard let meetingID = command.meetingID ?? command.sessionID else {
+                return model.controlStatusResponse(ok: false, message: "meeting_evidence requires meetingID.", error: "missing_meeting_id")
+            }
+            return await model.controlMeetingEvidenceResponse(
+                meetingID: meetingID,
+                exportPolicy: command.exportPolicy,
+                includeTranscriptSegments: command.includeTranscriptSegments == true
+            )
         case .meetingDelete:
             guard command.confirmed == true else {
                 return model.controlStatusResponse(ok: false, message: "meeting_delete requires confirmation.", error: "confirmation_required")

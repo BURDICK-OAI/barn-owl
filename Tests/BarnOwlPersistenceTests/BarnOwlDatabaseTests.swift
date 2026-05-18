@@ -2,6 +2,7 @@ import BarnOwlCore
 import BarnOwlPersistence
 import BarnOwlTranscription
 import Foundation
+import SQLite3
 import Testing
 
 @Test
@@ -22,6 +23,141 @@ func barnOwlDatabaseCreatesSchemaAndPersistsMeetingsAcrossReopen() async throws 
     let reloaded = try #require(await reopened.meeting(id: meeting.id))
 
     #expect(reloaded == meeting)
+}
+
+@Test
+func barnOwlDatabaseRepairsLegacyContextLibrarySchemaAndPreservesEntries() async throws {
+    let directory = try makeSQLiteTempDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let databaseURL = directory.appending(path: "barnowl.sqlite")
+    let entityID = UUID(uuidString: "00000000-0000-0000-0000-000000001241")!
+    let aliasID = UUID(uuidString: "00000000-0000-0000-0000-000000001242")!
+    try makeLegacyContextLibraryDatabase(
+        at: databaseURL,
+        entityID: entityID,
+        aliasID: aliasID
+    )
+
+    let database = try BarnOwlDatabase(url: databaseURL)
+    let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
+    let entity = try #require(await database.knowledgeEntity(
+        id: entityID,
+        ownerID: ownerID
+    ))
+    let aliases = try await database.knowledgeAliases(entityID: entityID)
+
+    #expect(try await database.schemaVersion() == BarnOwlDatabase.latestSchemaVersion)
+    #expect(entity.kind == "person")
+    #expect(entity.canonicalName == "Collin")
+    #expect(entity.normalizedCanonicalName == "collin")
+    #expect(entity.lifecycleStatus == .active)
+    #expect(aliases.map(\.id) == [aliasID])
+    #expect(aliases.map(\.alias) == ["Colin"])
+    #expect(aliases.map(\.normalizedAlias) == ["colin"])
+}
+
+@Test
+func barnOwlDatabaseLoadsMeetingsUpdatedSinceInDeterministicInclusiveOrder() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let before = Date(timeIntervalSince1970: 1_800_000_000)
+    let since = Date(timeIntervalSince1970: 1_800_000_100)
+    let sharedUpdatedAt = Date(timeIntervalSince1970: 1_800_000_200)
+
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000001210")!,
+        title: "Before Window",
+        createdAt: before,
+        updatedAt: before
+    ))
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000001211")!,
+        title: "Window Alpha",
+        createdAt: sharedUpdatedAt,
+        updatedAt: sharedUpdatedAt
+    ))
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000001212")!,
+        title: "Window Beta",
+        createdAt: sharedUpdatedAt,
+        updatedAt: sharedUpdatedAt
+    ))
+
+    let meetings = try await database.meetingsUpdated(since: since, limit: 10)
+
+    #expect(meetings.map(\.title) == ["Window Alpha", "Window Beta"])
+    #expect(meetings.map(\.updatedAt) == [sharedUpdatedAt, sharedUpdatedAt])
+}
+
+@Test
+func barnOwlDatabaseLoadsMeetingsStrictlyAfterCursorPosition() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let sharedUpdatedAt = Date(timeIntervalSince1970: 1_800_000_200)
+    let laterUpdatedAt = Date(timeIntervalSince1970: 1_800_000_300)
+    let alphaID = UUID(uuidString: "00000000-0000-0000-0000-000000001221")!
+
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: alphaID,
+        title: "Cursor Alpha",
+        createdAt: sharedUpdatedAt,
+        updatedAt: sharedUpdatedAt
+    ))
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000001222")!,
+        title: "Cursor Beta",
+        createdAt: sharedUpdatedAt,
+        updatedAt: sharedUpdatedAt
+    ))
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000001223")!,
+        title: "Cursor Gamma",
+        createdAt: laterUpdatedAt,
+        updatedAt: laterUpdatedAt
+    ))
+
+    let meetings = try await database.meetingsUpdated(
+        after: sharedUpdatedAt,
+        meetingID: alphaID,
+        limit: 10
+    )
+
+    #expect(meetings.map(\.title) == ["Cursor Beta", "Cursor Gamma"])
+}
+
+@Test
+func barnOwlDatabasePersistsMeetingExportEventsAndReadsCursorWindows() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001231")!
+    let sharedOccurredAt = Date(timeIntervalSince1970: 1_800_000_400)
+    let firstEventID = UUID(uuidString: "00000000-0000-0000-0000-000000001232")!
+
+    try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+        id: firstEventID,
+        type: .deleted,
+        meetingID: meetingID,
+        meetingStableKey: "barnowl:meeting:\(meetingID.uuidString)",
+        occurredAt: sharedOccurredAt,
+        tombstoneReason: "meeting_deleted"
+    ))
+    try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000001233")!,
+        type: .purged,
+        meetingID: meetingID,
+        meetingStableKey: "barnowl:meeting:\(meetingID.uuidString)",
+        occurredAt: sharedOccurredAt,
+        tombstoneReason: "temporary_audio_purged"
+    ))
+
+    let inclusive = try await database.meetingExportEvents(since: sharedOccurredAt, limit: 10)
+    let resumed = try await database.meetingExportEvents(
+        after: sharedOccurredAt,
+        eventID: firstEventID,
+        limit: 10
+    )
+
+    #expect(inclusive.map(\.type) == [.deleted, .purged])
+    #expect(resumed.map(\.type) == [.purged])
+    #expect(resumed.first?.tombstoneReason == "temporary_audio_purged")
 }
 
 @Test
@@ -298,7 +434,7 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
     ))
 
     let job = BarnOwlEnrichmentJobRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         conceptKey: "Rosalind",
         status: .supportedCandidate,
         summary: "Supported project.",
@@ -309,7 +445,7 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
     )
     try await database.upsertEnrichmentJob(job)
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind",
         summary: "Internal launch workstream.",
@@ -319,12 +455,12 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
         updatedAt: now
     ))
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
     try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         entityID: entity.id,
         alias: "Project Rosalind",
         confidence: 0.95,
@@ -332,7 +468,7 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
         updatedAt: now
     ))
     try await database.upsertKnowledgeMeetingLink(BarnOwlKnowledgeMeetingLinkRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         entityID: entity.id,
         meetingID: meetingID,
         evidenceJobID: job.id,
@@ -342,8 +478,8 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
 
     let aliases = try await database.knowledgeAliases(entityID: entity.id)
     let links = try await database.knowledgeMeetingLinks(entityID: entity.id)
-    let collinContext = try await database.durableKnowledgeContextLines(
-        ownerID: "collin",
+    let ownerContext = try await database.durableKnowledgeContextLines(
+        ownerID: "owner",
         transcript: "Dana: Project Rosalind remains on the pricing path."
     )
     let teammateContext = try await database.durableKnowledgeContextLines(
@@ -353,8 +489,11 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
 
     #expect(aliases.map(\.alias) == ["Project Rosalind"])
     #expect(links.map(\.meetingID) == [meetingID])
-    #expect(collinContext == ["Known project: Rosalind. Internal launch workstream."])
+    #expect(ownerContext == ["Known project: Rosalind. Internal launch workstream."])
     #expect(teammateContext.isEmpty)
+
+    try await database.deleteKnowledgeAliases(entityID: entity.id, ownerID: "owner")
+    #expect(try await database.knowledgeAliases(entityID: entity.id).isEmpty)
 }
 
 @Test
@@ -362,7 +501,7 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_004_125)
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind",
         summary: "Internal launch workstream.",
@@ -371,38 +510,38 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
         updatedAt: now
     ))
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
 
     let suppressed = try #require(await database.setKnowledgeEntityLifecycleStatus(
         id: entity.id,
-        ownerID: "collin",
+        ownerID: "owner",
         status: .suppressed,
         reason: "Later evidence contradicted this durable mapping.",
         updatedAt: now.addingTimeInterval(30)
     ))
-    let suppressedVisible = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    let suppressedVisible = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     let suppressedMatches = try await database.durableKnowledgeContextLines(
-        ownerID: "collin",
+        ownerID: "owner",
         transcript: "Rosalind remains in scope."
     )
 
     #expect(suppressed.lifecycleStatus == .suppressed)
     #expect(suppressedVisible.lifecycleReason == "Later evidence contradicted this durable mapping.")
-    #expect(try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind") == nil)
+    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind") == nil)
     #expect(suppressedMatches.isEmpty)
 
     let reactivated = try #require(await database.setKnowledgeEntityLifecycleStatus(
         id: entity.id,
-        ownerID: "collin",
+        ownerID: "owner",
         status: .active,
         reason: "Operator restored this mapping after review.",
         updatedAt: now.addingTimeInterval(60)
     ))
     let reactivatedMatches = try await database.durableKnowledgeContextLines(
-        ownerID: "collin",
+        ownerID: "owner",
         transcript: "Rosalind remains in scope."
     )
 
@@ -415,7 +554,7 @@ func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async t
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_004_200)
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind",
         summary: "Internal launch workstream.",
@@ -424,12 +563,12 @@ func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async t
         updatedAt: now
     ))
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
     try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         entityID: entity.id,
         alias: "Project Rosalind",
         confidence: 0.91,
@@ -438,16 +577,16 @@ func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async t
     ))
 
     let matched = try await database.knowledgeEntitiesMatchingConcept(
-        ownerID: "collin",
+        ownerID: "owner",
         concept: "Project Rosalind"
     )
     let updated = try #require(await database.setKnowledgeEntityConfidence(
         id: entity.id,
-        ownerID: "collin",
+        ownerID: "owner",
         confidence: 0.72,
         updatedAt: now.addingTimeInterval(45)
     ))
-    let reloaded = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    let reloaded = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
 
     #expect(matched.map(\.id) == [entity.id])
     #expect(abs(updated.confidence - 0.72) < 0.0001)
@@ -466,7 +605,7 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
         updatedAt: now
     ))
     let job = BarnOwlEnrichmentJobRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         conceptKey: "Rosalind",
         status: .supportedCandidate,
         summary: "Supported project.",
@@ -477,7 +616,7 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
     )
     try await database.upsertEnrichmentJob(job)
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind",
         summary: "Internal launch workstream.",
@@ -487,12 +626,12 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
         updatedAt: now
     ))
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
     let application = BarnOwlKnowledgeApplicationRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         entityID: entity.id,
         meetingID: meetingID,
         surface: "final_processing",
@@ -504,7 +643,7 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
     try await database.upsertKnowledgeApplication(application)
 
     let applications = try await database.knowledgeApplications(
-        ownerID: "collin",
+        ownerID: "owner",
         meetingID: meetingID
     )
 
@@ -516,9 +655,9 @@ func barnOwlDatabaseStoresEnrichmentConflictsAndSourceUsefulness() async throws 
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_004_500)
     let job = BarnOwlEnrichmentJobRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         conceptKey: "Rosalind",
-        selectedSources: ["collin_os", "workspace_glossary"],
+        selectedSources: ["owner_private_source", "workspace_glossary"],
         status: .heldConflictingEvidence,
         summary: "Conflicting enrichment result.",
         rationale: "Sources disagree.",
@@ -530,15 +669,15 @@ func barnOwlDatabaseStoresEnrichmentConflictsAndSourceUsefulness() async throws 
     try await database.upsertEnrichmentJob(job)
     try await database.upsertEnrichmentConflict(BarnOwlEnrichmentConflictRecord(
         jobID: job.id,
-        ownerID: "collin",
+        ownerID: "owner",
         conceptKey: "Rosalind",
         summary: "Project vs person classification conflict.",
-        conflictingSourceIDs: ["collin_os", "workspace_glossary"],
+        conflictingSourceIDs: ["owner_private_source", "workspace_glossary"],
         createdAt: now
     ))
     try await database.recordEnrichmentSourceUsefulness(
-        ownerID: "collin",
-        sourceID: "collin_os",
+        ownerID: "owner",
+        sourceID: "owner_private_source",
         status: .heldConflictingEvidence,
         evidenceItemCount: 1,
         acceptedEvidenceItemCount: 0,
@@ -546,8 +685,8 @@ func barnOwlDatabaseStoresEnrichmentConflictsAndSourceUsefulness() async throws 
         updatedAt: now
     )
     try await database.recordEnrichmentSourceUsefulness(
-        ownerID: "collin",
-        sourceID: "collin_os",
+        ownerID: "owner",
+        sourceID: "owner_private_source",
         status: .supportedCandidate,
         evidenceItemCount: 2,
         acceptedEvidenceItemCount: 2,
@@ -555,12 +694,12 @@ func barnOwlDatabaseStoresEnrichmentConflictsAndSourceUsefulness() async throws 
         updatedAt: now.addingTimeInterval(5)
     )
 
-    let conflicts = try await database.enrichmentConflicts(ownerID: "collin")
-    let usefulness = try #require(await database.enrichmentSourceUsefulness(ownerID: "collin", sourceID: "collin_os"))
+    let conflicts = try await database.enrichmentConflicts(ownerID: "owner")
+    let usefulness = try #require(await database.enrichmentSourceUsefulness(ownerID: "owner", sourceID: "owner_private_source"))
 
     #expect(conflicts.count == 1)
     #expect(conflicts.first?.jobID == job.id)
-    #expect(conflicts.first?.conflictingSourceIDs == ["collin_os", "workspace_glossary"])
+    #expect(conflicts.first?.conflictingSourceIDs == ["owner_private_source", "workspace_glossary"])
     #expect(usefulness.attempts == 2)
     #expect(usefulness.evidenceItems == 3)
     #expect(usefulness.acceptedEvidenceItems == 2)
@@ -745,17 +884,17 @@ func deletingMeetingCalendarContextKeepsMeetingButRemovesContext() async throws 
 func enrichmentSourcesPersistPerOwnerAndKeepStatusMetadata() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_003_500)
-    try await database.seedDefaultEnrichmentSources(ownerID: "collin", now: now)
+    try await database.seedDefaultEnrichmentSources(ownerID: "owner", now: now)
     try await database.seedDefaultEnrichmentSources(ownerID: "teammate", now: now)
 
-    let collinOS = BarnOwlEnrichmentSourceRecord(
-        id: "collin_os",
-        ownerID: "collin",
-        displayName: "Collin OS",
+    let ownerPrivateSource = BarnOwlEnrichmentSourceRecord(
+        id: "owner_private_source",
+        ownerID: "owner",
+        displayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: .personalPrivate,
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         bestUsedFor: ["projects", "people", "customer/account context"],
         configJSON: #"{"root":"private"}"#,
         authState: .configured,
@@ -764,27 +903,27 @@ func enrichmentSourcesPersistPerOwnerAndKeepStatusMetadata() async throws {
         lastCheckedAt: now,
         lastSuccessfulCheckAt: now.addingTimeInterval(-60),
         lastFailedCheckAt: now.addingTimeInterval(-10),
-        connectorReference: "collin-os",
+        connectorReference: "owner-private",
         privacyCopyPolicy: "private_source_summary_only",
         queryBudgetPolicy: "daily_soft_cap",
         createdAt: now,
         updatedAt: now
     )
-    try await database.upsertEnrichmentSource(collinOS)
+    try await database.upsertEnrichmentSource(ownerPrivateSource)
 
-    let collinSources = try await database.enrichmentSources(ownerID: "collin")
+    let ownerSources = try await database.enrichmentSources(ownerID: "owner")
     let teammateSources = try await database.enrichmentSources(ownerID: "teammate")
-    let reloaded = try #require(await database.enrichmentSource(ownerID: "collin", id: "collin_os"))
+    let reloaded = try #require(await database.enrichmentSource(ownerID: "owner", id: "owner_private_source"))
 
-    #expect(collinSources.map(\.id).contains("barnowl_memory"))
-    #expect(collinSources.map(\.id).contains("public_web"))
-    #expect(collinSources.map(\.id).contains("collin_os"))
-    #expect(!teammateSources.map(\.id).contains("collin_os"))
-    #expect(reloaded == collinOS)
+    #expect(ownerSources.map(\.id).contains("barnowl_memory"))
+    #expect(ownerSources.map(\.id).contains("public_web"))
+    #expect(ownerSources.map(\.id).contains("owner_private_source"))
+    #expect(!teammateSources.map(\.id).contains("owner_private_source"))
+    #expect(reloaded == ownerPrivateSource)
 
     let disabled = try #require(await database.setEnrichmentSourceEnabled(
-        ownerID: "collin",
-        id: "collin_os",
+        ownerID: "owner",
+        id: "owner_private_source",
         enabled: false,
         updatedAt: now.addingTimeInterval(30)
     ))
@@ -796,8 +935,8 @@ func enrichmentSourcesPersistPerOwnerAndKeepStatusMetadata() async throws {
     try await database.upsertEnrichmentSource(authBlocked)
 
     let reenabled = try #require(await database.setEnrichmentSourceEnabled(
-        ownerID: "collin",
-        id: "collin_os",
+        ownerID: "owner",
+        id: "owner_private_source",
         enabled: true,
         updatedAt: now.addingTimeInterval(60)
     ))
@@ -809,26 +948,26 @@ func enrichmentSourcesPersistPerOwnerAndKeepStatusMetadata() async throws {
 func enrichmentOnboardingDefaultsPersistAuthorityProfilesAndPolicyPacksPerOwner() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_003_650)
-    try await database.seedDefaultEnrichmentSources(ownerID: "collin", now: now)
+    try await database.seedDefaultEnrichmentSources(ownerID: "owner", now: now)
     try await database.seedDefaultEnrichmentSources(ownerID: "teammate", now: now)
 
-    let collinProfiles = try await database.enrichmentAuthorityProfiles(ownerID: "collin")
+    let ownerProfiles = try await database.enrichmentAuthorityProfiles(ownerID: "owner")
     let teammateProfiles = try await database.enrichmentAuthorityProfiles(ownerID: "teammate")
-    let collinPolicies = try await database.enrichmentPolicyPacks(ownerID: "collin")
-    let activePack = try #require(await database.activeEnrichmentPolicyPack(ownerID: "collin"))
+    let ownerPolicies = try await database.enrichmentPolicyPacks(ownerID: "owner")
+    let activePack = try #require(await database.activeEnrichmentPolicyPack(ownerID: "owner"))
 
-    #expect(collinProfiles.map(\.id).contains("meeting_memory"))
-    #expect(collinProfiles.map(\.id).contains("private_internal_reference"))
-    #expect(collinProfiles.map(\.id).contains("public_reference"))
-    #expect(teammateProfiles.map(\.id) == collinProfiles.map(\.id))
-    #expect(collinPolicies.count == 1)
+    #expect(ownerProfiles.map(\.id).contains("meeting_memory"))
+    #expect(ownerProfiles.map(\.id).contains("private_internal_reference"))
+    #expect(ownerProfiles.map(\.id).contains("public_reference"))
+    #expect(teammateProfiles.map(\.id) == ownerProfiles.map(\.id))
+    #expect(ownerPolicies.count == 1)
     #expect(activePack.id == "balanced_autonomous_default")
     #expect(activePack.minimumSupportingEvidenceCount == 2)
     #expect(activePack.minimumIndependentSourceCountAfterConflictMemory == 2)
 
     let strictPack = BarnOwlEnrichmentPolicyPackRecord(
         id: "strict_private_default",
-        ownerID: "collin",
+        ownerID: "owner",
         displayName: "Strict private default",
         description: "Require more corroboration before durable promotion.",
         minimumSupportingEvidenceCount: 3,
@@ -839,8 +978,8 @@ func enrichmentOnboardingDefaultsPersistAuthorityProfilesAndPolicyPacksPerOwner(
     )
     try await database.upsertEnrichmentPolicyPack(strictPack)
 
-    let reloadedStrict = try #require(await database.activeEnrichmentPolicyPack(ownerID: "collin"))
-    let defaultPack = try #require(await database.enrichmentPolicyPack(ownerID: "collin", id: "balanced_autonomous_default"))
+    let reloadedStrict = try #require(await database.activeEnrichmentPolicyPack(ownerID: "owner"))
+    let defaultPack = try #require(await database.enrichmentPolicyPack(ownerID: "owner", id: "balanced_autonomous_default"))
     let teammateActive = try #require(await database.activeEnrichmentPolicyPack(ownerID: "teammate"))
 
     #expect(reloadedStrict.id == "strict_private_default")
@@ -853,7 +992,7 @@ func enrichmentJobsPersistNormalizedEvidenceAndRemainUserScoped() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_003_700)
     let job = BarnOwlEnrichmentJobRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         conceptKey: "Rosalind",
         requestedSources: ["barnowl_memory", "public_web"],
         selectedSources: ["barnowl_memory"],
@@ -889,12 +1028,12 @@ func enrichmentJobsPersistNormalizedEvidenceAndRemainUserScoped() async throws {
         createdAt: now
     ))
 
-    let collinJobs = try await database.enrichmentJobs(ownerID: "collin")
-    let matchingConceptJobs = try await database.enrichmentJobs(ownerID: "collin", conceptKey: "rosalind")
+    let ownerJobs = try await database.enrichmentJobs(ownerID: "owner")
+    let matchingConceptJobs = try await database.enrichmentJobs(ownerID: "owner", conceptKey: "rosalind")
     let teammateJobs = try await database.enrichmentJobs(ownerID: "teammate")
     let storedEvidence = try #require(await database.enrichmentJobEvidence(jobID: job.id).first)
 
-    #expect(collinJobs == [job])
+    #expect(ownerJobs == [job])
     #expect(matchingConceptJobs == [job])
     #expect(teammateJobs.isEmpty)
     #expect(storedEvidence.acceptedByAdjudicator)
@@ -1641,6 +1780,71 @@ private func makeSQLiteTempDirectory() throws -> URL {
         .appending(path: "BarnOwlSQLiteTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
+}
+
+private func makeLegacyContextLibraryDatabase(
+    at url: URL,
+    entityID: UUID,
+    aliasID: UUID
+) throws {
+    var database: OpaquePointer?
+    let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+    guard sqlite3_open_v2(url.path(percentEncoded: false), &database, flags, nil) == SQLITE_OK else {
+        let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown SQLite error"
+        sqlite3_close(database)
+        throw BarnOwlDatabaseError.openFailed(path: url.path(percentEncoded: false), message: message)
+    }
+    defer { sqlite3_close(database) }
+
+    try executeLegacySQLite(
+        """
+        CREATE TABLE context_entities (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            canonical_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            is_confirmed INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+
+        CREATE TABLE context_entity_aliases (
+            id TEXT PRIMARY KEY,
+            entity_id TEXT NOT NULL REFERENCES context_entities(id) ON DELETE CASCADE,
+            alias TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            is_confirmed INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+
+        INSERT INTO context_entities (
+            id, kind, canonical_name, confidence, is_confirmed, created_at, updated_at
+        ) VALUES (
+            '\(entityID.uuidString)', 'person', 'Collin', 1.0, 1, 1800000000, 1800000010
+        );
+
+        INSERT INTO context_entity_aliases (
+            id, entity_id, alias, confidence, is_confirmed, created_at, updated_at
+        ) VALUES (
+            '\(aliasID.uuidString)', '\(entityID.uuidString)', 'Colin', 1.0, 1, 1800000000, 1800000010
+        );
+
+        PRAGMA user_version = 12;
+        """,
+        database: database
+    )
+}
+
+private func executeLegacySQLite(_ sql: String, database: OpaquePointer?) throws {
+    var errorMessage: UnsafeMutablePointer<Int8>?
+    guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
+        let message = errorMessage.map { String(cString: $0) }
+            ?? database.map { String(cString: sqlite3_errmsg($0)) }
+            ?? "Unknown SQLite error"
+        sqlite3_free(errorMessage)
+        throw BarnOwlDatabaseError.stepFailed(sql: sql, message: message)
+    }
 }
 
 private func posixPermissions(at url: URL) throws -> Int {

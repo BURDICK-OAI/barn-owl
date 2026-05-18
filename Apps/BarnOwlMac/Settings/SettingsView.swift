@@ -6,6 +6,565 @@ import BarnOwlPersistence
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum ContextEntityKind: String, CaseIterable, Hashable {
+    case person
+    case organization = "company"
+    case customerAccount = "customer_account"
+    case internalFunction = "internal_function"
+    case product
+    case project
+    case event
+    case glossaryTerm = "internal_term"
+
+    static func displaying(_ rawKind: String) -> ContextEntityKind {
+        switch rawKind {
+        case "person":
+            .person
+        case "company", "organization":
+            .organization
+        case "account", "customer", "customer_account":
+            .customerAccount
+        case "internal_function":
+            .internalFunction
+        case "product":
+            .product
+        case "project":
+            .project
+        case "event":
+            .event
+        default:
+            .glossaryTerm
+        }
+    }
+}
+
+private struct BarnOwlContextEntityRecord: Sendable {
+    var id: UUID
+    var kind: ContextEntityKind
+    var canonicalName: String
+    var confidence: Double
+    var isConfirmed: Bool
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+private struct BarnOwlContextEntityAliasRecord: Sendable {
+    var entityID: UUID
+    var alias: String
+    var confidence: Double
+    var isConfirmed: Bool
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+private extension BarnOwlDatabase {
+    func contextEntities(limit: Int) throws -> [BarnOwlContextEntityRecord] {
+        try knowledgeEntitiesIncludingSuppressed(
+            ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+            limit: limit
+        ).map { entity in
+            BarnOwlContextEntityRecord(
+                id: entity.id,
+                kind: ContextEntityKind.displaying(entity.kind),
+                canonicalName: entity.canonicalName,
+                confidence: entity.confidence,
+                isConfirmed: entity.lifecycleStatus == .active,
+                createdAt: entity.createdAt,
+                updatedAt: entity.updatedAt
+            )
+        }
+    }
+
+    func contextEntityAliases(entityID: UUID) throws -> [BarnOwlContextEntityAliasRecord] {
+        try knowledgeAliases(entityID: entityID).map { alias in
+            BarnOwlContextEntityAliasRecord(
+                entityID: alias.entityID,
+                alias: alias.alias,
+                confidence: alias.confidence,
+                isConfirmed: true,
+                createdAt: alias.createdAt,
+                updatedAt: alias.updatedAt
+            )
+        }
+    }
+
+    func upsertContextEntity(_ entity: BarnOwlContextEntityRecord) throws {
+        try upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
+            id: entity.id,
+            ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+            kind: entity.kind.rawValue,
+            canonicalName: entity.canonicalName,
+            confidence: entity.confidence,
+            lifecycleStatus: entity.isConfirmed ? .active : .suppressed,
+            createdAt: entity.createdAt,
+            updatedAt: entity.updatedAt
+        ))
+    }
+
+    func deleteContextEntityAliases(entityID: UUID) throws {
+        try deleteKnowledgeAliases(
+            entityID: entityID,
+            ownerID: BarnOwlEnrichmentSourceOwner.localUserID()
+        )
+    }
+
+    func upsertContextEntityAlias(_ alias: BarnOwlContextEntityAliasRecord) throws {
+        try upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
+            ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+            entityID: alias.entityID,
+            alias: alias.alias,
+            confidence: alias.confidence,
+            createdAt: alias.createdAt,
+            updatedAt: alias.updatedAt
+        ))
+    }
+
+    func deleteContextEntity(id: UUID) throws {
+        _ = try setKnowledgeEntityLifecycleStatus(
+            id: id,
+            ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+            status: .suppressed,
+            reason: "Removed from Context Library."
+        )
+    }
+}
+
+private struct ContextLibraryEntry: Identifiable, Equatable {
+    let id: UUID
+    var kind: ContextEntityKind
+    var canonicalName: String
+    var aliases: [String]
+    var confidence: Double
+    var isConfirmed: Bool
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+private struct ContextLibraryDraft: Equatable {
+    var kind: ContextEntityKind = .person
+    var canonicalName = ""
+    var aliasesText = ""
+
+    var normalizedAliases: [String] {
+        var seen = Set<String>()
+        return aliasesText
+            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { alias in
+                guard !alias.isEmpty else { return false }
+                return seen.insert(alias.lowercased()).inserted
+            }
+    }
+}
+
+private enum ContextLibrarySheetMode: String, Identifiable {
+    case manage
+    case add
+
+    var id: String { rawValue }
+}
+
+private func contextLibraryKindTitle(_ kind: ContextEntityKind) -> String {
+    switch kind {
+    case .person:
+        "Person"
+    case .organization:
+        "Organization"
+    case .customerAccount:
+        "Customer Account"
+    case .internalFunction:
+        "Internal Function"
+    case .product:
+        "Product"
+    case .project:
+        "Project"
+    case .event:
+        "Event"
+    case .glossaryTerm:
+        "Glossary Term"
+    }
+}
+
+private struct ContextLibraryManagerSheet: View {
+    let initialMode: ContextLibrarySheetMode
+    let onEntriesChanged: ([ContextLibraryEntry]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [ContextLibraryEntry] = []
+    @State private var searchText = ""
+    @State private var selectedKindRawValue = "all"
+    @State private var draft = ContextLibraryDraft()
+    @State private var editingEntryID: UUID?
+    @State private var showsEditor = false
+    @State private var pendingDeletion: ContextLibraryEntry?
+    @State private var status = ""
+    @State private var isRefreshing = false
+    @State private var isSaving = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Context Library")
+                        .font(.title3.weight(.semibold))
+                    Text("Search, filter, create, edit, and delete durable entries Barn Owl can reuse in later meetings.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Button("Done") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 10) {
+                TextField("Search names, accounts, terms, or aliases", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+
+                Picker("Type", selection: $selectedKindRawValue) {
+                    Text("All Types").tag("all")
+                    ForEach(ContextEntityKind.allCases, id: \.rawValue) { kind in
+                        Text(contextLibraryKindTitle(kind)).tag(kind.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 190)
+
+                Button(isRefreshing ? "Refreshing..." : "Refresh") {
+                    Task {
+                        await refreshEntries()
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isRefreshing || isSaving)
+            }
+
+            HStack(spacing: 8) {
+                Button("Add Entry") {
+                    beginCreatingEntry()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isSaving)
+
+                Text("\(filteredEntries.count) shown of \(entries.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            if showsEditor {
+                editorCard
+            }
+
+            if !status.isEmpty {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if filteredEntries.isEmpty {
+                        Text(entries.isEmpty ? "No Context Library entries yet." : "No entries match the current search and filter.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else {
+                        ForEach(filteredEntries) { entry in
+                            libraryRow(entry)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 680, idealWidth: 760, maxWidth: 860)
+        .frame(minHeight: 620, idealHeight: 700, maxHeight: 820)
+        .task {
+            await refreshEntries()
+            if initialMode == .add {
+                beginCreatingEntry()
+            }
+        }
+        .alert(
+            "Delete Context Library entry?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            )
+        ) {
+            Button("Delete Entry", role: .destructive) {
+                guard let entry = pendingDeletion else { return }
+                Task {
+                    await deleteEntry(entry)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeletion = nil
+            }
+        } message: {
+            Text("This removes the saved mapping from this macOS user's local Context Library.")
+        }
+    }
+
+    private var editorCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(editingEntryID == nil ? "Add Entry" : "Edit Entry")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Button("Cancel") {
+                    resetEditor()
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSaving)
+            }
+
+            Picker("Type", selection: $draft.kind) {
+                ForEach(ContextEntityKind.allCases, id: \.self) { kind in
+                    Text(contextLibraryKindTitle(kind)).tag(kind)
+                }
+            }
+            .pickerStyle(.menu)
+
+            TextField("Canonical name or term", text: $draft.canonicalName)
+                .textFieldStyle(.roundedBorder)
+
+            TextField("Aliases or misheard forms, comma-separated", text: $draft.aliasesText)
+                .textFieldStyle(.roundedBorder)
+
+            Text("Aliases are the names, spellings, or misheard forms Barn Owl should map back to the canonical value.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button(isSaving ? "Saving..." : saveButtonTitle) {
+                    Task {
+                        await saveEntry()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    isSaving
+                        || draft.canonicalName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+
+                Spacer()
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func libraryRow(_ entry: ContextLibraryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(contextLibraryKindTitle(entry.kind))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(BarnOwlSettingsTheme.success)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(BarnOwlSettingsTheme.success.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+                Text(entry.canonicalName)
+                    .font(.callout.weight(.semibold))
+
+                Spacer(minLength: 8)
+
+                Button("Edit Entry") {
+                    beginEditingEntry(entry)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSaving)
+
+                Button("Delete Entry", role: .destructive) {
+                    pendingDeletion = entry
+                }
+                .buttonStyle(.borderless)
+                .disabled(isSaving)
+            }
+
+            Text(entry.aliases.isEmpty ? "No aliases saved." : "Aliases: \(entry.aliases.joined(separator: ", "))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var selectedKind: ContextEntityKind? {
+        guard selectedKindRawValue != "all" else { return nil }
+        return ContextEntityKind(rawValue: selectedKindRawValue)
+    }
+
+    private var filteredEntries: [ContextLibraryEntry] {
+        let normalizedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return entries.filter { entry in
+            let matchesKind = selectedKind.map { entry.kind == $0 } ?? true
+            guard matchesKind else { return false }
+            guard !normalizedSearch.isEmpty else { return true }
+            let searchableText = ([entry.canonicalName] + entry.aliases)
+                .joined(separator: " ")
+            return searchableText.localizedCaseInsensitiveContains(normalizedSearch)
+        }
+    }
+
+    private var saveButtonTitle: String {
+        editingEntryID == nil ? "Add Entry" : "Save Changes"
+    }
+
+    private func beginCreatingEntry() {
+        editingEntryID = nil
+        draft = ContextLibraryDraft()
+        showsEditor = true
+        status = ""
+    }
+
+    private func beginEditingEntry(_ entry: ContextLibraryEntry) {
+        editingEntryID = entry.id
+        draft = ContextLibraryDraft(
+            kind: entry.kind,
+            canonicalName: entry.canonicalName,
+            aliasesText: entry.aliases.joined(separator: ", ")
+        )
+        showsEditor = true
+        status = "Editing \(entry.canonicalName)."
+    }
+
+    private func resetEditor() {
+        editingEntryID = nil
+        draft = ContextLibraryDraft()
+        showsEditor = false
+    }
+
+    private func refreshEntries() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let entities = try await database.contextEntities(limit: 500)
+            var refreshedEntries: [ContextLibraryEntry] = []
+            refreshedEntries.reserveCapacity(entities.count)
+
+            for entity in entities {
+                let aliases = try await database.contextEntityAliases(entityID: entity.id)
+                    .map(\.alias)
+                refreshedEntries.append(ContextLibraryEntry(
+                    id: entity.id,
+                    kind: entity.kind,
+                    canonicalName: entity.canonicalName,
+                    aliases: aliases,
+                    confidence: entity.confidence,
+                    isConfirmed: entity.isConfirmed,
+                    createdAt: entity.createdAt,
+                    updatedAt: entity.updatedAt
+                ))
+            }
+
+            entries = refreshedEntries
+            onEntriesChanged(refreshedEntries)
+        } catch {
+            status = "Could not load Context Library: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    private func saveEntry() async {
+        let canonicalName = draft.canonicalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !canonicalName.isEmpty else {
+            status = "Enter a canonical name or term before saving."
+            return
+        }
+
+        let duplicate = entries.contains { entry in
+            entry.id != editingEntryID
+                && entry.kind == draft.kind
+                && entry.canonicalName.localizedCaseInsensitiveCompare(canonicalName) == .orderedSame
+        }
+        guard !duplicate else {
+            status = "That Context Library entry already exists for this type."
+            return
+        }
+
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let now = Date()
+            let existing = editingEntryID.flatMap { id in
+                entries.first(where: { $0.id == id })
+            }
+            let entityID = existing?.id ?? UUID()
+            try await database.upsertContextEntity(BarnOwlContextEntityRecord(
+                id: entityID,
+                kind: draft.kind,
+                canonicalName: canonicalName,
+                confidence: existing?.confidence ?? 1,
+                isConfirmed: true,
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now
+            ))
+            try await database.deleteContextEntityAliases(entityID: entityID)
+            for alias in draft.normalizedAliases where alias.localizedCaseInsensitiveCompare(canonicalName) != .orderedSame {
+                try await database.upsertContextEntityAlias(BarnOwlContextEntityAliasRecord(
+                    entityID: entityID,
+                    alias: alias,
+                    confidence: 1,
+                    isConfirmed: true,
+                    createdAt: now,
+                    updatedAt: now
+                ))
+            }
+
+            status = existing == nil
+                ? "Added entry to the Context Library."
+                : "Updated Context Library entry."
+            resetEditor()
+            await refreshEntries()
+        } catch {
+            status = "Could not save Context Library entry: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    private func deleteEntry(_ entry: ContextLibraryEntry) async {
+        isSaving = true
+        defer {
+            isSaving = false
+            pendingDeletion = nil
+        }
+
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            try await database.deleteContextEntity(id: entry.id)
+            if editingEntryID == entry.id {
+                resetEditor()
+            }
+            status = "Deleted Context Library entry for \(entry.canonicalName)."
+            await refreshEntries()
+        } catch {
+            status = "Could not delete Context Library entry: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+}
+
 struct SettingsView: View {
     @State private var apiKey = ""
     @State private var apiKeyStatus = ""
@@ -24,6 +583,10 @@ struct SettingsView: View {
     @State private var showReadinessDiagnostics = false
     @State private var developerDiagnosticsStatus = ""
     @State private var isExportingDeveloperDiagnostics = false
+    @State private var contextLibraryEntries: [ContextLibraryEntry] = []
+    @State private var contextLibraryStatus = ""
+    @State private var contextLibrarySheetMode: ContextLibrarySheetMode?
+    @State private var isRefreshingContextLibrary = false
     @State private var enrichmentSources: [BarnOwlEnrichmentSourceRecord] = []
     @State private var enrichmentSourceUsefulnessByID: [String: BarnOwlEnrichmentSourceUsefulnessRecord] = [:]
     @State private var recentEnrichmentConceptHistories: [BarnOwlControlEnrichmentConceptHistory] = []
@@ -40,6 +603,7 @@ struct SettingsView: View {
                 onboardingReadinessSection
                 openAISection
                 codexIntegrationSection
+                contextLibrarySection
                 enrichmentSourcesSection
                 developerDiagnosticsSection
                 readinessSection
@@ -55,8 +619,21 @@ struct SettingsView: View {
             refreshReadinessChecks()
             Task {
                 await refreshCodexIntegration()
+                await refreshContextLibrary()
                 await refreshEnrichmentSources()
             }
+        }
+        .sheet(item: $contextLibrarySheetMode, onDismiss: {
+            Task {
+                await refreshContextLibrary()
+            }
+        }) { mode in
+            ContextLibraryManagerSheet(
+                initialMode: mode,
+                onEntriesChanged: { entries in
+                    contextLibraryEntries = entries
+                }
+            )
         }
     }
 
@@ -124,14 +701,12 @@ struct SettingsView: View {
                 SecureField("OpenAI API key", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
 
-                ViewThatFits(in: .horizontal) {
-                    HStack {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
                         keyButtons
                     }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        keyButtons
-                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.vertical, 1)
                 }
 
                 if !apiKeyStatus.isEmpty {
@@ -208,7 +783,7 @@ struct SettingsView: View {
             Button("Create API Key") {
                 openOpenAIAPIKeysPage()
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.bordered)
         }
     }
 
@@ -322,6 +897,149 @@ struct SettingsView: View {
         }
     }
 
+    private var contextLibrarySection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    settingsSectionHeader("Context Library", systemImage: "text.badge.checkmark")
+                    Spacer()
+                    Button(isRefreshingContextLibrary ? "Refreshing..." : "Refresh") {
+                        Task {
+                            await refreshContextLibrary()
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(isRefreshingContextLibrary)
+                }
+
+                Text("Saved names, organizations, accounts, and terms Barn Owl can recognize and reuse in future meetings.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                contextLibrarySummaryRow
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        contextLibraryButtons
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        contextLibraryButtons
+                    }
+                }
+
+                if contextLibraryEntries.isEmpty {
+                    Text("No Context Library entries saved yet.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recently updated")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(Array(contextLibraryEntries.prefix(3))) { entry in
+                            contextLibraryPreviewRow(entry)
+                        }
+                    }
+                }
+
+                if !contextLibraryStatus.isEmpty {
+                    settingsStatusMessage(contextLibraryStatus)
+                }
+            }
+        }
+    }
+
+    private var contextLibrarySummaryRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text("\(contextLibraryEntries.count)")
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                Text(contextLibraryEntries.count == 1 ? "entry" : "entries")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            if contextLibraryEntries.isEmpty {
+                Text("Add people, companies, accounts, products, projects, internal functions, and glossary terms once so Barn Owl can reuse them later.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(spacing: 8) {
+                    ForEach(contextLibrarySummaryChips, id: \.label) { chip in
+                        Text("\(chip.count) \(chip.label)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var contextLibraryButtons: some View {
+        Group {
+            Button("Manage Context Library") {
+                contextLibrarySheetMode = .manage
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button("Add Entry") {
+                contextLibrarySheetMode = .add
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private func contextLibraryPreviewRow(_ entry: ContextLibraryEntry) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(contextLibraryKindTitle(entry.kind))
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(BarnOwlSettingsTheme.success)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(BarnOwlSettingsTheme.success.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.canonicalName)
+                    .font(.callout.weight(.semibold))
+                Text(entry.aliases.isEmpty ? "No aliases" : entry.aliases.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var contextLibrarySummaryChips: [(label: String, count: Int)] {
+        let counts = Dictionary(grouping: contextLibraryEntries, by: \.kind)
+            .mapValues(\.count)
+        let preferredKinds: [ContextEntityKind] = [.person, .organization, .glossaryTerm, .customerAccount]
+        return preferredKinds.compactMap { kind in
+            guard let count = counts[kind], count > 0 else { return nil }
+            return (contextLibraryKindTitle(kind).lowercased(), count)
+        }
+        .prefix(3)
+        .map { $0 }
+    }
+
     private var enrichmentSourcesSection: some View {
         settingsCard {
             VStack(alignment: .leading, spacing: 12) {
@@ -337,17 +1055,17 @@ struct SettingsView: View {
                     .disabled(isRefreshingEnrichmentSources)
                 }
 
-                Text("These sources belong to this macOS user. Barn Owl can use them for autonomous knowledge enrichment; custom private sources such as Collin OS only appear when configured for that user.")
+                Text("Use Codex with the bundled `$barnowl` skill or the `barnowl` CLI to create and verify real enrichment-source connections. Once a source is connected for this macOS user, Barn Owl lists it here.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Connector-backed presets")
+                    Text("Examples Codex can configure")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(BarnOwlAppModel.enrichmentSourcePresets) { preset in
-                        HStack(alignment: .center, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(preset.displayName)
                                     .font(.caption.weight(.semibold))
@@ -356,24 +1074,22 @@ struct SettingsView: View {
                                     .foregroundStyle(.tertiary)
                             }
                             Spacer(minLength: 8)
-                            Button(enrichmentSources.contains(where: { $0.id == preset.id }) ? "Configured" : "Add") {
-                                Task {
-                                    await setupEnrichmentSourcePreset(preset)
-                                }
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(enrichmentSources.contains(where: { $0.id == preset.id }))
                         }
                     }
+
+                    Text("Examples only. Codex handles the setup work; this panel stays focused on connected sources and their health.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(10)
                 .background(.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                if enrichmentSources.isEmpty {
-                    settingsStatusMessage("No enrichment sources are configured yet.")
+                if connectedEnrichmentSources.isEmpty {
+                    settingsStatusMessage("No enrichment sources are connected yet.")
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(enrichmentSources) { source in
+                        ForEach(connectedEnrichmentSources) { source in
                             enrichmentSourceRow(source)
                         }
                     }
@@ -553,6 +1269,17 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
+
+    private var connectedEnrichmentSources: [BarnOwlEnrichmentSourceRecord] {
+        enrichmentSources.filter { source in
+            !Self.operationalEnrichmentSourceIDs.contains(source.id)
+        }
+    }
+
+    private static let operationalEnrichmentSourceIDs: Set<String> = [
+        "barnowl_memory",
+        "public_web"
+    ]
 
     private var codexIntegrationButtons: some View {
         Group {
@@ -844,6 +1571,38 @@ struct SettingsView: View {
     }
 
     @MainActor
+    private func refreshContextLibrary() async {
+        isRefreshingContextLibrary = true
+        defer { isRefreshingContextLibrary = false }
+
+        do {
+            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
+            let entities = try await database.contextEntities(limit: 500)
+            var entries: [ContextLibraryEntry] = []
+            entries.reserveCapacity(entities.count)
+
+            for entity in entities {
+                let aliases = try await database.contextEntityAliases(entityID: entity.id)
+                    .map(\.alias)
+                entries.append(ContextLibraryEntry(
+                    id: entity.id,
+                    kind: entity.kind,
+                    canonicalName: entity.canonicalName,
+                    aliases: aliases,
+                    confidence: entity.confidence,
+                    isConfirmed: entity.isConfirmed,
+                    createdAt: entity.createdAt,
+                    updatedAt: entity.updatedAt
+                ))
+            }
+
+            contextLibraryEntries = entries
+        } catch {
+            contextLibraryStatus = "Could not load Context Library: \(BarnOwlErrorFormatter.message(for: error))"
+        }
+    }
+
+    @MainActor
     private func refreshEnrichmentSources() async {
         guard !isRefreshingEnrichmentSources else { return }
         isRefreshingEnrichmentSources = true
@@ -852,7 +1611,6 @@ struct SettingsView: View {
         do {
             let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
             let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
-            try await database.seedDefaultEnrichmentSources(ownerID: ownerID)
             enrichmentSources = try await database.enrichmentSources(ownerID: ownerID)
             enrichmentSourceUsefulnessByID = Dictionary(
                 uniqueKeysWithValues: try await database.enrichmentSourceUsefulness(ownerID: ownerID)
@@ -890,11 +1648,9 @@ struct SettingsView: View {
                 ))
             }
             recentEnrichmentConceptHistories = conceptHistories
-            enrichmentSourcesStatus = enrichmentSources.isEmpty
-                ? "No enrichment sources are configured for this user."
-                : "Loaded \(enrichmentSources.count) enrichment source\(enrichmentSources.count == 1 ? "" : "s") for this user."
+            enrichmentSourcesStatus = ""
         } catch {
-            enrichmentSourcesStatus = "Could not load enrichment sources: \(BarnOwlErrorFormatter.message(for: error))"
+            enrichmentSourcesStatus = "Could not load enrichment sources. \(BarnOwlErrorFormatter.message(for: error))"
         }
     }
 
@@ -930,37 +1686,6 @@ struct SettingsView: View {
             enrichmentSourcesStatus = "Activated policy pack \(policyPackID)."
         } catch {
             enrichmentSourcesStatus = "Could not activate enrichment policy pack: \(BarnOwlErrorFormatter.message(for: error))"
-        }
-    }
-
-    @MainActor
-    private func setupEnrichmentSourcePreset(_ preset: BarnOwlControlEnrichmentSourcePreset) async {
-        do {
-            let database = try BarnOwlDatabase(url: try BarnOwlAppModel.defaultDatabaseURL())
-            let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
-            let now = Date()
-            let source = BarnOwlEnrichmentSourceRecord(
-                id: preset.id,
-                ownerID: ownerID,
-                displayName: preset.displayName,
-                sourceType: preset.sourceType,
-                enabled: true,
-                scope: BarnOwlEnrichmentSourceScope(rawValue: preset.scope) ?? .workspacePrivate,
-                authorityProfile: preset.authorityProfile,
-                bestUsedFor: preset.bestUsedFor,
-                authState: BarnOwlEnrichmentSourceAuthState(rawValue: preset.defaultAuthState) ?? .needsAuthentication,
-                healthStatus: BarnOwlEnrichmentSourceHealthStatus(rawValue: preset.defaultHealthStatus) ?? .needsAuth,
-                connectorReference: preset.connectorReference,
-                privacyCopyPolicy: preset.privacyCopyPolicy,
-                queryBudgetPolicy: preset.queryBudgetPolicy,
-                createdAt: now,
-                updatedAt: now
-            )
-            try await database.upsertEnrichmentSource(source)
-            await refreshEnrichmentSources()
-            enrichmentSourcesStatus = "Configured preset \(preset.id)."
-        } catch {
-            enrichmentSourcesStatus = "Could not configure source preset: \(BarnOwlErrorFormatter.message(for: error))"
         }
     }
 

@@ -76,6 +76,7 @@ struct RecorderWindow: View {
     @State private var sessionPendingDeletion: BarnOwlRecentSession?
     @State private var sessionIDsPendingBulkDeletion = Set<UUID>()
     @State private var searchTask: Task<Void, Never>?
+    @State private var sidebarOpenInFlightID: UUID?
     @State private var shareNotesCopyStatus = ""
 
     var body: some View {
@@ -237,15 +238,23 @@ struct RecorderWindow: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $selectedSessionIDs) {
-                    if !model.noteSearchResults.isEmpty {
+                    if isSearchActive {
                         ForEach(model.noteSearchResults) { result in
                             SearchResultRow(result: result, isSelected: model.displayedNote?.id == result.id)
                                 .tag(result.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    openSidebarSession(result.id)
+                                }
                         }
                     } else {
                         ForEach(filteredSessions) { session in
                             SessionRow(session: session, isSelected: model.displayedNote?.id == session.id)
                                 .tag(session.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    openSidebarSession(session.id)
+                                }
                                 .contextMenu {
                                     Button("Show Markdown in Finder") {
                                         revealInFinder(session.markdownURL)
@@ -262,6 +271,9 @@ struct RecorderWindow: View {
                 .scrollContentBackground(.hidden)
                 .onChange(of: selectedSessionIDs) { _, newValue in
                     handleSessionSelectionChange(newValue)
+                }
+                .onChange(of: model.displayedNote?.id) { _, displayedID in
+                    synchronizeSidebarSelection(with: displayedID)
                 }
             }
         }
@@ -338,14 +350,26 @@ struct RecorderWindow: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
-                        ForEach(filteredSessions.prefix(12)) { session in
-                            CompactSessionChip(
-                                session: session,
-                                isSelected: model.displayedNote?.id == session.id,
-                                isMultiSelected: selectedSessionIDs.contains(session.id)
-                            ) {
-                                selectedSessionIDs = [session.id]
-                                Task { await model.openRecentSession(session.id) }
+                        if isSearchActive {
+                            ForEach(model.noteSearchResults.prefix(12)) { result in
+                                CompactSearchResultChip(
+                                    result: result,
+                                    isSelected: model.displayedNote?.id == result.id
+                                ) {
+                                    selectedSessionIDs = [result.id]
+                                    Task { await model.openRecentSession(result.id) }
+                                }
+                            }
+                        } else {
+                            ForEach(filteredSessions.prefix(12)) { session in
+                                CompactSessionChip(
+                                    session: session,
+                                    isSelected: model.displayedNote?.id == session.id,
+                                    isMultiSelected: selectedSessionIDs.contains(session.id)
+                                ) {
+                                    selectedSessionIDs = [session.id]
+                                    Task { await model.openRecentSession(session.id) }
+                                }
                             }
                         }
                     }
@@ -1087,7 +1111,32 @@ struct RecorderWindow: View {
             return
         }
 
-        Task { await model.openRecentSession(id) }
+        openSidebarSession(id)
+    }
+
+    private func openSidebarSession(_ id: UUID) {
+        guard sidebarOpenInFlightID != id else { return }
+        selectedRecoveryAttentionID = nil
+        sidebarOpenInFlightID = id
+        Task {
+            await model.openRecentSession(id)
+            if sidebarOpenInFlightID == id {
+                sidebarOpenInFlightID = nil
+            }
+        }
+    }
+
+    private func synchronizeSidebarSelection(with displayedID: UUID?) {
+        guard let displayedID else {
+            if selectedSessionIDs.count <= 1 {
+                selectedSessionIDs = []
+            }
+            return
+        }
+
+        if selectedSessionIDs != [displayedID] {
+            selectedSessionIDs = [displayedID]
+        }
     }
 
     private func toggleUtilityPanel(_ panel: RecorderUtilityPanel) {
@@ -1104,7 +1153,7 @@ struct RecorderWindow: View {
            model.searchStatus.localizedCaseInsensitiveContains("failed") {
             return "Search is unavailable. Check diagnostics for details."
         }
-        if hasSearchFilters || !model.noteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if isSearchActive {
             return "No notes match this search."
         }
         return "Completed transcripts will show up here."
@@ -2085,18 +2134,8 @@ struct RecorderWindow: View {
         }
     }
 
-    private var selectedSessionBinding: Binding<UUID?> {
-        Binding(
-            get: { model.displayedNote?.id },
-            set: { id in
-                guard let id else { return }
-                Task { await model.openRecentSession(id) }
-            }
-        )
-    }
-
     private var displayedSessionCount: Int {
-        model.noteSearchResults.isEmpty ? filteredSessions.count : model.noteSearchResults.count
+        isSearchActive ? model.noteSearchResults.count : filteredSessions.count
     }
 
     private var visibleWorkspaceTabs: [RecorderWorkspaceTab] {
@@ -2108,7 +2147,15 @@ struct RecorderWindow: View {
             return liveTabs
         }
 
-        var tabs: [RecorderWorkspaceTab] = [.notes, .share, .chat, .transcript, .summary]
+        var tabs: [RecorderWorkspaceTab] = [
+            .notes,
+            .share,
+            .chat,
+            .transcript,
+            .summary,
+            .related,
+            .insights
+        ]
         if !visibleJobSummaries.isEmpty {
             tabs.append(.jobs)
         }
@@ -2153,7 +2200,14 @@ struct RecorderWindow: View {
     }
 
     private var hasSearchFilters: Bool {
-        false
+        !model.searchMeetingTypeFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !model.searchParticipantFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || model.searchStatusFilter != nil
+    }
+
+    private var isSearchActive: Bool {
+        hasSearchFilters
+            || !model.noteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var currentTitle: String {
@@ -2869,6 +2923,44 @@ private struct CompactSessionChip: View {
                     .lineLimit(1)
             }
             .frame(width: 190, alignment: .leading)
+            .padding(10)
+            .background(isSelected ? BarnOwlDesign.amber.opacity(0.12) : BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? BarnOwlDesign.amber.opacity(0.28) : BarnOwlDesign.warmStroke)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct CompactSearchResultChip: View {
+    var result: BarnOwlNoteSearchResult
+    var isSelected: Bool
+    var open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: isSelected ? "magnifyingglass.circle.fill" : "magnifyingglass")
+                        .foregroundStyle(isSelected ? BarnOwlDesign.amber : .secondary)
+                    Text(result.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+
+                Text(result.startedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(result.snippet)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .frame(width: 220, alignment: .leading)
             .padding(10)
             .background(isSelected ? BarnOwlDesign.amber.opacity(0.12) : BarnOwlDesign.warmField, in: RoundedRectangle(cornerRadius: 10))
             .overlay {

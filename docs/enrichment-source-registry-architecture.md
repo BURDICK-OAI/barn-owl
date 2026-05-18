@@ -18,7 +18,7 @@ The core architectural decision is:
 > Enrichment sources are user-scoped, policy-governed adapters that contribute
 > normalized evidence into Barn Owl's durable knowledge loop.
 
-This lets one user enrich from a private internal system like Collin OS while
+This lets one user enrich from a private internal system like Private Reference Source while
 another user may use Google Drive, Slack, Salesforce, Notion, or no internal
 system at all. Barn Owl remains the same product because it relies on a common
 source registry and evidence contract, not on bespoke assumptions about any one
@@ -41,7 +41,7 @@ Examples:
 
 - `Rosalind` appears in fifteen meetings.
 - Barn Owl decides it is highly salient but semantically unresolved.
-- The enrichment orchestrator queries Barn Owl memory, Collin OS, and other
+- The enrichment orchestrator queries Barn Owl memory, Private Reference Source, and other
   permitted sources for the current user.
 - Evidence is normalized, weighed by authority and freshness, and adjudicated.
 - If the result is defensible, Barn Owl persists `Rosalind` as a project,
@@ -55,7 +55,7 @@ Examples:
 
 Every user should have their own enrichment source registry.
 
-- Collin OS may appear only for Collin.
+- Private Reference Source may appear only for the owner.
 - Another user may have Slack, Drive, Notion, or Salesforce.
 - Another user may choose only Barn Owl memory plus public internet references.
 - Source availability, credentials, scopes, and privacy rules should never be
@@ -63,7 +63,7 @@ Every user should have their own enrichment source registry.
 
 ### 2. Source adapters must converge on one evidence contract
 
-Barn Owl should not need special-case persistence logic for Collin OS, Google
+Barn Owl should not need special-case persistence logic for Private Reference Source, Google
 Drive, web search, or future connectors. Each adapter should return normalized
 evidence records that the enrichment adjudicator can compare consistently.
 
@@ -136,7 +136,7 @@ Source adapters own:
 Examples:
 
 - Barn Owl memory adapter
-- Collin OS adapter
+- Private Reference Source adapter
 - web/reference research adapter
 - Google Drive adapter
 - Slack adapter
@@ -170,12 +170,12 @@ Illustrative shape:
       "healthStatus": "ready"
     },
     {
-      "id": "collin_os",
-      "displayName": "Collin OS",
+      "id": "owner_private_source",
+      "displayName": "Private Reference Source",
       "sourceType": "internal_memory",
       "enabled": true,
       "scope": "personal_private",
-      "authorityProfile": "collin_internal_reference",
+      "authorityProfile": "private_internal_reference",
       "bestUsedFor": [
         "projects",
         "people",
@@ -265,11 +265,11 @@ Recommended controls:
 | Source | Scope | Best For | Status |
 | --- | --- | --- | --- |
 | Barn Owl Memory | Local private | Recurrence, transcripts, meeting links | Enabled |
-| Collin OS | Personal private | Projects, people, account context | Enabled |
+| Private Reference Source | Personal private | Projects, people, account context | Enabled |
 | Internet References | Public | Public org/product disambiguation | Enabled |
 | Google Drive | Workspace private | Internal docs, project language | Disabled |
 
-The Settings page should make it clear that Collin OS is not a universal Barn
+The Settings page should make it clear that Private Reference Source is not a universal Barn
 Owl feature. It is one user's configured enrichment source.
 
 ## Source Adapter Contract
@@ -307,12 +307,12 @@ Illustrative evidence shape:
   "canonicalName": "Rosalind",
   "summary": "Recurring internal initiative referenced with launch and pricing decisions.",
   "confidence": 0.88,
-  "source": "collin_os",
+  "source": "owner_private_source",
   "authority": "internal_curated",
   "freshness": "current",
   "scope": "personal_private",
   "citations": [
-    "collin-os:object/project/rosalind",
+    "owner-private:object/project/rosalind",
     "meeting:2026-05-14:excerpt:3"
   ],
   "observedAt": "2026-05-17T12:00:00Z"
@@ -356,11 +356,11 @@ Weak for:
 - canonical external descriptions
 - distinguishing person vs product when transcripts are vague
 
-### `collin_internal_reference`
+### `private_internal_reference`
 
 Good for:
 
-- Collin-specific people
+- the owner-specific people
 - internal project names
 - customer/account shorthand
 - internal events and workstreams
@@ -425,7 +425,7 @@ The orchestrator should:
 3. Semantic meaning remains unresolved.
 4. The orchestrator selects:
    - Barn Owl meeting memory
-   - Collin OS for the current user
+   - Private Reference Source for the current user
    - public web only if it may help disambiguate
 5. The adapters produce normalized evidence.
 6. The adjudicator concludes:
@@ -514,7 +514,7 @@ Potential metrics per source:
 
 Examples:
 
-- Collin OS resolves internal projects well.
+- Private Reference Source resolves internal projects well.
 - Web research helps public company disambiguation.
 - Slack is useful for aliases and latest chatter, but weak for canonical truth.
 - Drive is strong for project descriptions and acronym expansion.
@@ -548,7 +548,7 @@ Health should influence:
 
 This design must work for both:
 
-- a highly customized power user with private systems like Collin OS
+- a highly customized power user with private systems like Private Reference Source
 - a new Barn Owl user with only local memory and public web references
 
 ### Portability requirements
@@ -645,7 +645,7 @@ Suggested durable tables or equivalents:
 Recommended future commands:
 
 ```bash
-barnowl knowledge enrich "Rosalind" --sources barnowl_memory,collin_os,public_web
+barnowl knowledge enrich "Rosalind" --sources barnowl_memory,owner_private_source,public_web
 barnowl knowledge explain "Rosalind"
 barnowl knowledge jobs list
 barnowl knowledge jobs get <job-id>
@@ -653,9 +653,9 @@ barnowl knowledge policy get
 barnowl knowledge policy set ...
 
 barnowl enrichment-sources list
-barnowl enrichment-sources enable collin_os
+barnowl enrichment-sources enable owner_private_source
 barnowl enrichment-sources disable public_web
-barnowl enrichment-sources test collin_os
+barnowl enrichment-sources test owner_private_source
 barnowl enrichment-sources add ...
 barnowl enrichment-sources update ...
 ```
@@ -696,13 +696,13 @@ the user-facing management layer over the same underlying model.
 - seed default local sources:
   - Barn Owl Memory
   - Internet References, if enabled by policy
-- support user-private custom source entries such as Collin OS
+- support user-private custom source entries such as Private Reference Source
 
 ### Phase 2: Adapter Framework
 
 - define adapter protocol
 - implement Barn Owl Memory adapter
-- implement Collin OS adapter for Collin's registry entry
+- implement Private Reference Source adapter for the owner's registry entry
 - implement public web/reference adapter
 - normalize outputs into shared evidence records
 
@@ -731,7 +731,7 @@ the user-facing management layer over the same underlying model.
 
 - treating every connector as equally authoritative
 - writing durable private truth from weak internet-only evidence
-- hardcoding Collin OS as a universal Barn Owl dependency
+- hardcoding Private Reference Source as a universal Barn Owl dependency
 - hiding failed enrichment or auth-blocked sources
 - requiring review for every high-confidence durable update
 
@@ -740,7 +740,7 @@ the user-facing management layer over the same underlying model.
 This architecture is working when:
 
 - Settings shows the current user's enrichment sources clearly
-- Collin OS appears for Collin and not for users who never configured it
+- Private Reference Source appears for the owner and not for users who never configured it
 - Barn Owl can add more source types without rewriting the durable knowledge
   model
 - enrichment jobs explain which sources contributed to a durable decision
