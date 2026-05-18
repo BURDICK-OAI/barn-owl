@@ -3261,6 +3261,77 @@ func durabilityRepairMarkdownResynchronizesHeadingAndMeetingFactsTitle() {
 
 @MainActor
 @Test
+func durabilityRepairMarkdownFullyRerendersAcceptedContextWithoutLegacyDuplication() {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000005003")!
+    let calendarContext = "Calendar context: matched invite \"OpenAI <> Helios\" with a unique accepted match."
+    let state = BarnOwlMeetingState(
+        meeting: BarnOwlMeetingRecord(
+            id: meetingID,
+            title: "Helios Executive Review",
+            startedAt: Date(timeIntervalSince1970: 1_800_005_200),
+            createdAt: Date(timeIntervalSince1970: 1_800_005_200),
+            updatedAt: Date(timeIntervalSince1970: 1_800_005_200)
+        ),
+        transcriptSegments: [
+            BarnOwlTranscriptSegmentRecord(
+                meetingID: meetingID,
+                sequence: 0,
+                speakerLabel: "Speaker",
+                text: "We reviewed the Helios rollout.",
+                startTime: 0,
+                endTime: 1
+            )
+        ],
+        meetingFacts: MeetingFacts(
+            title: "the context layer",
+            meetingType: "Customer Workshop",
+            customers: ["Helios"],
+            additionalContext: [
+                calendarContext,
+                "\(calendarContext) Meeting type: Customer Workshop Calendar context: legacy flattened duplicate."
+            ]
+        ),
+        externalContextItems: [
+            BarnOwlExternalContextItemRecord(
+                meetingID: meetingID,
+                source: "codex",
+                body: calendarContext,
+                state: .accepted,
+                createdAt: Date(timeIntervalSince1970: 1_800_005_201)
+            )
+        ],
+        generatedNotes: """
+        # Helios Executive Review
+
+        ## Summary
+        Legacy summary.
+
+        ## Meeting Facts
+        - Title: the context layer
+
+        ## Planning Context
+        - \(calendarContext)
+        - \(calendarContext)
+        """,
+        summary: MeetingSummary(
+            suggestedTitle: "Helios Executive Review",
+            overview: "Reviewed the Helios rollout."
+        )
+    )
+
+    var repairedState = state
+    repairedState.meetingFacts = BarnOwlAppModel.durabilityRepairFacts(from: state)
+    let repaired = BarnOwlAppModel.durabilityRepairMarkdown(from: repairedState)
+
+    #expect(repaired.contains("# Helios Executive Review"))
+    #expect(repaired.contains("- Title: Helios Executive Review"))
+    #expect(!repaired.contains("- Title: the context layer"))
+    #expect(repaired.components(separatedBy: calendarContext).count == 2)
+    #expect(!repaired.contains("legacy flattened duplicate"))
+}
+
+@MainActor
+@Test
 func durabilityRepairFactsRecomputesStaleJunkPayloadsFromTrustedInputs() {
     let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000005002")!
     let state = BarnOwlMeetingState(
@@ -3379,6 +3450,12 @@ func durabilityRepairFactsUsesAcceptedCalendarContextAheadOfTranscriptInference(
 func recurringConceptCandidatesExtractStandaloneAndMultiwordConceptsWithoutSpeakerLabels() {
     let candidates = BarnOwlAppModel.recurringConceptCandidates(
         in: """
+        Room Speaker A: Maybe this is worth checking.
+        Room Speaker A: You should not become concept memory.
+        Room Speaker A: Let us avoid sentence-starter garbage.
+        Room Speaker A: This should stay out.
+        Room Speaker A: But those words are not entities.
+        Room Speaker A: And this one is not either.
         Room Speaker A: Orchid came up again during pricing review.
         Call Speaker B: We also revisited NovaBio Life Sciences coverage.
         """
@@ -3386,6 +3463,12 @@ func recurringConceptCandidatesExtractStandaloneAndMultiwordConceptsWithoutSpeak
 
     #expect(candidates.contains("Orchid"))
     #expect(candidates.contains("NovaBio Life Sciences"))
+    #expect(!candidates.contains("Maybe"))
+    #expect(!candidates.contains("You"))
+    #expect(!candidates.contains("Let"))
+    #expect(!candidates.contains("This"))
+    #expect(!candidates.contains("But"))
+    #expect(!candidates.contains("And"))
     #expect(!candidates.contains("Room Speaker"))
     #expect(!candidates.contains("Call Speaker"))
 }

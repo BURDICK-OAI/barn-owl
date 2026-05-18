@@ -1631,6 +1631,9 @@ struct SettingsView: View {
             var conceptHistories: [BarnOwlControlEnrichmentConceptHistory] = []
             var seenConcepts: Set<String> = []
             for job in recentJobs {
+                guard BarnOwlAppModel.isMeaningfulRecurringConcept(job.conceptKey) else {
+                    continue
+                }
                 let normalizedConcept = job.conceptKey.lowercased()
                 guard !seenConcepts.contains(normalizedConcept) else { continue }
                 seenConcepts.insert(normalizedConcept)

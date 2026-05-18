@@ -352,6 +352,42 @@ public actor LocalMarkdownContextProvider: ReadWriteContextProvider {
         return removed
     }
 
+    @discardableResult
+    public func removeOrphanedMeetingFiles(
+        keepingTitles titles: [String],
+        containingAny markers: [String]
+    ) throws -> Int {
+        guard fileExists(at: rootDirectory), !markers.isEmpty else {
+            return 0
+        }
+
+        let canonicalFileNames = Set(titles.map {
+            fileURL(forTitle: $0).lastPathComponent.lowercased()
+        })
+        let markdownFiles = try FileManager.default.contentsOfDirectory(
+            at: rootDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        .filter { fileURL in
+            fileURL.pathExtension.caseInsensitiveCompare("md") == .orderedSame
+        }
+
+        var removed = 0
+        for fileURL in markdownFiles {
+            guard !canonicalFileNames.contains(fileURL.lastPathComponent.lowercased()) else {
+                continue
+            }
+            let markdown = try String(contentsOf: fileURL, encoding: .utf8)
+            guard markers.contains(where: { markdown.localizedCaseInsensitiveContains($0) }) else {
+                continue
+            }
+            try FileManager.default.removeItem(at: fileURL)
+            removed += 1
+        }
+        return removed
+    }
+
     public func search(_ query: ContextQuery) throws -> [ContextItem] {
         let limit = max(0, query.limit)
         guard limit > 0, fileExists(at: rootDirectory) else {

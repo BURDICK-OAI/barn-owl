@@ -95,6 +95,41 @@ func localMarkdownContextProviderSearchesDeterministically() async throws {
 }
 
 @Test
+func localMarkdownContextProviderRemovesOnlyOrphanedFallbackMirrors() async throws {
+    let rootDirectory = try makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: rootDirectory) }
+
+    let provider = LocalMarkdownContextProvider(rootDirectory: rootDirectory)
+    let fallback = "Transcript saved. Summary generation failed, so Barn Owl kept the diarized transcript and logged the summary error."
+
+    try await provider.write(ContextArtifact(
+        title: "Canonical Meeting",
+        markdown: "# Canonical Meeting\n\n## Summary\n\(fallback)"
+    ))
+    try await provider.write(ContextArtifact(
+        title: "Legacy Duplicate",
+        markdown: "# Legacy Duplicate\n\n## Summary\n\(fallback)"
+    ))
+    try await provider.write(ContextArtifact(
+        title: "Orphan Keep",
+        markdown: "# Orphan Keep\n\n## Summary\nA real note without fallback text."
+    ))
+
+    let removed = try await provider.removeOrphanedMeetingFiles(
+        keepingTitles: ["Canonical Meeting"],
+        containingAny: [fallback]
+    )
+
+    let canonicalURL = await provider.fileURL(forTitle: "Canonical Meeting")
+    let duplicateURL = await provider.fileURL(forTitle: "Legacy Duplicate")
+    let orphanKeepURL = await provider.fileURL(forTitle: "Orphan Keep")
+    #expect(removed == 1)
+    #expect(FileManager.default.fileExists(atPath: canonicalURL.path(percentEncoded: false)))
+    #expect(!FileManager.default.fileExists(atPath: duplicateURL.path(percentEncoded: false)))
+    #expect(FileManager.default.fileExists(atPath: orphanKeepURL.path(percentEncoded: false)))
+}
+
+@Test
 func calendarMeetingContextProducesPromptReadyContextLines() {
     let startsAt = Date(timeIntervalSince1970: 1_800_010_000)
     let context = CalendarMeetingContext(

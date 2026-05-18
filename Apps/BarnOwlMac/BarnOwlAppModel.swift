@@ -3847,7 +3847,7 @@ final class BarnOwlAppModel: ObservableObject {
 
             let removedContextDebris: Int
             if let contextProvider {
-                removedContextDebris = try await contextProvider.removeFiles(named: [
+                let removedKnownDebris = try await contextProvider.removeFiles(named: [
                     "no-transcript-content-provided-meeting-so-no.md",
                     "no-transcript-content-captured-meeting-so-no.md",
                     "transcript-only-contains-brief-incomplete-fragment-she.md",
@@ -3855,6 +3855,14 @@ final class BarnOwlAppModel: ObservableObject {
                     "the-context-layer.md",
                     "inferred-from-user-request-moderna-meeting-with-ed-and-suresh.md"
                 ])
+                let canonicalMirrorTitles = try await libraryStore?.artifacts(limit: Int.max).map(\.session.title) ?? []
+                let removedOrphanedFallbackMirrors = try await contextProvider.removeOrphanedMeetingFiles(
+                    keepingTitles: canonicalMirrorTitles,
+                    containingAny: [
+                        "Transcript saved. Summary generation failed, so Barn Owl kept the diarized transcript and logged the summary error."
+                    ]
+                )
+                removedContextDebris = removedKnownDebris + removedOrphanedFallbackMirrors
             } else {
                 removedContextDebris = 0
             }
@@ -4773,6 +4781,9 @@ final class BarnOwlAppModel: ObservableObject {
                 let evidenceCount = try await database.enrichmentJobEvidence(jobID: job.id)
                     .count
                 controlJobs.append(controlEnrichmentJob(from: job, evidenceCount: evidenceCount))
+                guard Self.isMeaningfulRecurringConcept(job.conceptKey) else {
+                    continue
+                }
                 let normalizedConcept = job.conceptKey.lowercased()
                 if !seenConcepts.contains(normalizedConcept) {
                     seenConcepts.insert(normalizedConcept)
@@ -7768,6 +7779,11 @@ final class BarnOwlAppModel: ObservableObject {
             facts.title = canonicalTitle
             return facts
         }()
+        if state.summary != nil {
+            var rerenderState = state
+            rerenderState.meetingFacts = canonicalFacts
+            return renderMarkdown(from: rerenderState)
+        }
         let session = RecordingSession(
             id: state.id,
             title: canonicalTitle,
@@ -7793,7 +7809,10 @@ final class BarnOwlAppModel: ObservableObject {
         let calendarLines = state.calendarContext
             .flatMap(Self.calendarContext(from:))?
             .contextLines ?? []
-        let freeformContext = (calendarLines + state.externalContextItems.map(\.body))
+        let acceptedExternalContext = state.externalContextItems
+            .filter { $0.state == .accepted }
+            .map(\.body)
+        let freeformContext = (calendarLines + acceptedExternalContext)
             .joined(separator: "\n")
         var repairSeed = state.meetingFacts ?? MeetingFacts(title: canonicalTitle)
         repairSeed.title = canonicalTitle
@@ -7801,6 +7820,7 @@ final class BarnOwlAppModel: ObservableObject {
         repairSeed.organizations = []
         repairSeed.projects = []
         repairSeed.goals = []
+        repairSeed.additionalContext = []
         var facts = MeetingFactsExtractor().extract(
             transcript: transcript,
             freeformContext: freeformContext,
@@ -7808,6 +7828,7 @@ final class BarnOwlAppModel: ObservableObject {
             currentTitle: canonicalTitle
         )
         facts.title = canonicalTitle
+        facts.additionalContext = MeetingFacts.normalizedList(calendarLines + acceptedExternalContext)
         return facts
     }
 
@@ -8505,8 +8526,7 @@ final class BarnOwlAppModel: ObservableObject {
             let candidate = String(transcriptWithoutSpeakerLabels[range])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let normalized = BarnOwlKnowledgeEntityRecord.normalized(candidate)
-            guard !normalized.isEmpty,
-                  !Self.recurringConceptStopTerms.contains(normalized),
+            guard Self.isMeaningfulRecurringConcept(candidate, normalized: normalized),
                   seen.insert(normalized).inserted
             else {
                 continue
@@ -8529,6 +8549,78 @@ final class BarnOwlAppModel: ObservableObject {
         "summary",
         "transcript"
     ]
+
+    private nonisolated static let recurringConceptGenericSingleWordTerms: Set<String> = [
+        "actually",
+        "also",
+        "and",
+        "any",
+        "are",
+        "but",
+        "can",
+        "could",
+        "did",
+        "does",
+        "for",
+        "from",
+        "good",
+        "great",
+        "have",
+        "here",
+        "how",
+        "just",
+        "let",
+        "maybe",
+        "okay",
+        "right",
+        "should",
+        "sure",
+        "that",
+        "the",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "was",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+        "would",
+        "yeah",
+        "yes",
+        "you"
+    ]
+
+    nonisolated static func isMeaningfulRecurringConcept(_ concept: String) -> Bool {
+        isMeaningfulRecurringConcept(
+            concept,
+            normalized: BarnOwlKnowledgeEntityRecord.normalized(concept)
+        )
+    }
+
+    private nonisolated static func isMeaningfulRecurringConcept(
+        _ concept: String,
+        normalized: String
+    ) -> Bool {
+        guard !normalized.isEmpty,
+              !recurringConceptStopTerms.contains(normalized)
+        else {
+            return false
+        }
+
+        let tokenCount = concept
+            .split(whereSeparator: \.isWhitespace)
+            .count
+        if tokenCount <= 1,
+           recurringConceptGenericSingleWordTerms.contains(normalized) {
+            return false
+        }
+        return true
+    }
 
     nonisolated static func defaultDatabaseURL() throws -> URL {
         let applicationSupport = FileManager.default.urls(
