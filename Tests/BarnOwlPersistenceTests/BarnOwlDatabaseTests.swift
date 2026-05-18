@@ -33,6 +33,8 @@ func barnOwlDatabaseRepairsLegacyContextLibrarySchemaAndPreservesEntries() async
     let databaseURL = directory.appending(path: "barnowl.sqlite")
     let entityID = UUID(uuidString: "00000000-0000-0000-0000-000000001241")!
     let aliasID = UUID(uuidString: "00000000-0000-0000-0000-000000001242")!
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001243")!
+    let now = Date(timeIntervalSince1970: 1_800_000_250)
     try makeLegacyContextLibraryDatabase(
         at: databaseURL,
         entityID: entityID,
@@ -46,6 +48,27 @@ func barnOwlDatabaseRepairsLegacyContextLibrarySchemaAndPreservesEntries() async
         ownerID: ownerID
     ))
     let aliases = try await database.knowledgeAliases(entityID: entityID)
+    try await database.upsertMeeting(makeDatabaseMeeting(
+        id: meetingID,
+        title: "Recovered Legacy Migration",
+        createdAt: now,
+        updatedAt: now
+    ))
+    let application = BarnOwlKnowledgeApplicationRecord(
+        ownerID: ownerID,
+        entityID: entityID,
+        meetingID: meetingID,
+        surface: "final_processing",
+        usedInSummaryGeneration: true,
+        usedInNoteGeneration: true,
+        influencedMeetingFacts: true,
+        createdAt: now
+    )
+    try await database.upsertKnowledgeApplication(application)
+    let applications = try await database.knowledgeApplications(
+        ownerID: ownerID,
+        meetingID: meetingID
+    )
 
     #expect(try await database.schemaVersion() == BarnOwlDatabase.latestSchemaVersion)
     #expect(entity.kind == "person")
@@ -55,6 +78,7 @@ func barnOwlDatabaseRepairsLegacyContextLibrarySchemaAndPreservesEntries() async
     #expect(aliases.map(\.id) == [aliasID])
     #expect(aliases.map(\.alias) == ["Colin"])
     #expect(aliases.map(\.normalizedAlias) == ["colin"])
+    #expect(applications == [application])
 }
 
 @Test
@@ -1816,6 +1840,29 @@ private func makeLegacyContextLibraryDatabase(
             is_confirmed INTEGER NOT NULL DEFAULT 0,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
+        );
+
+        CREATE TABLE meetings (
+            id TEXT PRIMARY KEY,
+            external_id TEXT,
+            title TEXT NOT NULL,
+            started_at REAL,
+            ended_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            metadata_json TEXT
+        );
+
+        CREATE TABLE knowledge_applications (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            entity_id TEXT NOT NULL REFERENCES knowledge_entities(id) ON DELETE CASCADE,
+            meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            surface TEXT NOT NULL,
+            influenced_meeting_facts INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            used_in_summary_generation INTEGER NOT NULL DEFAULT 0,
+            used_in_note_generation INTEGER NOT NULL DEFAULT 0
         );
 
         INSERT INTO context_entities (
