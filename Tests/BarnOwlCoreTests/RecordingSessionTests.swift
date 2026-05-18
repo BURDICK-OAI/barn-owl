@@ -612,6 +612,64 @@ func calendarContextControlAttachPersistsAcceptedRepairEvidence() async throws {
 
 @Test
 @MainActor
+func calendarContextControlAttachStaysIdempotentAndRejectedMatchesStopDrivingRepair() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000C023")!
+    let now = Date(timeIntervalSince1970: 1_800_004_700)
+    try await database.upsertMeeting(BarnOwlMeetingRecord(
+        id: meetingID,
+        title: "Calendar Candidate Review",
+        startedAt: now,
+        createdAt: now,
+        updatedAt: now
+    ))
+    let context = CalendarMeetingContext(
+        id: "calendar-event-repeatable",
+        provider: "Google Calendar",
+        title: "OpenAI <> Moderna",
+        startsAt: now,
+        endsAt: now.addingTimeInterval(1_800),
+        attendees: ["stephane@example.com"],
+        confidence: 0.97,
+        matchReason: "unique bounded overlap"
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let contextJSON = String(decoding: try encoder.encode(context), as: UTF8.self)
+
+    let candidate = await model.controlCalendarContextAttachResponse(
+        meetingID: meetingID,
+        contextJSON: contextJSON,
+        state: "candidate",
+        selectedAutomatically: true
+    )
+    #expect(candidate.calendarMatches?.count == 1)
+    #expect(candidate.calendarMatches?.first?.state == "candidate")
+    #expect(try await database.meetingState(id: meetingID)?.calendarContext == nil)
+
+    let accepted = await model.controlCalendarContextAttachResponse(
+        meetingID: meetingID,
+        contextJSON: contextJSON,
+        state: "accepted",
+        selectedAutomatically: false
+    )
+    let acceptedMatch = try #require(accepted.calendarMatches?.first)
+    #expect(accepted.calendarMatches?.count == 1)
+    #expect(acceptedMatch.state == "accepted")
+    #expect(try await database.meetingState(id: meetingID)?.calendarContext?.calendarEventID == context.id)
+
+    let rejected = await model.controlCalendarContextSelectionResponse(
+        matchID: acceptedMatch.id,
+        state: .rejected
+    )
+    #expect(rejected.calendarMatches?.count == 1)
+    #expect(rejected.calendarMatches?.first?.state == "rejected")
+    #expect(try await database.meetingState(id: meetingID)?.calendarContext == nil)
+}
+
+@Test
+@MainActor
 func controlEnrichmentSourcesManageUserScopedRegistry() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
@@ -3012,6 +3070,61 @@ func meetingFactsExtractorKeepsAcceptedCalendarOrganizationAheadOfTranscriptInfe
 
     #expect(facts.organizations == ["Moderna"])
     #expect(!facts.organizations.contains("Rosalind"))
+}
+
+@Test
+func meetingFactsExtractorDoesNotTreatCalendarMatchReasonAsAnExplicitTitle() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: "Speaker: We discussed Takeda's Rosalind workflows and evaluation needs.",
+        freeformContext: """
+        Calendar event: FW: OpenAI Onsite - R&D and Rosalind Discussion - Cambridge
+        Calendar match: High confidence (exact bounded invite overlap; recording title matches event topic)
+        """,
+        currentTitle: "Takeda Rosalind"
+    )
+
+    #expect(facts.title == "Takeda Rosalind")
+    #expect(facts.title != "matches event topic)")
+}
+
+@Test
+func meetingFactsExtractorKeepsContextCustomersAndTakedaFragmentsPrecise() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: """
+        Speaker: The goal is or an end state that you want the model to achieve to.
+        Speaker: The goal is and it ran for 25 hours and it came back with garbage.
+        Speaker: The goal is this my folder running around this task learning planning and transfer to this project and so on and so on.
+        Speaker: The goal is when a patient, when a user in a consented or unconsented environment.
+        Speaker: The goal is for you meeting Navin is like meeting obesity.
+        Speaker: The project If planning, Then I have good planning.
+        Speaker: The project Um for some important project.
+        Speaker: The project Then I have good planning.
+        Speaker: The project So like this Roslyn launch.
+        """,
+        freeformContext: """
+        Customer: Takeda
+        Known organization: Takeda
+        Known project: GPT-Rosalind
+        Calendar event: FW: OpenAI Onsite - R&D and Rosalind Discussion - Cambridge
+        Calendar match: High confidence (exact bounded invite overlap; recording title matches event topic)
+        Known product: Codex
+        Product context: Goal is to build a connector/app for ChatGPT.
+        User stated this recording is with Takeda specifically for Rosalind.
+        """
+    )
+
+    #expect(facts.customers == ["Takeda"])
+    #expect(!facts.customers.contains("Rosalind"))
+    #expect(!facts.customers.contains("Codex"))
+    #expect(facts.organizations == ["Takeda"])
+    #expect(!facts.organizations.contains("Rosalind"))
+    #expect(!facts.organizations.contains("ChatGPT"))
+    #expect(facts.projects == ["GPT-Rosalind", "Codex"])
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("if planning") })
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("um for some important project") })
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("then i have good planning") })
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("so like this roslyn launch") })
+    #expect(facts.goals.isEmpty)
 }
 
 @Test

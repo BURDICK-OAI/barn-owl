@@ -5023,7 +5023,10 @@ final class BarnOwlAppModel: ObservableObject {
             let now = Date()
             let attendeesData = try JSONEncoder().encode(context.attendees)
             let attendeesJSON = String(decoding: attendeesData, as: UTF8.self)
+            let existingMatch = try await database.meetingCalendarMatches(meetingID: meetingID)
+                .first { $0.calendarEventID == context.id }
             try await database.upsertMeetingCalendarMatch(BarnOwlMeetingCalendarMatchRecord(
+                id: existingMatch?.id ?? UUID(),
                 meetingID: meetingID,
                 calendarEventID: context.id,
                 title: context.title,
@@ -5035,7 +5038,7 @@ final class BarnOwlAppModel: ObservableObject {
                 selectedAutomatically: selectedAutomatically,
                 matchReason: context.matchReason,
                 confidence: context.confidence,
-                createdAt: now,
+                createdAt: existingMatch?.createdAt ?? now,
                 updatedAt: now
             ))
             if state == .accepted {
@@ -5072,6 +5075,10 @@ final class BarnOwlAppModel: ObservableObject {
             if state == .accepted,
                let context = Self.calendarContext(from: match) {
                 await persistCalendarContext(context, meetingID: match.meetingID)
+            } else if state == .rejected,
+                      let canonical = try await database.meetingCalendarContext(meetingID: match.meetingID),
+                      canonical.calendarEventID == match.calendarEventID {
+                try await database.deleteMeetingCalendarContext(meetingID: match.meetingID)
             }
             let matches = try await database.meetingCalendarMatches(meetingID: match.meetingID)
             return controlStatusResponse(

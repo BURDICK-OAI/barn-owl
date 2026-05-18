@@ -144,6 +144,27 @@ func rendererUsesCanonicalMeetingFactsWithoutDuplicateFactSections() {
 }
 
 @Test
+func rendererShowsAcceptedContextOnceWhenFactsCarryTheSameContext() {
+    let renderer = MarkdownMeetingRenderer()
+    let sharedContext = "Calendar context: OpenAI <> Moderna."
+    let markdown = renderer.render(
+        session: makeSession(title: "Moderna Review"),
+        segments: [],
+        summary: MeetingSummary(overview: "Reviewed the account."),
+        context: [sharedContext],
+        meetingFacts: MeetingFacts(
+            title: "Moderna Review",
+            meetingType: "Customer Workshop",
+            customers: ["Moderna"],
+            additionalContext: [sharedContext]
+        )
+    )
+
+    #expect(markdown.components(separatedBy: sharedContext).count == 2)
+    #expect(markdown.contains("## Context"))
+}
+
+@Test
 func rendererOmitsLowValueFactsAndContextBoilerplate() {
     let renderer = MarkdownMeetingRenderer()
     let facts = MeetingFacts(

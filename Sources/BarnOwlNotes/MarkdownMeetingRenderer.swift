@@ -159,7 +159,7 @@ public struct MarkdownMeetingRenderer: Sendable {
     ) -> String {
         let noteContext = Self.noteContext(from: context)
         let factContext = meetingFacts.map(Self.renderableFactContext(from:)) ?? []
-        let renderContext = noteContext + factContext
+        let renderContext = Self.uniqueContext(noteContext + factContext)
         let format = requestedFormat
             ?? Self.trustedFormat(from: meetingFacts)
             ?? MeetingNoteFormat.infer(
@@ -197,7 +197,7 @@ public struct MarkdownMeetingRenderer: Sendable {
         appendSection("References", references(from: segments, context: renderContext), to: &lines)
         let narrativeContext = meetingFacts == nil
             ? noteContext
-            : noteContext + Self.noteContext(from: meetingFacts?.additionalContext ?? [])
+            : Self.uniqueContext(noteContext + Self.noteContext(from: meetingFacts?.additionalContext ?? []))
         appendSection(format.contextHeading, narrativeContext, to: &lines)
 
         lines.append("## Transcript")
@@ -310,7 +310,6 @@ public struct MarkdownMeetingRenderer: Sendable {
                 }
             }
         }
-        lines.append(contentsOf: noteContext(from: facts.additionalContext))
         return lines
     }
 
@@ -334,6 +333,23 @@ public struct MarkdownMeetingRenderer: Sendable {
                     && !lowercased.hasPrefix("audio sources:")
                     && !lowercased.hasPrefix("local context")
             }
+    }
+
+    private static func uniqueContext(_ context: [String]) -> [String] {
+        var seen: Set<String> = []
+        var unique: [String] = []
+        for line in context {
+            let key = line
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: #"[.!?]+$"#, with: "", options: .regularExpression)
+            guard !key.isEmpty, seen.insert(key).inserted else {
+                continue
+            }
+            unique.append(line)
+        }
+        return unique
     }
 
     private func participants(from segments: [TranscriptSegment], context: [String]) -> [String] {
