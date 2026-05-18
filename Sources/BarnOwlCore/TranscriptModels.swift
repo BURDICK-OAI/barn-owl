@@ -25,6 +25,50 @@ public struct TranscriptSegment: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum TranscriptPersistenceGuard {
+    private static let blockedPrefixes = [
+        "conservative learned spelling hints:",
+        "use these local barn owl vocabulary hints learned from prior final transcripts.",
+        "keep transcription literal; do not add words that were not spoken.",
+        "realtime transcription idle.",
+        "realtime connecting",
+        "realtime reconnecting",
+        "realtime connected.",
+        "realtime receiving audio.",
+        "realtime transcribing live.",
+        "realtime degraded;",
+        "realtime fallback active;",
+        "realtime transcription stopped.",
+        "starting realtime transcription."
+    ]
+
+    public static func sanitizedText(_ text: String) -> String? {
+        let cleaned = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        guard !cleaned.isEmpty else {
+            return nil
+        }
+
+        let normalized = cleaned
+            .folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            .lowercased()
+
+        guard !blockedPrefixes.contains(where: normalized.hasPrefix) else {
+            return nil
+        }
+
+        return cleaned
+    }
+
+    public static func blocks(_ text: String) -> Bool {
+        sanitizedText(text) == nil
+    }
+}
+
 public struct MeetingSummary: Codable, Equatable, Sendable {
     public var suggestedTitle: String?
     public var overview: String

@@ -226,7 +226,7 @@ Illustrative shape:
     "transcript": {
       "pointer": "barnowl:meeting:8B2A...#transcript",
       "ready": true,
-      "text": "Jane: We should hold price. Collin: Agreed..."
+      "text": "Speaker 1: We should hold price. Speaker 2: Agreed..."
     },
     "notes": {
       "pointer": "barnowl:meeting:8B2A...#notes",
@@ -249,7 +249,7 @@ Illustrative shape:
       "Do not discount below X without escalation."
     ],
     "actionItems": [
-      "Collin to send revised follow-up by Friday."
+      "Owner to send revised follow-up by Friday."
     ],
     "openQuestions": [
       "Whether procurement needs revised paperwork."

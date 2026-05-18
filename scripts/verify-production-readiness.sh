@@ -96,6 +96,7 @@ required_checked_labels=(
   "CLI feedback Slack draft produced a redacted draft without posting"
   "CLI feedback Slack post requires explicit confirmation and configured webhook"
   "Bundled Codex skill guidance matches the installed CLI behavior"
+  "Bundled Codex skill documents Codex-assisted enrichment sources"
 )
 
 completed_manual_evidence=""

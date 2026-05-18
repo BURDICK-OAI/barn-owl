@@ -34,6 +34,7 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case jobsRetry = "jobs_retry"
     case jobsDismiss = "jobs_dismiss"
     case summariesRetry = "summaries_retry"
+    case durabilityRepair = "durability_repair"
     case contextList = "context_list"
     case contextAccept = "context_accept"
     case contextIgnore = "context_ignore"

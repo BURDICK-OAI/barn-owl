@@ -742,16 +742,16 @@ func controlKnowledgeEnrichRecordsSupportedMemoryEvidenceForRecurringConcept() a
     let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E101")!,
-        title: "Rosalind Planning",
-        summary: MeetingSummary(overview: "Rosalind launch planning and risk review.")
+        title: "Orchid Planning",
+        summary: MeetingSummary(overview: "Orchid launch planning and risk review.")
     ))
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E102")!,
-        title: "Rosalind Pricing",
-        summary: MeetingSummary(overview: "Rosalind pricing discussion and next steps.")
+        title: "Orchid Pricing",
+        summary: MeetingSummary(overview: "Orchid pricing discussion and next steps.")
     ))
 
-    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
     let storedJobs = try await database.enrichmentJobs(ownerID: "owner")
     let storedEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
@@ -774,13 +774,13 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
     let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E201")!,
-        title: "Rosalind Launch",
-        summary: MeetingSummary(overview: "Rosalind launch review and customer sequencing.")
+        title: "Orchid Launch",
+        summary: MeetingSummary(overview: "Orchid launch review and customer sequencing.")
     ))
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E202")!,
-        title: "Rosalind Pricing",
-        summary: MeetingSummary(overview: "Rosalind pricing review and launch timing.")
+        title: "Orchid Pricing",
+        summary: MeetingSummary(overview: "Orchid pricing review and launch timing.")
     ))
 
     let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
@@ -796,12 +796,12 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal launch workstream referenced in account, product, and pricing discussions.",
               "confidence": 0.97,
-              "citations": ["owner-private:projects/rosalind"],
+              "citations": ["owner-private:projects/orchid"],
               "freshness": "current"
             }
           ]
@@ -812,13 +812,13 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
     ))
     #expect(created.ok)
 
-    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
     let sourceIDs = Set(response.enrichmentEvidence?.map(\.sourceID) ?? [])
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
     let aliases = try await database.knowledgeAliases(entityID: entity.id)
     let meetingLinks = try await database.knowledgeMeetingLinks(entityID: entity.id)
@@ -828,7 +828,7 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
     #expect(sourceIDs.contains("barnowl_memory"))
     #expect(sourceIDs.contains("owner_private_source"))
     #expect(entity.summary?.contains("Internal launch workstream") == true)
-    #expect(Set(aliases.map(\.alias)) == ["Rosalind"])
+    #expect(Set(aliases.map(\.alias)) == ["Orchid"])
     #expect(Set(meetingLinks.map(\.meetingID)) == Set([
         UUID(uuidString: "00000000-0000-0000-0000-00000000E201")!,
         UUID(uuidString: "00000000-0000-0000-0000-00000000E202")!
@@ -842,8 +842,8 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() 
     let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E211")!,
-        title: "Moderna Account Review",
-        summary: MeetingSummary(overview: "Moderna coverage planning and follow-up.")
+        title: "NovaBio Account Review",
+        summary: MeetingSummary(overview: "NovaBio coverage planning and follow-up.")
     ))
 
     let updatedPublicSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
@@ -859,12 +859,12 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() 
         {
           "entries": [
             {
-              "matchTerms": ["Moderna"],
+              "matchTerms": ["NovaBio"],
               "candidateKind": "company",
-              "canonicalName": "Moderna",
+              "canonicalName": "NovaBio",
               "summary": "Public biotechnology company.",
               "confidence": 0.91,
-              "citations": ["public:companies/moderna"],
+              "citations": ["public:companies/novabio"],
               "freshness": "recent"
             }
           ]
@@ -875,13 +875,13 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() 
     ))
     #expect(updatedPublicSource.ok)
 
-    let response = await model.controlKnowledgeEnrichResponse(concept: "Moderna", limit: 8)
+    let response = await model.controlKnowledgeEnrichResponse(concept: "NovaBio", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
     let evidenceSourceIDs = Set(response.enrichmentEvidence?.map(\.sourceID) ?? [])
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "company",
-        canonicalName: "Moderna"
+        canonicalName: "NovaBio"
     ))
 
     #expect(job.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
@@ -907,20 +907,20 @@ func controlKnowledgeEnrichHoldsPublicOnlyPrivateTruth() async throws {
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Weak public result claims this is a project.",
               "confidence": 0.83,
-              "citations": ["public:results/rosalind-1"]
+              "citations": ["public:results/orchid-1"]
             },
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Another weak public result claims this is a project.",
               "confidence": 0.81,
-              "citations": ["public:results/rosalind-2"]
+              "citations": ["public:results/orchid-2"]
             }
           ]
         }
@@ -930,9 +930,9 @@ func controlKnowledgeEnrichHoldsPublicOnlyPrivateTruth() async throws {
     ))
     #expect(updatedPublicSource.ok)
 
-    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
-    let entity = try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind")
+    let entity = try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Orchid")
 
     #expect(job.status == BarnOwlEnrichmentJobStatus.heldInsufficientEvidence.rawValue)
     #expect(job.rationale?.contains("public-only evidence") == true)
@@ -956,11 +956,11 @@ func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async th
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
-              "citations": ["owner-private:projects/rosalind"]
+              "citations": ["owner-private:projects/orchid"]
             }
           ]
         }
@@ -980,11 +980,11 @@ func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async th
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "person",
-              "canonicalName": "Rosalind Chen",
+              "canonicalName": "Orchid Chen",
               "summary": "Workspace directory person entry.",
-              "citations": ["workspace:people/rosalind-chen"]
+              "citations": ["workspace:people/orchid-chen"]
             }
           ]
         }
@@ -995,7 +995,7 @@ func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async th
     #expect(projectSource.ok)
     #expect(personSource.ok)
 
-    let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
     let storedEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
     let conflicts = try await database.enrichmentConflicts(ownerID: "owner")
@@ -1028,11 +1028,11 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
-              "citations": ["owner-private:projects/rosalind"]
+              "citations": ["owner-private:projects/orchid"]
             }
           ]
         }
@@ -1052,11 +1052,11 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "person",
-              "canonicalName": "Rosalind Chen",
+              "canonicalName": "Orchid Chen",
               "summary": "Workspace directory person entry.",
-              "citations": ["workspace:people/rosalind-chen"]
+              "citations": ["workspace:people/orchid-chen"]
             }
           ]
         }
@@ -1064,7 +1064,7 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
         authState: "configured",
         healthStatus: "ready"
     ))
-    let initialConflict = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let initialConflict = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     #expect(initialConflict.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
 
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
@@ -1079,18 +1079,18 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
-              "citations": ["owner-private:projects/rosalind:a"]
+              "citations": ["owner-private:projects/orchid:a"]
             },
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Same internal project corroborated by a second Private Reference Source record.",
-              "citations": ["owner-private:projects/rosalind:b"]
+              "citations": ["owner-private:projects/orchid:b"]
             }
           ]
         }
@@ -1100,18 +1100,18 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
     ))
     _ = await model.controlEnrichmentSourceEnabledResponse(sourceID: "workspace_glossary", enabled: false)
 
-    let followUp = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let followUp = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let followUpJob = try #require(followUp.enrichmentJobs?.first)
     let conceptHistory = try #require(followUp.enrichmentConceptHistories?.first)
     let entity = try await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     )
 
     #expect(followUpJob.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
     #expect(followUpJob.rationale?.contains("prior conflicting job") == true)
-    #expect(conceptHistory.conceptKey == "Rosalind")
+    #expect(conceptHistory.conceptKey == "Orchid")
     #expect(conceptHistory.conflictingJobs >= 1)
     #expect(conceptHistory.requiresConflictMemoryHold)
     #expect(entity == nil)
@@ -1134,20 +1134,20 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
               "confidence": 0.96,
-              "citations": ["owner-private:projects/rosalind:a"]
+              "citations": ["owner-private:projects/orchid:a"]
             },
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Same project from a second private record.",
               "confidence": 0.94,
-              "citations": ["owner-private:projects/rosalind:b"]
+              "citations": ["owner-private:projects/orchid:b"]
             }
           ]
         }
@@ -1156,12 +1156,12 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
         healthStatus: "ready"
     ))
 
-    let accepted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let accepted = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     #expect(accepted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
     let originalConfidence = entity.confidence
 
@@ -1177,12 +1177,12 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "person",
-              "canonicalName": "Rosalind Chen",
+              "canonicalName": "Orchid Chen",
               "summary": "Conflicting workspace people result.",
               "confidence": 0.91,
-              "citations": ["workspace:people/rosalind-chen"]
+              "citations": ["workspace:people/orchid-chen"]
             }
           ]
         }
@@ -1191,7 +1191,7 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
         healthStatus: "ready"
     ))
 
-    let conflicted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let conflicted = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     #expect(conflicted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
     let decayed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     #expect(decayed.lifecycleStatus == .active)
@@ -1209,12 +1209,12 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Explicit private correction rejecting this durable mapping.",
               "confidence": 0.93,
-              "citations": ["workspace:corrections/rosalind"],
+              "citations": ["workspace:corrections/orchid"],
               "negativeEvidence": true
             }
           ]
@@ -1224,12 +1224,12 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
         healthStatus: "ready"
     ))
 
-    let reversed = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let reversed = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     #expect(reversed.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
     let suppressed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     #expect(suppressed.lifecycleStatus == .suppressed)
     #expect(suppressed.lifecycleReason?.contains("Automatically suppressed") == true)
-    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind") == nil)
+    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Orchid") == nil)
 }
 
 @Test
@@ -1249,20 +1249,20 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
               "confidence": 0.96,
-              "citations": ["owner-private:projects/rosalind:a"]
+              "citations": ["owner-private:projects/orchid:a"]
             },
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Same project from a second private record.",
               "confidence": 0.94,
-              "citations": ["owner-private:projects/rosalind:b"]
+              "citations": ["owner-private:projects/orchid:b"]
             }
           ]
         }
@@ -1270,12 +1270,12 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
         authState: "configured",
         healthStatus: "ready"
     ))
-    let accepted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let accepted = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     #expect(accepted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
 
     _ = await model.controlEnrichmentSourceEnabledResponse(sourceID: "owner_private_source", enabled: false)
@@ -1291,12 +1291,12 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Weak public contradiction.",
               "confidence": 0.82,
-              "citations": ["public:results/rosalind-contradiction"],
+              "citations": ["public:results/orchid-contradiction"],
               "negativeEvidence": true
             }
           ]
@@ -1306,11 +1306,11 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
         healthStatus: "ready"
     ))
 
-    let contradicted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let contradicted = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     #expect(contradicted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
     let preserved = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     #expect(preserved.lifecycleStatus == .active)
-    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind") != nil)
+    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Orchid") != nil)
 }
 
 @Test
@@ -1330,18 +1330,18 @@ func controlKnowledgeJobsListIncludesRecentConceptHistory() async throws {
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
-              "citations": ["owner-private:projects/rosalind:a"]
+              "citations": ["owner-private:projects/orchid:a"]
             },
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project duplicate evidence.",
-              "citations": ["owner-private:projects/rosalind:b"]
+              "citations": ["owner-private:projects/orchid:b"]
             }
           ]
         }
@@ -1350,12 +1350,12 @@ func controlKnowledgeJobsListIncludesRecentConceptHistory() async throws {
         healthStatus: "ready"
     ))
 
-    _ = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    _ = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let response = await model.controlKnowledgeJobsListResponse(limit: 10)
     let history = try #require(response.enrichmentConceptHistories?.first)
 
     #expect(response.enrichmentJobs?.isEmpty == false)
-    #expect(history.conceptKey == "Rosalind")
+    #expect(history.conceptKey == "Orchid")
     #expect(history.supportedCandidateJobs == 1)
     #expect(history.requiresConflictMemoryHold == false)
 }
@@ -1377,20 +1377,20 @@ func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async thro
         {
           "entries": [
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project.",
               "confidence": 0.82,
-              "citations": ["owner-private:projects/rosalind:a"]
+              "citations": ["owner-private:projects/orchid:a"]
             },
             {
-              "matchTerms": ["Rosalind"],
+              "matchTerms": ["Orchid"],
               "candidateKind": "project",
-              "canonicalName": "Rosalind",
+              "canonicalName": "Orchid",
               "summary": "Internal project duplicate evidence.",
               "confidence": 0.80,
-              "citations": ["owner-private:projects/rosalind:b"]
+              "citations": ["owner-private:projects/orchid:b"]
             }
           ]
         }
@@ -1400,17 +1400,17 @@ func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async thro
     ))
     #expect(created.ok)
 
-    let first = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let first = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let firstEntity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
-    let second = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
+    let second = await model.controlKnowledgeEnrichResponse(concept: "Orchid", limit: 8)
     let secondEntity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
 
     #expect(first.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
@@ -1427,7 +1427,7 @@ func publicReferenceResearchAdapterNormalizesLiveCompanyEvidence() async throws 
           "search": [
             {
               "id": "Q899",
-              "label": "Moderna",
+              "label": "NovaBio",
               "description": "American biotechnology company",
               "concepturi": "https://www.wikidata.org/wiki/Q899"
             }
@@ -1450,7 +1450,7 @@ func publicReferenceResearchAdapterNormalizesLiveCompanyEvidence() async throws 
 
     let result = try await adapter.enrich(
         request: BarnOwlEnrichmentSourceRequest(
-            conceptKey: "Moderna",
+            conceptKey: "NovaBio",
             limit: 4,
             requestedAt: Date(timeIntervalSince1970: 1_800_000_100)
         ),
@@ -1459,9 +1459,9 @@ func publicReferenceResearchAdapterNormalizesLiveCompanyEvidence() async throws 
     let request = try #require(await transport.latestRequest)
     let evidence = try #require(result.evidence.first)
 
-    #expect(request.url?.absoluteString.contains("search=Moderna") == true)
+    #expect(request.url?.absoluteString.contains("search=NovaBio") == true)
     #expect(evidence.candidateKind == "company")
-    #expect(evidence.canonicalName == "Moderna")
+    #expect(evidence.canonicalName == "NovaBio")
     #expect(evidence.scope == .publicReference)
     #expect(evidence.citations == ["https://www.wikidata.org/wiki/Q899"])
 }
@@ -2912,27 +2912,187 @@ func meetingFactsExtractorIgnoresSpeakerLabelsAndLowercaseNoiseOrganizations() {
 @Test
 func meetingFactsExtractorUsesAcceptedDurableKnowledgeMarkersForProjects() {
     let facts = MeetingFactsExtractor().extract(
-        transcript: "Dana: Rosalind came up again in the pricing discussion.",
-        freeformContext: "Known project: Rosalind. Internal launch workstream referenced in account and pricing discussions."
+        transcript: "Dana: Orchid came up again in the pricing discussion.",
+        freeformContext: "Known project: Orchid. Internal launch workstream referenced in account and pricing discussions."
     )
 
-    #expect(facts.projects == ["Rosalind"])
+    #expect(facts.projects == ["Orchid"])
     #expect(facts.additionalContext.contains {
-        $0.contains("Known project: Rosalind")
+        $0.contains("Known project: Orchid")
     })
+}
+
+@Test
+func meetingFactsExtractorRejectsObservedJunkOrganizationsProjectsAndWeakGoals() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: """
+        Dana: The customer Room said Sure, Life is complicated, and we also participated in the launch.
+        Lee: This project with this team to launch needs discussion.
+        Morgan: And the third is project. Then the migration is unclear. The migration needs discussion.
+        Dana: Main thing is because of you.
+        Riley: Main thing as I said is definitely a pilot you're one of the first and few.
+        Quinn: Goal is to.
+        """,
+        freeformContext: """
+        Known organization: NovaBio
+        Known project: GPT-Orchid beta
+        Objective: Stabilize first-pass transcript accuracy for recurring account vocabulary.
+        """
+    )
+
+    #expect(facts.organizations.contains("NovaBio"))
+    #expect(!facts.organizations.contains("Room"))
+    #expect(!facts.organizations.contains("Sure"))
+    #expect(!facts.organizations.contains("Life"))
+    #expect(facts.projects == ["GPT-Orchid beta"])
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("with this team to launch") })
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("third is project") })
+    #expect(!facts.projects.contains { $0.localizedCaseInsensitiveContains("the migration") })
+    #expect(facts.goals == ["Stabilize first-pass transcript accuracy for recurring account vocabulary"])
+}
+
+@Test
+func meetingFactsExtractorDoesNotPromoteEveryTranscriptOrganizationToCustomer() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: """
+        Dana: The customer NovaBio renewal remains the account focus for this review.
+        Lee: We also discussed OpenAI tooling and talked with Kenny afterward.
+        """
+    )
+
+    #expect(facts.organizations.contains("NovaBio"))
+    #expect(facts.customers == ["NovaBio"])
+    #expect(!facts.customers.contains("OpenAI"))
+    #expect(!facts.customers.contains("Kenny"))
+}
+
+@Test
+func meetingTitleSuggesterKeepsCanonicalCurrentTitleAheadOfWeakSummaryInference() {
+    let title = MeetingTitleSuggester.title(
+        currentTitle: "NovaBio: Morgan CEO and CIOs meeting",
+        summary: MeetingSummary(
+            suggestedTitle: "the New Jersey Mafia",
+            overview: "The summary produced an attention-grabbing but low-trust phrase."
+        ),
+        segments: [
+            TranscriptSegment(
+                speakerLabel: "Speaker",
+                text: "This title should not displace the user-confirmed one.",
+                startTime: 0,
+                endTime: 1
+            )
+        ]
+    )
+
+    #expect(title == "NovaBio: Morgan CEO and CIOs Meeting")
+}
+
+@MainActor
+@Test
+func durabilityRepairMarkdownResynchronizesHeadingAndMeetingFactsTitle() {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000005001")!
+    let state = BarnOwlMeetingState(
+        meeting: BarnOwlMeetingRecord(
+            id: meetingID,
+            title: "Helios OpenAI Partnership",
+            startedAt: Date(timeIntervalSince1970: 1_800_005_000),
+            createdAt: Date(timeIntervalSince1970: 1_800_005_000),
+            updatedAt: Date(timeIntervalSince1970: 1_800_005_000)
+        ),
+        meetingFacts: MeetingFacts(
+            title: "the context layer",
+            meetingType: "Customer Workshop",
+            customers: ["Helios"]
+        ),
+        generatedNotes: """
+        # Helios OpenAI Partnership
+
+        ## Meeting Facts
+
+        - Meeting type: Customer Workshop
+        - Title: the context layer
+        - Customers: Helios
+
+        ## Summary
+        Reviewed partnership details.
+        """
+    )
+
+    let repaired = BarnOwlAppModel.durabilityRepairMarkdown(from: state)
+
+    #expect(repaired.contains("# Helios OpenAI Partnership"))
+    #expect(repaired.contains("- Title: Helios OpenAI Partnership"))
+    #expect(!repaired.contains("- Title: the context layer"))
+    #expect(repaired.contains("## Summary"))
+}
+
+@MainActor
+@Test
+func durabilityRepairFactsRecomputesStaleJunkPayloadsFromTrustedInputs() {
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000005002")!
+    let state = BarnOwlMeetingState(
+        meeting: BarnOwlMeetingRecord(
+            id: meetingID,
+            title: "Helios OpenAI Partnership",
+            startedAt: Date(timeIntervalSince1970: 1_800_005_100),
+            createdAt: Date(timeIntervalSince1970: 1_800_005_100),
+            updatedAt: Date(timeIntervalSince1970: 1_800_005_100)
+        ),
+        transcriptSegments: [
+            BarnOwlTranscriptSegmentRecord(
+                meetingID: meetingID,
+                sequence: 0,
+                speakerLabel: "Speaker",
+                text: "We discussed Helios pricing and the GPT-Orchid beta launch.",
+                startTime: 0,
+                endTime: 1
+            )
+        ],
+        meetingFacts: MeetingFacts(
+            title: "the context layer",
+            meetingType: "Customer Workshop",
+            organizations: ["Room", "Sure", "Life"],
+            customers: ["Room", "Sure", "Life"],
+            projects: ["with this team to launch", "the frameworks is any project"],
+            goals: ["talk about the thing"]
+        ),
+        externalContextItems: [
+            BarnOwlExternalContextItemRecord(
+                meetingID: meetingID,
+                source: "codex",
+                body: """
+                Customer: Helios
+                Known organization: Helios
+                Known project: GPT-Orchid beta
+                Objective: Stabilize first-pass transcript accuracy for recurring account vocabulary
+                """,
+                state: .accepted
+            )
+        ]
+    )
+
+    let repairedFacts = BarnOwlAppModel.durabilityRepairFacts(from: state)
+
+    #expect(repairedFacts.title == "Helios OpenAI Partnership")
+    #expect(repairedFacts.organizations == ["Helios"])
+    #expect(repairedFacts.customers == ["Helios"])
+    #expect(repairedFacts.projects == ["GPT-Orchid beta"])
+    #expect(repairedFacts.goals == ["Stabilize first-pass transcript accuracy for recurring account vocabulary"])
+    #expect(!repairedFacts.customers.contains("Room"))
+    #expect(!repairedFacts.projects.contains { $0.localizedCaseInsensitiveContains("frameworks") })
 }
 
 @Test
 func recurringConceptCandidatesExtractStandaloneAndMultiwordConceptsWithoutSpeakerLabels() {
     let candidates = BarnOwlAppModel.recurringConceptCandidates(
         in: """
-        Room Speaker A: Rosalind came up again during pricing review.
-        Call Speaker B: We also revisited Moderna Life Sciences coverage.
+        Room Speaker A: Orchid came up again during pricing review.
+        Call Speaker B: We also revisited NovaBio Life Sciences coverage.
         """
     )
 
-    #expect(candidates.contains("Rosalind"))
-    #expect(candidates.contains("Moderna Life Sciences"))
+    #expect(candidates.contains("Orchid"))
+    #expect(candidates.contains("NovaBio Life Sciences"))
     #expect(!candidates.contains("Room Speaker"))
     #expect(!candidates.contains("Call Speaker"))
 }

@@ -216,7 +216,7 @@ struct RecorderWindow: View {
             }
 
             HStack {
-                Text("Recent Sessions")
+                Text("Recent Meetings")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Button {
@@ -225,7 +225,7 @@ struct RecorderWindow: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh sessions")
+                .help("Refresh meetings")
             }
 
             if displayedSessionCount == 0 {
@@ -292,7 +292,7 @@ struct RecorderWindow: View {
                     .frame(width: 36, height: 36)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Sessions")
+                    Text("Meetings")
                         .font(.headline.weight(.semibold))
                     Text(model.lifecyclePresentation.title)
                         .font(.caption)
@@ -307,7 +307,7 @@ struct RecorderWindow: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh sessions")
+                .help("Refresh meetings")
             }
 
             primaryRecordingButton
@@ -1156,7 +1156,7 @@ struct RecorderWindow: View {
         if isSearchActive {
             return "No notes match this search."
         }
-        return "Completed transcripts will show up here."
+        return "Completed meetings will show up here."
     }
 
     private var postRecordingContextReviewPanel: some View {
@@ -1170,12 +1170,12 @@ struct RecorderWindow: View {
                     .foregroundStyle(BarnOwlDesign.moss)
             }
 
-            Text(model.postRecordingContextReview?.suggestedSummary ?? "Barn Owl inferred meeting context from the transcript.")
+            Text(model.postRecordingContextReview?.suggestedSummary ?? "Barn Owl drafted reviewable meeting context from the captured transcript.")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Add messy context, corrections, acronyms, people, customer details, or goals. Barn Owl will keep structured meeting facts behind the scenes.")
+            Text("Add corrections, acronyms, people, customer details, goals, or other context that should shape the final note. Barn Owl keeps the useful pieces as structured meeting facts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1499,7 +1499,7 @@ struct RecorderWindow: View {
                 .font(.headline)
 
             if model.displayedNote == nil {
-                Text("Fast preview while recording. The final diarized transcript is generated after you stop.")
+                Text("Fast preview while recording. Final processing creates the diarized transcript, notes, and local meeting artifacts after you stop.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1591,7 +1591,7 @@ struct RecorderWindow: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
-                Text(isEmpty ? "Shareable notes will appear after a transcript or summary is available." : text)
+                Text(isEmpty ? "Shareable notes appear after final processing produces a transcript or summary." : text)
                     .font(.system(.body, design: .default))
                     .foregroundStyle(isEmpty ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -2097,7 +2097,7 @@ struct RecorderWindow: View {
             )
         } else if let progress = model.progressFraction, progress < 1 {
             ProgressView(value: progress) {
-                Text("Processing transcript")
+                Text("Processing transcript and notes")
             }
             .tint(BarnOwlDesign.moss)
         }

@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
-  "build": "23",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.23/BarnOwl.app.zip",
-  "sha256": "706809ba5567519f16d738ce0ac410ac70d33d9eb8bbbfab503d63455a522d3a",
-  "notes": "Repairs older Context Library databases during migration so Barn Owl can reopen affected installs, save durable entries, and queue processing jobs normally. Also carries forward the meeting evidence export work introduced in build 22."
+  "build": "24",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.24/BarnOwl.app.zip",
+  "sha256": "e6553018ebfcbb54cab0c436bfbfcda2b4e0eefc9a0e908206da3819182cb721",
+  "notes": "Barn Owl 0.1.0 (24)"
 }

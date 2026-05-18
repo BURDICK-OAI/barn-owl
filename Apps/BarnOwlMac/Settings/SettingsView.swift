@@ -662,7 +662,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Barn Owl Settings")
                     .font(.title3.weight(.semibold))
-                Text("Local-first setup for fast, quiet recording.")
+                Text("Local-first meeting capture, context, and durable memory.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -727,24 +727,33 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 9) {
                     settingsTLDRLine(
-                        title: "Codex + CLI",
-                        detail: "Use `barnowl` and the bundled `$barnowl` skill as the primary control path: start, stop, wait, attach context, retry jobs, and retrieve notes without opening the UI."
+                        title: "Capture",
+                        detail: "Ask Codex with `$barnowl` to record the meeting. Codex should start immediately, attach useful context while it runs, stop on request, wait for processing, then return the finished notes."
                     )
                     settingsTLDRLine(
-                        title: "Mac app",
-                        detail: "Keep the app for first-run setup, permissions, API key entry, bridge status, and occasional manual review."
+                        title: "Context",
+                        detail: "Barn Owl keeps source-labeled meeting context, durable Context Library entries, and enrichment results together so transcripts, notes, titles, and memory stay better grounded."
                     )
                     settingsTLDRLine(
-                        title: "Workflow",
-                        detail: "`barnowl start`, `barnowl context add`, `barnowl stop`, `barnowl wait`, then `barnowl meeting notes <id> --format markdown`."
+                        title: "Operate",
+                        detail: "Use the bundled `$barnowl` Codex skill or `barnowl` CLI for recording, context, jobs, recent meetings, search, notes, actions, chat, diagnostics, and retries."
                     )
                     settingsTLDRLine(
-                        title: "Codex skill",
-                        detail: "Install `$barnowl` so Codex starts recording immediately when asked and recovers failed processing with job commands when needed."
+                        title: "Reuse",
+                        detail: "Barn Owl turns meetings into local Markdown artifacts and structured evidence that support later meeting-memory questions, exports, and downstream consumers."
+                    )
+                    settingsTLDRLine(
+                        title: "Improve",
+                        detail: "Review titles, notes, actions, and suggested context when needed. Accepted corrections and durable mappings strengthen the learning loop for future meetings."
                     )
                 }
 
-                Text("Everything is local-first: your app data, SQLite library, Markdown exports, CLI bridge, and Codex skill live on this Mac.")
+                Text("The app is the local operator surface for setup, permissions, API key entry, bridge status, diagnostics, enrichment and Context Library maintenance, and manual review. Recording artifacts, transcript memory, local exports, and the CLI bridge stay on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("First time here? Use the guided readiness and OpenAI sections above, then configure Codex Integration, Context Library, and Enrichment Sources below so capture, operation, and long-term learning are set up together.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -860,7 +869,7 @@ struct SettingsView: View {
                     .foregroundStyle(codexBridgeStatus == "running" ? BarnOwlSettingsTheme.success : BarnOwlSettingsTheme.warning)
                 }
 
-                Text("Install the local CLI and bundled `$barnowl` skill so Codex is the day-to-day interface. The app stays here for setup, permissions, API key entry, bridge checks, and manual review.")
+                Text("Install the local CLI and bundled `$barnowl` skill so Codex can run capture, context, retrieval, diagnostics, and recovery from chat. The app stays here for setup, permissions, API key entry, enrichment visibility, bridge checks, and manual review.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -885,7 +894,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("Example prompt: Use $barnowl to record this meeting. Codex should start immediately, attach context, stop on request, wait for processing, then fetch Markdown notes.")
+                Text("Example prompt: Use $barnowl to record this meeting. Start now, attach concise calendar and chat context while it runs, stop when I ask, wait for processing, then return the Markdown notes, actions, and anything that needs review.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)

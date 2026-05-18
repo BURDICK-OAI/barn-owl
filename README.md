@@ -36,6 +36,7 @@ This repository is in active development. The current implementation focuses on 
 - `Sources/BarnOwlNotes/` - Markdown meeting artifact rendering
 - `Tests/` - unit coverage for core, audio, OpenAI, transcription, persistence, and rendering
 - `docs/` - implementation notes, QA checklists, and roadmap documents
+- `local-dev-notes/` - ignored local-only development briefs, corpus reviews, and process notes; do not commit
 - `scripts/` - local verification, update, packaging, keychain, and CLI helper scripts
 - `dist/` - generated distribution artifacts; ignored and safe to recreate
 
@@ -203,9 +204,57 @@ scripts/barnowl feedback slack
 scripts/barnowl feedback slack --yes
 ```
 
+## Codex-Assisted Enrichment Sources
+
+Barn Owl owns the durable enrichment registry and knowledge store. Codex owns
+retrieval from authenticated connector apps and decides what should be hydrated
+into Barn Owl as concise private reference evidence.
+
+The designed loop is:
+
+1. Barn Owl exposes source presets and status:
+
+```sh
+scripts/barnowl enrichment-sources presets
+scripts/barnowl enrichment-sources list
+```
+
+2. Codex configures missing connector-backed sources from those presets:
+
+```sh
+scripts/barnowl enrichment-sources setup google_drive_reference --source-id google_drive_reference
+scripts/barnowl enrichment-sources setup slack_reference --source-id slack_reference
+scripts/barnowl enrichment-sources setup notion_reference --source-id notion_reference
+scripts/barnowl enrichment-sources setup salesforce_reference --source-id salesforce_reference
+```
+
+3. Codex uses authenticated connector tools to retrieve relevant Drive, Slack,
+Notion, or Salesforce evidence, then hydrates Barn Owl with concise normalized
+reference payloads through `enrichment-sources upsert`.
+
+4. Barn Owl adjudicates targeted concepts with:
+
+```sh
+scripts/barnowl knowledge enrich "<concept>"
+```
+
+Strongly supported concepts can become durable knowledge automatically.
+Ambiguous or weak concepts stay held until there is enough corroboration. This
+is intentional.
+
+5. At meeting start, Codex should still prefer just-in-time `context add`
+updates for meeting-specific attendees, files, account details, and fresh
+connector findings. Durable enrichment payloads should remain compact and
+focused on recurring people, accounts, projects, products, and terminology.
+
 ## Privacy Notes
 
 BarnOwl is designed around local-first meeting artifacts. Raw audio chunks are treated as temporary processing inputs and should be cleaned up after successful transcription and artifact persistence.
+
+Development-process briefs, corpus-derived investigations, and personal rollout
+notes belong under ignored `local-dev-notes/`, not `docs/`. Repo-facing docs
+should describe product architecture, workflows, and QA without embedding
+private account, meeting, or usage-specific source material.
 
 Recording is local-first even when the network is unavailable: BarnOwl keeps
 capturing microphone/system audio locally, saves final-processing jobs in its

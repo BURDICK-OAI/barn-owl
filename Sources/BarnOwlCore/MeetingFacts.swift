@@ -225,16 +225,38 @@ public struct MeetingFactsExtractor: Sendable {
             sources["participants"] = participantsFromContext(freeformContext).isEmpty ? "transcript" : "user_context"
         }
 
-        let organizations = Self.merge(facts.organizations, organizationsFrom(combined))
+        let contextOrganizations = organizationsFromContext(freeformContext)
+        let transcriptOrganizations = organizationsFromTranscript(transcript)
+        let organizations = Self.merge(facts.organizations, contextOrganizations, transcriptOrganizations)
         facts.organizations = organizations
-        facts.customers = Self.merge(facts.customers, customersFrom(combined, organizations: organizations))
+        facts.customers = Self.merge(
+            facts.customers,
+            customersFrom(
+                context: freeformContext,
+                transcript: transcript,
+                organizations: organizations,
+                contextOrganizations: contextOrganizations,
+                transcriptOrganizations: transcriptOrganizations
+            )
+        )
         if !facts.organizations.isEmpty || !facts.customers.isEmpty {
-            facts.confidence.organizations = lowercased.contains("customer") || lowercased.contains("account") ? 0.85 : 0.62
-            sources["organizations"] = freeformContext.isEmpty ? "transcript" : "user_context"
+            let hasTrustedContextOrganization = !contextOrganizations.isEmpty
+            facts.confidence.organizations = hasTrustedContextOrganization
+                ? 0.9
+                : (lowercased.contains("customer") || lowercased.contains("account") ? 0.8 : 0.62)
+            sources["organizations"] = hasTrustedContextOrganization ? "user_context" : "transcript"
         }
 
-        facts.projects = Self.merge(facts.projects, projectsFrom(combined))
-        facts.goals = Self.merge(facts.goals, goalsFrom(combined))
+        facts.projects = Self.merge(
+            facts.projects,
+            projectsFromContext(freeformContext),
+            projectsFromTranscript(transcript)
+        )
+        facts.goals = Self.merge(
+            facts.goals,
+            goalsFromContext(freeformContext),
+            goalsFromTranscript(transcript)
+        )
         facts.glossary.merge(glossaryFrom(combined)) { _, new in new }
 
         if let context = MeetingFacts.clean(freeformContext) {
@@ -315,7 +337,7 @@ public struct MeetingFactsExtractor: Sendable {
         return names.filter(Self.isLikelyPersonName)
     }
 
-    private func organizationsFrom(_ text: String) -> [String] {
+    private func organizationsFromContext(_ text: String) -> [String] {
         var names: [String] = []
         names += firstMatches(in: text, pattern: #"\b(?:about|for|with|related to|customer|account)\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
         names += firstMatches(in: text, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:renewal|rollout|pricing|implementation|workshop|pitch|account)\b"#)
@@ -323,27 +345,95 @@ public struct MeetingFactsExtractor: Sendable {
         return names.filter(Self.isLikelyOrganizationName)
     }
 
-    private func customersFrom(_ text: String, organizations: [String]) -> [String] {
-        let lowercased = text.lowercased()
-        guard lowercased.contains("customer") || lowercased.contains("account") || lowercased.contains("renewal") else {
-            return []
+    private func organizationsFromTranscript(_ text: String) -> [String] {
+        var names: [String] = []
+        names += firstMatches(in: text, pattern: #"\b(?:about|for|related to|customer|account)\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
+        names += firstMatches(in: text, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:renewal|rollout|pricing|implementation|workshop|pitch|account)\b"#)
+        return names.filter { candidate in
+            Self.isLikelyOrganizationName(candidate)
+                && transcriptOrganizationIsGrounded(candidate, in: text)
         }
-        return organizations
     }
 
-    private func projectsFrom(_ text: String) -> [String] {
+    private func transcriptOrganizationIsGrounded(_ candidate: String, in text: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: candidate)
+        let repeatedMentionCount = matches(in: text, pattern: #"\b\#(escaped)\b"#).count
+        if repeatedMentionCount >= 2 {
+            return true
+        }
+
+        let strongShapes = [
+            #"\bcustomer\s+\#(escaped)\b"#,
+            #"\baccount\s+\#(escaped)\b"#,
+            #"\b\#(escaped)\s+(?:account|renewal|pricing|implementation|workshop|pitch)\b"#
+        ]
+        return strongShapes.contains { pattern in
+            !matches(in: text, pattern: "(?i)\(pattern)").isEmpty
+        }
+    }
+
+    private func customersFrom(
+        context: String,
+        transcript: String,
+        organizations: [String],
+        contextOrganizations: [String],
+        transcriptOrganizations: [String]
+    ) -> [String] {
+        let trustedContext = context.lowercased()
+        let transcriptText = transcript.lowercased()
+        let contextSignalsCustomer = trustedContext.contains("customer")
+            || trustedContext.contains("account")
+            || trustedContext.contains("renewal")
+        var customers: [String] = []
+        if contextSignalsCustomer {
+            customers += contextOrganizations
+        }
+        customers += transcriptOrganizations.filter {
+            transcriptCustomerIsGrounded($0, in: transcriptText)
+        }
+        return organizations.filter { candidate in
+            customers.contains(where: { $0.caseInsensitiveCompare(candidate) == .orderedSame })
+        }
+    }
+
+    private func transcriptCustomerIsGrounded(_ candidate: String, in lowercasedTranscript: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: candidate.lowercased())
+        let strongShapes = [
+            #"\bcustomer\s+\#(escaped)\b"#,
+            #"\baccount\s+\#(escaped)\b"#,
+            #"\b\#(escaped)\s+(?:customer|account|renewal)\b"#
+        ]
+        return strongShapes.contains { pattern in
+            !matches(in: lowercasedTranscript, pattern: pattern).isEmpty
+        }
+    }
+
+    private func projectsFromContext(_ text: String) -> [String] {
+        Self.merge(
+            firstMatches(in: text, pattern: #"(?im)^\s*Known project:\s+([^\n.]+)"#),
+            firstMatches(in: text, pattern: #"(?im)^\s*Known (?:product|program):\s+([^\n.]+)"#)
+        )
+        .filter(Self.isLikelyProjectName)
+    }
+
+    private func projectsFromTranscript(_ text: String) -> [String] {
         let inferredProjects = firstMatches(
             in: text,
             pattern: #"(?i)\b([A-Z][A-Za-z0-9&.-]+(?:\s+[A-Za-z0-9&.-]+){0,3}\s+(?:rollout|launch|migration|planning|project))\b"#
-        ).filter { !$0.contains(". ") }
-        return Self.merge(
-            inferredProjects,
-            firstMatches(in: text, pattern: #"(?im)^\s*Known project:\s+([^\n.]+)"#)
         )
+        return inferredProjects
+            .filter { !$0.contains(". ") }
+            .filter(Self.isLikelyProjectName)
     }
 
-    private func goalsFrom(_ text: String) -> [String] {
+    private func goalsFromContext(_ text: String) -> [String] {
+        firstMatches(in: text, pattern: #"(?im)^\s*(?:Goal|Objective):\s*([^\n.]+)"#)
+            .filter(Self.isLikelyGoal)
+    }
+
+    private func goalsFromTranscript(_ text: String) -> [String] {
         firstMatches(in: text, pattern: #"(?i)\b(?:goal|main thing|objective)\s+(?:is|was|:)?\s*([^.\n]+)"#)
+            .filter(Self.isLikelyGoal)
     }
 
     private func glossaryFrom(_ text: String) -> [String: String] {
@@ -434,6 +524,36 @@ public struct MeetingFactsExtractor: Sendable {
         return true
     }
 
+    private static func isLikelyProjectName(_ value: String) -> Bool {
+        guard let cleaned = MeetingFacts.clean(value) else { return false }
+        let normalized = cleaned.lowercased()
+        guard cleaned.count >= 3,
+              cleaned.count <= 72,
+              cleaned.split(separator: " ").count <= 6,
+              !projectStopPrefixes.contains(where: normalized.hasPrefix),
+              !projectStopPhrases.contains(normalized)
+        else {
+            return false
+        }
+        return cleaned.first?.isUppercase == true
+    }
+
+    private static func isLikelyGoal(_ value: String) -> Bool {
+        guard let cleaned = MeetingFacts.clean(value) else { return false }
+        let words = cleaned.split(separator: " ")
+        let lowercased = cleaned.lowercased()
+        guard cleaned.count >= 12,
+              cleaned.count <= 180,
+              words.count >= 3,
+              !lowercased.hasPrefix("to "),
+              !goalStopPrefixes.contains(where: lowercased.hasPrefix),
+              !goalStopPhrases.contains(lowercased)
+        else {
+            return false
+        }
+        return true
+    }
+
     private static let titleStopWords: Set<String> = [
         "about", "and", "are", "but", "customer", "meeting", "review", "speaker", "that", "the",
         "this", "was", "were", "with", "you"
@@ -445,8 +565,38 @@ public struct MeetingFactsExtractor: Sendable {
     ]
 
     private static let organizationStopWords: Set<String> = [
-        "actually", "because", "bullshit", "coming", "didn", "doesn", "literally", "random",
-        "really", "recording", "some", "something", "total", "whether", "working"
+        "actually", "because", "bullshit", "but", "coming", "didn", "doesn", "life", "literally",
+        "random", "really", "recording", "room", "some", "something", "sure", "total", "whether", "working"
+    ]
+
+    private static let projectStopPrefixes: Set<String> = [
+        "also participated",
+        "and the ",
+        "ll have",
+        "then the ",
+        "the ",
+        "the frameworks is any",
+        "with this team"
+    ]
+
+    private static let projectStopPhrases: Set<String> = [
+        "launch planning",
+        "migration project",
+        "planning project",
+        "project launch",
+        "this project"
+    ]
+
+    private static let goalStopPrefixes: Set<String> = [
+        "as i said ",
+        "because ",
+        "just ",
+        "kind of ",
+        "sort of "
+    ]
+
+    private static let goalStopPhrases: Set<String> = [
+        "because of you"
     ]
 }
 

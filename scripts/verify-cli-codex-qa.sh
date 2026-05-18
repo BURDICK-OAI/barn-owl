@@ -150,6 +150,12 @@ grep -q 'barnowl feedback slack --yes' "$skill_path" \
   || fail "bundled Codex skill does not mention confirmed Slack feedback command"
 grep -q 'Only run `barnowl feedback slack --yes` after the user explicitly confirms posting' "$skill_path" \
   || fail "bundled Codex skill does not require explicit user confirmation"
+grep -q 'barnowl enrichment-sources list' "$skill_path" \
+  || fail "bundled Codex skill does not mention enrichment source inspection"
+grep -q 'barnowl knowledge enrich "<concept>"' "$skill_path" \
+  || fail "bundled Codex skill does not mention targeted durable enrichment"
+grep -q 'Do not imply Barn Owl directly signs into Google Drive, Slack, Notion, or' "$skill_path" \
+  || fail "bundled Codex skill does not describe Codex-mediated connector retrieval"
 
 mark_checked() {
   local label="$1"
@@ -162,6 +168,7 @@ mark_checked "CLI diagnostics export produced a redacted report"
 mark_checked "CLI feedback Slack draft produced a redacted draft without posting"
 mark_checked "CLI feedback Slack post requires explicit confirmation and configured webhook"
 mark_checked "Bundled Codex skill guidance matches the installed CLI behavior"
+mark_checked "Bundled Codex skill documents Codex-assisted enrichment sources"
 
 cat >>"$EVIDENCE_PATH" <<EOF
 
@@ -175,6 +182,7 @@ Generated: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`
 - Feedback draft: \`passed_no_post\`
 - Feedback post guard: \`passed_missing_webhook_refused\`
 - Bundled Codex skill: \`passed\`
+- Codex-assisted enrichment guidance: \`passed\`
 EOF
 
 echo "cli_codex_qa=true"

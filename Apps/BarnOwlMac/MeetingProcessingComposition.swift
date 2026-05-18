@@ -528,8 +528,13 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
         ))
 
         let location = try await makeLibraryStore().saveArtifact(artifact)
-        try? await LocalMarkdownContextProvider(rootDirectory: try BarnOwlMeetingProcessor.defaultContextRoot())
-            .write(ContextArtifact(title: finalSession.title, markdown: markdown))
+        if let contextRoot = try? BarnOwlMeetingProcessor.defaultContextRoot() {
+            let contextProvider = LocalMarkdownContextProvider(rootDirectory: contextRoot)
+            if meeting.title.caseInsensitiveCompare(finalSession.title) != .orderedSame {
+                try? await contextProvider.remove(title: meeting.title)
+            }
+            try? await contextProvider.write(ContextArtifact(title: finalSession.title, markdown: markdown))
+        }
 
         let now = Date()
         var updatedMeeting = meeting
@@ -806,12 +811,12 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             markdown: markdown
         )
         await scopedProgress?(MeetingProcessingProgress(
-            message: "Saving transcript to Barn Owl Library...",
+            message: "Saving meeting artifacts to Barn Owl Library...",
             progressFraction: 0.97
         ))
         let location = try await makeLibraryStore().saveArtifact(artifact)
         await scopedProgress?(MeetingProcessingProgress(
-            message: "Writing note back to local context...",
+            message: "Refreshing local meeting context...",
             progressFraction: 0.985
         ))
         try? await LocalMarkdownContextProvider(rootDirectory: try Self.defaultContextRoot())
@@ -821,7 +826,7 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             progress: scopedProgress
         )
         await scopedProgress?(MeetingProcessingProgress(
-            message: "Saved final transcript.",
+            message: "Saved final transcript and notes.",
             details: location.markdownFileURL.lastPathComponent,
             progressFraction: 1.0
         ))
@@ -984,7 +989,7 @@ private actor TranscriptionProgressCounter {
     }
 }
 
-private enum MeetingTitleSuggester {
+enum MeetingTitleSuggester {
     static func title(
         currentTitle: String,
         summary: MeetingSummary,
@@ -995,7 +1000,7 @@ private enum MeetingTitleSuggester {
         let transcriptText = segments
             .map(\.text)
             .joined(separator: "\n")
-        let organization = primaryOrganization(contextText: contextText, transcriptText: transcriptText)
+        let organization = primaryOrganization(contextText: contextText)
 
         if let contextTitle = contextualTitle(from: contextText),
            !isGeneric(contextTitle),
@@ -1008,22 +1013,22 @@ private enum MeetingTitleSuggester {
             )
         }
 
-        if let suggested = normalized(summary.suggestedTitle),
-           !isGeneric(suggested),
-           !isLikelyTranscriptAside(suggested) {
+        if let current = normalized(currentTitle),
+           !isGeneric(current),
+           !isLikelyTranscriptAside(current) {
             return contextualized(
-                suggested,
+                current,
                 organization: organization,
                 contextText: contextText,
                 transcriptText: transcriptText
             )
         }
 
-        if let current = normalized(currentTitle),
-           !isGeneric(current),
-           !isLikelyTranscriptAside(current) {
+        if let suggested = normalized(summary.suggestedTitle),
+           !isGeneric(suggested),
+           !isLikelyTranscriptAside(suggested) {
             return contextualized(
-                current,
+                suggested,
                 organization: organization,
                 contextText: contextText,
                 transcriptText: transcriptText
@@ -1125,35 +1130,13 @@ private enum MeetingTitleSuggester {
         internalTitleSignals.contains { lowerTitle.contains($0) }
     }
 
-    private static func primaryOrganization(contextText: String, transcriptText: String) -> String? {
-        let combined = [contextText, transcriptText]
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .joined(separator: "\n")
-        let lowercased = combined.lowercased()
-        for (needle, name) in knownOrganizationSignals {
-            if lowercased.contains(needle) {
-                return name
-            }
-        }
-        return mostFrequentKnownOrganization(in: combined)
-    }
-
-    private static func mostFrequentKnownOrganization(in text: String) -> String? {
-        let lowercased = text.lowercased()
-        return knownOrganizationNames
-            .map { name in
-                let count = lowercased.components(separatedBy: name.lowercased()).count - 1
-                return (name: name, count: count)
-            }
-            .filter { $0.count > 0 }
-            .sorted {
-                if $0.count == $1.count {
-                    return $0.name < $1.name
-                }
-                return $0.count > $1.count
-            }
-            .first?
-            .name
+    private static func primaryOrganization(contextText: String) -> String? {
+        firstMatch(in: contextText, patterns: [
+            #"(?im)^Customer:\s*(.+)$"#,
+            #"(?im)^Account:\s*(.+)$"#,
+            #"(?im)^Organization:\s*(.+)$"#,
+            #"(?im)^Company:\s*(.+)$"#
+        ])
     }
 
     private static func firstMatch(in text: String, patterns: [String]) -> String? {
@@ -1258,12 +1241,6 @@ private enum MeetingTitleSuggester {
         "reviewed", "agreed"
     ]
 
-    private static let knownOrganizationSignals: [(String, String)] = [
-        ("modernatx", "Moderna"),
-        ("moderna", "Moderna"),
-        ("takeda", "Takeda")
-    ]
-
     private static let customerOrExternalSignals: Set<String> = [
         "account",
         "customer",
@@ -1299,21 +1276,6 @@ private enum MeetingTitleSuggester {
         "project review"
     ]
 
-    private static let knownOrganizationNames: [String] = [
-        "Moderna",
-        "Takeda",
-        "Pfizer",
-        "Roche",
-        "Genentech",
-        "Novartis",
-        "Sanofi",
-        "GSK",
-        "AstraZeneca",
-        "Eli Lilly",
-        "Merck",
-        "Veeva"
-    ]
-
     private static let specialTitleWords: [String: String] = [
         "ai": "AI",
         "api": "API",
@@ -1322,10 +1284,7 @@ private enum MeetingTitleSuggester {
         "cios": "CIOs",
         "cto": "CTO",
         "dlp": "DLP",
-        "gpt": "GPT",
-        "rosalind": "Rosalind",
-        "moderna": "Moderna",
-        "takeda": "Takeda"
+        "gpt": "GPT"
     ]
 
     private static let smallTitleWords: Set<String> = [

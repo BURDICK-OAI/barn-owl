@@ -224,6 +224,8 @@ final class BarnOwlControlBridge: @unchecked Sendable {
                 meetingID: command.meetingID ?? command.sessionID,
                 all: command.all == true
             )
+        case .durabilityRepair:
+            return await model.controlDurabilityRepairResponse()
         case .meetingsRecent:
             return await model.controlRecentMeetingsResponse(limit: command.limit ?? 10)
         case .meetingsSearch:

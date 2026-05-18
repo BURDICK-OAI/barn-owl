@@ -10,3 +10,8 @@ Updates/BarnOwl/*.zip
 .tools/
 *.xcuserdata/
 *.xcuserstate
+
+# Local-only development briefs, corpus evaluations, and process notes.
+# These may describe private Barn Owl usage or meeting-derived findings and
+# should not drift into source-controlled product docs.
+local-dev-notes/

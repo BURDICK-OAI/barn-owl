@@ -1056,6 +1056,9 @@ def build_parser() -> argparse.ArgumentParser:
     summary_target.add_argument("--all", action="store_true")
     add_format(summaries_retry)
 
+    durability_repair = subparsers.add_parser("repair-durability")
+    add_format(durability_repair)
+
     chat = subparsers.add_parser("chat")
     chat.add_argument("query")
     add_format(chat)
@@ -1364,6 +1367,11 @@ def main(argv: list[str]) -> int:
             }
         else:
             raise AssertionError(f"unhandled summaries command: {args.summaries_command}")
+    elif args.command == "repair-durability":
+        payload = {
+            "command": "durability_repair",
+            "format": output_format,
+        }
     elif args.command == "chat":
         payload = {"command": "chat", "query": args.query, "format": output_format}
     elif args.command == "ask-notes":

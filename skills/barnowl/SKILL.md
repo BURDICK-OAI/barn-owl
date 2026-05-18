@@ -60,6 +60,83 @@ barnowl jobs retry --session <uuid>
 barnowl wait --session <uuid> --until complete --timeout 10m
 ```
 
+## Codex-Assisted Enrichment Sources
+
+Barn Owl owns the enrichment registry, evidence jobs, adjudication, and durable
+knowledge. Codex owns retrieval from authenticated private connectors and the
+judgment about what meeting-specific context is worth hydrating into Barn Owl.
+Do not imply Barn Owl directly signs into Google Drive, Slack, Notion, or
+Salesforce on its own.
+
+Use this flow when the user asks to set up, improve, or rely on enrichment
+sources:
+
+1. Inspect the registry and presets:
+
+```bash
+barnowl enrichment-sources list
+barnowl enrichment-sources presets
+```
+
+2. If a supported connector-backed source is missing, configure it from the
+matching preset:
+
+```bash
+barnowl enrichment-sources setup google_drive_reference --source-id google_drive_reference
+barnowl enrichment-sources setup slack_reference --source-id slack_reference
+barnowl enrichment-sources setup notion_reference --source-id notion_reference
+barnowl enrichment-sources setup salesforce_reference --source-id salesforce_reference
+```
+
+3. Check source health:
+
+```bash
+barnowl enrichment-sources check google_drive_reference
+```
+
+Connector-backed presets may report that authenticated retrieval or hydration
+is still needed. That means Codex should use the available connector/app tools,
+summarize the relevant evidence, and then update Barn Owl with concise
+configured reference payloads. Keep copies summary-or-pointer only; do not dump
+raw documents, threads, or CRM records into Barn Owl.
+
+4. Hydrate or refresh the configured source payload through Barn Owl's
+upsert command after Codex retrieves relevant evidence:
+
+```bash
+barnowl enrichment-sources upsert google_drive_reference \
+  --name "Google Drive Reference" \
+  --type private_reference \
+  --scope personal_private \
+  --authority private_internal_reference \
+  --connector-reference google-drive \
+  --auth-state configured \
+  --health-status ready \
+  --privacy-copy-policy summary_or_pointer_only \
+  --query-budget-policy connector_policy_controlled \
+  --config-json '{"entries":[...]}'
+```
+
+Use the analogous connector reference and scope for Slack, Notion, and
+Salesforce. Preserve existing useful entries when refreshing a source rather
+than replacing them blindly.
+
+5. When a high-value recurring person, account, project, product, or internal
+term is ambiguous or newly important, run targeted enrichment:
+
+```bash
+barnowl knowledge enrich "<concept>"
+```
+
+Barn Owl may auto-persist strong candidates, hold ambiguous concepts for more
+evidence, or preserve conflict memory. Treat those holds as policy working as
+designed, not as failures to work around.
+
+6. At meeting start, prefer just-in-time context over permanent clutter:
+attach relevant connector-derived facts to the live session with
+`barnowl context add`, and only extend durable enrichment payloads for concepts
+that recur or are strategically worth stabilizing.
+
 ## Commands
 
 - Status: `barnowl status`
@@ -95,6 +172,11 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 - Delete meeting: `barnowl meeting delete <meeting-id> --yes`
 - Purge temp audio: `barnowl meeting purge-temp-audio <meeting-id> --yes`
 - Developer diagnostics: `barnowl diagnostics export --output /tmp/BarnOwl-diagnostics.md`
+- Enrichment source registry: `barnowl enrichment-sources list`
+- Enrichment source presets: `barnowl enrichment-sources presets`
+- Enrichment source setup: `barnowl enrichment-sources setup google_drive_reference --source-id google_drive_reference`
+- Enrichment source health: `barnowl enrichment-sources check google_drive_reference`
+- Targeted durable enrichment: `barnowl knowledge enrich "<concept>"`
 - Draft error feedback: `barnowl feedback slack`
 - Post confirmed error feedback: `barnowl feedback slack --yes`
 
@@ -107,6 +189,8 @@ If a CLI response includes `feedbackSuggested: true`, tell the user Barn Owl can
 - Attach concise, source-labeled facts. Prefer useful summaries over raw dumps.
 - Never attach secrets, API keys, credentials, tokens, private keys, or passwords as meeting context.
 - If a connector is unavailable or unauthorized, say it was unavailable and continue.
+- For private connectors, keep Barn Owl source payloads concise, normalized, and pointer-heavy rather than copying raw source material.
+- Use durable enrichment for recurring people/accounts/projects/products/terms; use live meeting context for situational attendees and one-off detail.
 - Late context can be added after stop; use `notes update` if final notes need revision.
 
 ## Query Workflow

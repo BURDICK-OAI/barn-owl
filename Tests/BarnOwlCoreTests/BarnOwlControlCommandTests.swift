@@ -48,7 +48,7 @@ func controlResponseEncodesEnrichmentConceptHistory() throws {
         message: "Barn Owl enrichment jobs.",
         enrichmentConceptHistories: [
             BarnOwlControlEnrichmentConceptHistory(
-                conceptKey: "Rosalind",
+                conceptKey: "Orchid",
                 supportedCandidateJobs: 3,
                 conflictingJobs: 1,
                 negativeEvidenceItems: 2,
@@ -110,7 +110,7 @@ func controlResponseEncodesDurableKnowledgeLifecycleState() throws {
             BarnOwlControlKnowledgeEntity(
                 id: entityID,
                 kind: "project",
-                canonicalName: "Rosalind",
+                canonicalName: "Orchid",
                 summary: "Internal project.",
                 confidence: 0.94,
                 lifecycleStatus: "suppressed",
@@ -482,6 +482,7 @@ func controlCommandNameIncludesCodexPrimaryCases() {
     #expect(names.contains("jobs_list"))
     #expect(names.contains("jobs_retry"))
     #expect(names.contains("jobs_dismiss"))
+    #expect(names.contains("durability_repair"))
     #expect(names.contains("context_list"))
     #expect(names.contains("context_accept"))
     #expect(names.contains("context_ignore"))
@@ -545,11 +546,11 @@ func enrichmentSourceUpsertCommandDecodesRegistryFields() throws {
 func knowledgeEnrichCommandDecodesConceptQuery() throws {
     let command = try JSONDecoder().decode(
         BarnOwlControlCommand.self,
-        from: Data(#"{"command":"knowledge_enrich","query":"Rosalind","limit":6}"#.utf8)
+        from: Data(#"{"command":"knowledge_enrich","query":"Orchid","limit":6}"#.utf8)
     )
 
     #expect(command.command == .knowledgeEnrich)
-    #expect(command.query == "Rosalind")
+    #expect(command.query == "Orchid")
     #expect(command.limit == 6)
 }
 
@@ -809,15 +810,15 @@ func enrichmentOrchestratorPromotesSupportedCandidatesThroughInstalledAdapters()
             StaticEnrichmentAdapter(
                 sourceID: "barnowl_memory",
                 evidence: [
-                    enrichmentEvidence(subject: "Rosalind", citation: "meeting:a"),
-                    enrichmentEvidence(subject: "Rosalind", citation: "meeting:b")
+                    enrichmentEvidence(subject: "Orchid", citation: "meeting:a"),
+                    enrichmentEvidence(subject: "Orchid", citation: "meeting:b")
                 ]
             )
         ]
     )
 
     let result = await orchestrator.run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [source]
     )
 
@@ -860,15 +861,15 @@ func enrichmentOrchestratorOrdersEligibleSourcesByRoutingPriority() async {
         adapters: [
             StaticEnrichmentAdapter(
                 sourceID: "public_web",
-                evidence: [enrichmentEvidence(subject: "Rosalind", citation: "public:rosalind")]
+                evidence: [enrichmentEvidence(subject: "Orchid", citation: "public:orchid")]
             ),
             StaticEnrichmentAdapter(
                 sourceID: "owner_private_source",
-                evidence: [enrichmentEvidence(subject: "Rosalind", citation: "owner-private:rosalind")]
+                evidence: [enrichmentEvidence(subject: "Orchid", citation: "owner-private:orchid")]
             )
         ]
     ).run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [lowerPriority, higherPriority]
     )
 
@@ -894,13 +895,13 @@ func enrichmentOrchestratorConflictMemoryRequiresIndependentCorroboration() asyn
             StaticEnrichmentAdapter(
                 sourceID: "owner_private_source",
                 evidence: [
-                    enrichmentEvidence(subject: "Rosalind", citation: "owner-private:rosalind:1"),
-                    enrichmentEvidence(subject: "Rosalind", citation: "owner-private:rosalind:2")
+                    enrichmentEvidence(subject: "Orchid", citation: "owner-private:orchid:1"),
+                    enrichmentEvidence(subject: "Orchid", citation: "owner-private:orchid:2")
                 ]
             )
         ]
     ).run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [source],
         conceptHistory: BarnOwlEnrichmentConceptHistory(conflictingJobs: 1)
     )
@@ -942,8 +943,8 @@ func enrichmentOrchestratorConflictMemoryAllowsIndependentCorroboration() async 
             StaticEnrichmentAdapter(
                 sourceID: "owner_private_source",
                 evidence: [enrichmentEvidence(
-                    subject: "Rosalind",
-                    citation: "owner-private:rosalind",
+                    subject: "Orchid",
+                    citation: "owner-private:orchid",
                     sourceID: "owner_private_source",
                     sourceDisplayName: "Private Reference Source",
                     authorityProfile: "private_internal_reference",
@@ -952,11 +953,11 @@ func enrichmentOrchestratorConflictMemoryAllowsIndependentCorroboration() async 
             ),
             StaticEnrichmentAdapter(
                 sourceID: "barnowl_memory",
-                evidence: [enrichmentEvidence(subject: "Rosalind", citation: "meeting:rosalind")]
+                evidence: [enrichmentEvidence(subject: "Orchid", citation: "meeting:orchid")]
             )
         ]
     ).run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [ownerSource, memorySource],
         conceptHistory: BarnOwlEnrichmentConceptHistory(conflictingJobs: 1, negativeEvidenceItems: 1)
     )
@@ -981,7 +982,7 @@ func enrichmentOrchestratorHoldsWhenConfiguredSourcesLackEligibleAdapters() asyn
     )
 
     let result = await BarnOwlEnrichmentOrchestrator(adapters: []).run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [source]
     )
 
@@ -1023,10 +1024,10 @@ func enrichmentOrchestratorHoldsWhenSemanticCandidatesConflict() async {
                 sourceID: "owner_private_source",
                 evidence: [
                     enrichmentEvidence(
-                        subject: "Rosalind",
-                        citation: "owner-private:project/rosalind",
+                        subject: "Orchid",
+                        citation: "owner-private:project/orchid",
                         candidateKind: "project",
-                        canonicalName: "Rosalind"
+                        canonicalName: "Orchid"
                     )
                 ]
             ),
@@ -1034,10 +1035,10 @@ func enrichmentOrchestratorHoldsWhenSemanticCandidatesConflict() async {
                 sourceID: "workspace_glossary",
                 evidence: [
                     enrichmentEvidence(
-                        subject: "Rosalind",
-                        citation: "workspace:people/rosalind",
+                        subject: "Orchid",
+                        citation: "workspace:people/orchid",
                         candidateKind: "person",
-                        canonicalName: "Rosalind Chen"
+                        canonicalName: "Orchid Chen"
                     )
                 ]
             )
@@ -1045,7 +1046,7 @@ func enrichmentOrchestratorHoldsWhenSemanticCandidatesConflict() async {
     )
 
     let result = await orchestrator.run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [ownerSource, teamSource]
     )
 
@@ -1071,37 +1072,37 @@ func enrichmentOrchestratorBlocksPublicOnlyPrivateTruth() async {
     )
     let evidence = [
         BarnOwlEnrichmentEvidenceRecord(
-            subject: "Rosalind",
+            subject: "Orchid",
             candidateKind: "project",
-            canonicalName: "Rosalind",
-            summary: "Public result claims Rosalind is a project.",
+            canonicalName: "Orchid",
+            summary: "Public result claims Orchid is a project.",
             confidence: 0.84,
             sourceID: "public_web",
             sourceDisplayName: "Internet References",
             authorityProfile: "public_reference",
             freshness: .recent,
             scope: .publicReference,
-            citations: ["public:rosalind:1"]
+            citations: ["public:orchid:1"]
         ),
         BarnOwlEnrichmentEvidenceRecord(
-            subject: "Rosalind",
+            subject: "Orchid",
             candidateKind: "project",
-            canonicalName: "Rosalind",
-            summary: "Another public result claims Rosalind is a project.",
+            canonicalName: "Orchid",
+            summary: "Another public result claims Orchid is a project.",
             confidence: 0.81,
             sourceID: "public_web",
             sourceDisplayName: "Internet References",
             authorityProfile: "public_reference",
             freshness: .recent,
             scope: .publicReference,
-            citations: ["public:rosalind:2"]
+            citations: ["public:orchid:2"]
         )
     ]
 
     let result = await BarnOwlEnrichmentOrchestrator(
         adapters: [StaticEnrichmentAdapter(sourceID: "public_web", evidence: evidence)]
     ).run(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 8),
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Orchid", limit: 8),
         sources: [publicSource]
     )
 

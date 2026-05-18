@@ -69,7 +69,7 @@ struct BarnOwlLifecyclePresentation: Equatable {
             return BarnOwlLifecyclePresentation(
                 phase: .processing,
                 title: "Processing",
-                detail: "Generating the final transcript and meeting notes.",
+                detail: "Generating the final transcript, notes, and local meeting artifacts.",
                 systemImage: "waveform.badge.magnifyingglass"
             )
         case .completed:
@@ -85,8 +85,8 @@ struct BarnOwlLifecyclePresentation: Equatable {
                 phase: hasActiveProcessing ? .processing : (hasDisplayedNote ? .complete : .ready),
                 title: hasActiveProcessing ? "Processing" : (hasDisplayedNote ? "Complete" : "Ready"),
                 detail: hasActiveProcessing
-                    ? "Final transcript and notes are running in the background."
-                    : "Meeting notes are ready in the local library.",
+                    ? "Final processing is running in the background for transcript, notes, and local meeting artifacts."
+                    : "Transcript, notes, and local meeting artifacts are ready in the library.",
                 systemImage: hasActiveProcessing ? "clock.arrow.circlepath" : "checkmark.circle.fill"
             )
         case .failed(let failure):

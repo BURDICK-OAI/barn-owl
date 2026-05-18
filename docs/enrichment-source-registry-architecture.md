@@ -37,15 +37,15 @@ Barn Owl should be able to:
 - store enrichment source configuration per user
 - keep automatic learning inspectable, reversible, and explainable
 
-Examples:
+Typical flow:
 
-- `Rosalind` appears in fifteen meetings.
+- A recurring concept appears across many meetings.
 - Barn Owl decides it is highly salient but semantically unresolved.
 - The enrichment orchestrator queries Barn Owl memory, Private Reference Source, and other
   permitted sources for the current user.
 - Evidence is normalized, weighed by authority and freshness, and adjudicated.
-- If the result is defensible, Barn Owl persists `Rosalind` as a project,
-  backfills meeting links, and uses it in future transcription and note flows.
+- If the result is defensible, Barn Owl persists the concept, backfills meeting
+  links, and uses it in future transcription and note flows.
 - If the evidence is still ambiguous, Barn Owl keeps the concept unresolved and
   records what it learned without fabricating a durable mapping.
 
@@ -79,8 +79,8 @@ Not all evidence deserves equal weight.
 
 - A user-confirmed durable entry outranks a casual web mention.
 - A curated internal source can strongly classify an internal project.
-- Public web can help confirm that Moderna is a biotechnology company, but not
-  by itself prove that `Rosalind` is an internal Barn Owl user's project.
+- Public web can help confirm public company facts, but not by itself prove that
+  an internal project label has a specific private meaning for one Barn Owl user.
 - Stale or auth-blocked sources should be visible as such.
 
 ### 5. Barn Owl should learn source usefulness over time
@@ -302,9 +302,9 @@ Illustrative evidence shape:
 
 ```json
 {
-  "subject": "Rosalind",
+  "subject": "Recurring Concept",
   "candidateKind": "project",
-  "canonicalName": "Rosalind",
+  "canonicalName": "Recurring Concept",
   "summary": "Recurring internal initiative referenced with launch and pricing decisions.",
   "confidence": 0.88,
   "source": "owner_private_source",
@@ -418,9 +418,9 @@ The orchestrator should:
 8. hold if evidence is insufficient
 9. record the enrichment job, evidence, and rationale
 
-### Example enrichment path for `Rosalind`
+### Example enrichment path
 
-1. Barn Owl sees `Rosalind` across many transcripts.
+1. Barn Owl sees a recurring concept across many transcripts.
 2. Salience rises.
 3. Semantic meaning remains unresolved.
 4. The orchestrator selects:
@@ -430,7 +430,7 @@ The orchestrator should:
 5. The adapters produce normalized evidence.
 6. The adjudicator concludes:
    - project is strongly supported
-   - canonical name is `Rosalind`
+   - canonical name is stable and defensible
    - alias list is limited and defensible
 7. Barn Owl writes:
    - Context Library entity
@@ -645,8 +645,8 @@ Suggested durable tables or equivalents:
 Recommended future commands:
 
 ```bash
-barnowl knowledge enrich "Rosalind" --sources barnowl_memory,owner_private_source,public_web
-barnowl knowledge explain "Rosalind"
+barnowl knowledge enrich "<concept>" --sources barnowl_memory,owner_private_source,public_web
+barnowl knowledge explain "<concept>"
 barnowl knowledge jobs list
 barnowl knowledge jobs get <job-id>
 barnowl knowledge policy get

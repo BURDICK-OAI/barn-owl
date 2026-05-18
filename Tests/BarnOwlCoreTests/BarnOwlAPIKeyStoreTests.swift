@@ -1,6 +1,7 @@
 @testable import BarnOwl
 import BarnOwlCore
 import BarnOwlOpenAI
+import BarnOwlPersistence
 import Foundation
 import Testing
 
@@ -745,6 +746,96 @@ struct BarnOwlSettingsReadinessChecksTests {
         #expect(!prompt.contains("Barn Owl Smoke Test"))
         #expect(!prompt.contains("Room Speaker A"))
         #expect(prompt.contains("Codex Bridge"))
+    }
+
+    @Test
+    func realtimeHintsPreferContextThenCuratedTermsThenLearnedHints() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appending(path: "BarnOwlRealtimeHints-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appending(path: "hints.json", directoryHint: .notDirectory)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let data = try JSONEncoder().encode(RealtimeTranscriptionHints(terms: ["Codex", "ChatGBT"]))
+        try data.write(to: fileURL)
+
+        let prompt = try #require(BarnOwlRealtimeTranscriptionHintsStore.currentPrompt(
+            attachedContext: ["Known project: GPT-Orchid"],
+            curatedTerms: ["Helios", "Helioz", "Room"],
+            fileURL: fileURL
+        ))
+
+        let orchidIndex = try #require(prompt.range(of: "GPT-Orchid")?.lowerBound)
+        let heliosIndex = try #require(prompt.range(of: "Helios")?.lowerBound)
+        let codexIndex = try #require(prompt.range(of: "Codex")?.lowerBound)
+
+        #expect(orchidIndex < heliosIndex)
+        #expect(heliosIndex < codexIndex)
+        #expect(prompt.contains("Helioz"))
+        #expect(!prompt.contains("Room"))
+    }
+
+    @Test
+    func realtimeCuratedHintsIncludeActiveEntitiesAndBoundAliasesButSkipSuppressedEntities() async throws {
+        let database = try BarnOwlDatabase.inMemory()
+        let ownerID = "owner"
+        let now = Date(timeIntervalSince1970: 1_800_004_200)
+        let activeID = UUID(uuidString: "00000000-0000-0000-0000-000000004201")!
+        let suppressedID = UUID(uuidString: "00000000-0000-0000-0000-000000004202")!
+
+        try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
+            id: activeID,
+            ownerID: ownerID,
+            kind: "project",
+            canonicalName: "GPT-Orchid",
+            confidence: 0.98,
+            createdAt: now,
+            updatedAt: now
+        ))
+        try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
+            ownerID: ownerID,
+            entityID: activeID,
+            alias: "Orkid",
+            confidence: 0.91,
+            createdAt: now,
+            updatedAt: now
+        ))
+        try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
+            ownerID: ownerID,
+            entityID: activeID,
+            alias: "Orchin",
+            confidence: 0.88,
+            createdAt: now,
+            updatedAt: now
+        ))
+        try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
+            ownerID: ownerID,
+            entityID: activeID,
+            alias: "Orchland",
+            confidence: 0.72,
+            createdAt: now,
+            updatedAt: now
+        ))
+        try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
+            id: suppressedID,
+            ownerID: ownerID,
+            kind: "organization",
+            canonicalName: "Room",
+            confidence: 0.99,
+            lifecycleStatus: .suppressed,
+            createdAt: now,
+            updatedAt: now
+        ))
+
+        let terms = try await BarnOwlRealtimeTranscriptionHintsStore.curatedHintTerms(
+            database: database,
+            ownerID: ownerID,
+            attachedContext: ["Known project: GPT-Orchid"]
+        )
+
+        #expect(terms == ["GPT-Orchid", "Orkid", "Orchin"])
+        #expect(!terms.contains("Orchland"))
+        #expect(!terms.contains("Room"))
     }
 }
 

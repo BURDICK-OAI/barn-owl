@@ -593,12 +593,21 @@ public actor BarnOwlDatabase {
     }
 
     public func upsertTranscriptSegments(_ segments: [BarnOwlTranscriptSegmentRecord]) throws {
-        guard segments.isEmpty == false else {
+        let safeSegments = segments.compactMap { segment -> BarnOwlTranscriptSegmentRecord? in
+            guard let safeText = TranscriptPersistenceGuard.sanitizedText(segment.text) else {
+                return nil
+            }
+            var sanitized = segment
+            sanitized.text = safeText
+            return sanitized
+        }
+
+        guard safeSegments.isEmpty == false else {
             return
         }
 
         try transaction {
-            for segment in segments {
+            for segment in safeSegments {
                 try withStatement(
                     """
                     INSERT INTO transcript_segments (
@@ -634,6 +643,28 @@ public actor BarnOwlDatabase {
                 }
             }
         }
+    }
+
+    @discardableResult
+    public func deleteUnsafeTranscriptSegments() throws -> Int {
+        let unsafeIDs = try withStatement("SELECT * FROM transcript_segments ORDER BY created_at ASC, id ASC") { statement, sql in
+            try readRows(statement, sql: sql, readTranscriptSegment)
+                .filter { TranscriptPersistenceGuard.blocks($0.text) }
+                .map(\.id)
+        }
+        guard !unsafeIDs.isEmpty else {
+            return 0
+        }
+
+        try transaction {
+            for id in unsafeIDs {
+                try withStatement("DELETE FROM transcript_segments WHERE id = ?") { statement, sql in
+                    try bind(id, at: 1, in: statement, sql: sql)
+                    try stepDone(statement, sql: sql)
+                }
+            }
+        }
+        return unsafeIDs.count
     }
 
     public func transcriptSegments(

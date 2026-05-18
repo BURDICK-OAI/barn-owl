@@ -200,6 +200,14 @@ public actor FilesystemLocalLibraryStore: LocalLibraryStore {
         try writePrivateData(artifactData, to: location.artifactJSONFileURL)
 
         try writePrivateString(artifact.markdown, to: location.markdownFileURL)
+        try removeSupersededMarkdownFiles(
+            in: location.sessionDirectoryURL,
+            keeping: location.markdownFileURL
+        )
+        try removeSupersededSessionDirectories(
+            for: artifact.session.id,
+            keeping: location.sessionDirectoryURL
+        )
 
         return location
     }
@@ -221,11 +229,19 @@ public actor FilesystemLocalLibraryStore: LocalLibraryStore {
 
         artifact.markdown = markdown
 
-        let location = existingArtifactLocation(for: artifact.session)
+        let location = artifactLocation(for: artifact.session)
         let artifactData = try encoder.encode(artifact)
         try createPrivateDirectory(at: location.sessionDirectoryURL)
         try writePrivateData(artifactData, to: location.artifactJSONFileURL)
         try writePrivateString(markdown, to: location.markdownFileURL)
+        try removeSupersededMarkdownFiles(
+            in: location.sessionDirectoryURL,
+            keeping: location.markdownFileURL
+        )
+        try removeSupersededSessionDirectories(
+            for: artifact.session.id,
+            keeping: location.sessionDirectoryURL
+        )
 
         return artifact
     }
@@ -252,6 +268,14 @@ public actor FilesystemLocalLibraryStore: LocalLibraryStore {
         let artifactData = try encoder.encode(artifact)
         try writePrivateData(artifactData, to: newLocation.artifactJSONFileURL)
         try writePrivateString(artifact.markdown, to: newLocation.markdownFileURL)
+        try removeSupersededMarkdownFiles(
+            in: newLocation.sessionDirectoryURL,
+            keeping: newLocation.markdownFileURL
+        )
+        try removeSupersededSessionDirectories(
+            for: artifact.session.id,
+            keeping: newLocation.sessionDirectoryURL
+        )
 
         if oldLocation.sessionDirectoryURL != newLocation.sessionDirectoryURL,
            fileExists(at: oldLocation.sessionDirectoryURL) {
@@ -499,6 +523,60 @@ public actor FilesystemLocalLibraryStore: LocalLibraryStore {
             [.posixPermissions: 0o600],
             ofItemAtPath: url.path(percentEncoded: false)
         )
+    }
+
+    private func removeSupersededMarkdownFiles(in directory: URL, keeping keptFile: URL) throws {
+        guard fileExists(at: directory) else {
+            return
+        }
+
+        let keptPath = keptFile.standardizedFileURL.path(percentEncoded: false)
+        let children = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+
+        for child in children where child.pathExtension.caseInsensitiveCompare("md") == .orderedSame {
+            let childPath = child.standardizedFileURL.path(percentEncoded: false)
+            guard childPath != keptPath else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: child)
+        }
+    }
+
+    private func removeSupersededSessionDirectories(
+        for id: RecordingSession.ID,
+        keeping keptDirectory: URL
+    ) throws {
+        guard fileExists(at: rootDirectory) else {
+            return
+        }
+
+        let keptPath = keptDirectory.standardizedFileURL.path(percentEncoded: false)
+        let idString = id.uuidString.lowercased()
+        let children = try FileManager.default.contentsOfDirectory(
+            at: rootDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        for child in children {
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey])
+            guard values.isDirectory == true else {
+                continue
+            }
+            let childPath = child.standardizedFileURL.path(percentEncoded: false)
+            guard childPath != keptPath else {
+                continue
+            }
+            let lastComponent = child.lastPathComponent.lowercased()
+            guard lastComponent == idString || lastComponent.hasSuffix("--\(idString)") else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: child)
+        }
     }
 }
 

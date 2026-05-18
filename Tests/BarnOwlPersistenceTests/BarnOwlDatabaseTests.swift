@@ -72,12 +72,12 @@ func barnOwlDatabaseRepairsLegacyContextLibrarySchemaAndPreservesEntries() async
 
     #expect(try await database.schemaVersion() == BarnOwlDatabase.latestSchemaVersion)
     #expect(entity.kind == "person")
-    #expect(entity.canonicalName == "Collin")
-    #expect(entity.normalizedCanonicalName == "collin")
+    #expect(entity.canonicalName == "Taylor")
+    #expect(entity.normalizedCanonicalName == "taylor")
     #expect(entity.lifecycleStatus == .active)
     #expect(aliases.map(\.id) == [aliasID])
-    #expect(aliases.map(\.alias) == ["Colin"])
-    #expect(aliases.map(\.normalizedAlias) == ["colin"])
+    #expect(aliases.map(\.alias) == ["Tayler"])
+    #expect(aliases.map(\.normalizedAlias) == ["tayler"])
     #expect(applications == [application])
 }
 
@@ -294,6 +294,57 @@ func barnOwlDatabaseUpsertsMeetingsSessionsSegmentsAndOutputs() async throws {
 }
 
 @Test
+func barnOwlDatabaseRejectsRealtimeControlPromptTextAsTranscriptContent() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001061")!
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000001062")!
+    let now = Date(timeIntervalSince1970: 1_800_000_500)
+
+    try await database.upsertMeeting(makeDatabaseMeeting(id: meetingID, title: "Leak Guard", createdAt: now, updatedAt: now))
+    try await database.upsertRecordingSession(BarnOwlRecordingSessionRecord(
+        id: sessionID,
+        meetingID: meetingID,
+        status: .recording,
+        startedAt: now,
+        createdAt: now,
+        updatedAt: now
+    ))
+    try await database.upsertTranscriptSegments([
+        BarnOwlTranscriptSegmentRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000001063")!,
+            meetingID: meetingID,
+            sessionID: sessionID,
+            variant: .live,
+            sequence: 0,
+            speakerLabel: "Realtime",
+            text: "Conservative learned spelling hints: OpenAI, GPT-Orchin, GBD, API, inside codex.",
+            startTime: 0,
+            endTime: 1,
+            createdAt: now,
+            updatedAt: now
+        ),
+        BarnOwlTranscriptSegmentRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000001064")!,
+            meetingID: meetingID,
+            sessionID: sessionID,
+            variant: .final,
+            sequence: 1,
+            speakerLabel: "Dana",
+            text: "We discussed GPT-Orchid for Helios.",
+            startTime: 1,
+            endTime: 2,
+            createdAt: now,
+            updatedAt: now
+        )
+    ])
+
+    let segments = try await database.transcriptSegments(meetingID: meetingID)
+    #expect(segments.count == 1)
+    #expect(segments.first?.variant == .final)
+    #expect(segments.first?.text == "We discussed GPT-Orchid for Helios.")
+}
+
+@Test
 func barnOwlDatabaseStoresJobsChunksAndCalendarContext() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001101")!
@@ -452,14 +503,14 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
     let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001901")!
     try await database.upsertMeeting(makeDatabaseMeeting(
         id: meetingID,
-        title: "Rosalind Review",
+        title: "Orchid Review",
         createdAt: now,
         updatedAt: now
     ))
 
     let job = BarnOwlEnrichmentJobRecord(
         ownerID: "owner",
-        conceptKey: "Rosalind",
+        conceptKey: "Orchid",
         status: .supportedCandidate,
         summary: "Supported project.",
         createdAt: now,
@@ -471,7 +522,7 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind",
+        canonicalName: "Orchid",
         summary: "Internal launch workstream.",
         confidence: 0.97,
         sourceJobID: job.id,
@@ -481,12 +532,12 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
     try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
         ownerID: "owner",
         entityID: entity.id,
-        alias: "Project Rosalind",
+        alias: "Project Orchid",
         confidence: 0.95,
         createdAt: now,
         updatedAt: now
@@ -504,16 +555,16 @@ func barnOwlDatabaseStoresScopedDurableKnowledgeAliasesLinksAndContextLines() as
     let links = try await database.knowledgeMeetingLinks(entityID: entity.id)
     let ownerContext = try await database.durableKnowledgeContextLines(
         ownerID: "owner",
-        transcript: "Dana: Project Rosalind remains on the pricing path."
+        transcript: "Dana: Project Orchid remains on the pricing path."
     )
     let teammateContext = try await database.durableKnowledgeContextLines(
         ownerID: "teammate",
-        transcript: "Dana: Project Rosalind remains on the pricing path."
+        transcript: "Dana: Project Orchid remains on the pricing path."
     )
 
-    #expect(aliases.map(\.alias) == ["Project Rosalind"])
+    #expect(aliases.map(\.alias) == ["Project Orchid"])
     #expect(links.map(\.meetingID) == [meetingID])
-    #expect(ownerContext == ["Known project: Rosalind. Internal launch workstream."])
+    #expect(ownerContext == ["Known project: Orchid. Internal launch workstream."])
     #expect(teammateContext.isEmpty)
 
     try await database.deleteKnowledgeAliases(entityID: entity.id, ownerID: "owner")
@@ -527,7 +578,7 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind",
+        canonicalName: "Orchid",
         summary: "Internal launch workstream.",
         confidence: 0.95,
         createdAt: now,
@@ -536,7 +587,7 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
 
     let suppressed = try #require(await database.setKnowledgeEntityLifecycleStatus(
@@ -549,12 +600,12 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
     let suppressedVisible = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     let suppressedMatches = try await database.durableKnowledgeContextLines(
         ownerID: "owner",
-        transcript: "Rosalind remains in scope."
+        transcript: "Orchid remains in scope."
     )
 
     #expect(suppressed.lifecycleStatus == .suppressed)
     #expect(suppressedVisible.lifecycleReason == "Later evidence contradicted this durable mapping.")
-    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind") == nil)
+    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Orchid") == nil)
     #expect(suppressedMatches.isEmpty)
 
     let reactivated = try #require(await database.setKnowledgeEntityLifecycleStatus(
@@ -566,11 +617,11 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
     ))
     let reactivatedMatches = try await database.durableKnowledgeContextLines(
         ownerID: "owner",
-        transcript: "Rosalind remains in scope."
+        transcript: "Orchid remains in scope."
     )
 
     #expect(reactivated.lifecycleStatus == .active)
-    #expect(reactivatedMatches == ["Known project: Rosalind. Internal launch workstream."])
+    #expect(reactivatedMatches == ["Known project: Orchid. Internal launch workstream."])
 }
 
 @Test
@@ -580,7 +631,7 @@ func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async t
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind",
+        canonicalName: "Orchid",
         summary: "Internal launch workstream.",
         confidence: 0.95,
         createdAt: now,
@@ -589,12 +640,12 @@ func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async t
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
     try await database.upsertKnowledgeAlias(BarnOwlKnowledgeAliasRecord(
         ownerID: "owner",
         entityID: entity.id,
-        alias: "Project Rosalind",
+        alias: "Project Orchid",
         confidence: 0.91,
         createdAt: now,
         updatedAt: now
@@ -602,7 +653,7 @@ func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async t
 
     let matched = try await database.knowledgeEntitiesMatchingConcept(
         ownerID: "owner",
-        concept: "Project Rosalind"
+        concept: "Project Orchid"
     )
     let updated = try #require(await database.setKnowledgeEntityConfidence(
         id: entity.id,
@@ -624,13 +675,13 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
     let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001951")!
     try await database.upsertMeeting(makeDatabaseMeeting(
         id: meetingID,
-        title: "Rosalind Review",
+        title: "Orchid Review",
         createdAt: now,
         updatedAt: now
     ))
     let job = BarnOwlEnrichmentJobRecord(
         ownerID: "owner",
-        conceptKey: "Rosalind",
+        conceptKey: "Orchid",
         status: .supportedCandidate,
         summary: "Supported project.",
         createdAt: now,
@@ -642,7 +693,7 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind",
+        canonicalName: "Orchid",
         summary: "Internal launch workstream.",
         confidence: 0.98,
         sourceJobID: job.id,
@@ -652,7 +703,7 @@ func barnOwlDatabaseStoresKnowledgeApplicationsWithDownstreamImpact() async thro
     let entity = try #require(await database.knowledgeEntity(
         ownerID: "owner",
         kind: "project",
-        canonicalName: "Rosalind"
+        canonicalName: "Orchid"
     ))
     let application = BarnOwlKnowledgeApplicationRecord(
         ownerID: "owner",
@@ -680,7 +731,7 @@ func barnOwlDatabaseStoresEnrichmentConflictsAndSourceUsefulness() async throws 
     let now = Date(timeIntervalSince1970: 1_800_004_500)
     let job = BarnOwlEnrichmentJobRecord(
         ownerID: "owner",
-        conceptKey: "Rosalind",
+        conceptKey: "Orchid",
         selectedSources: ["owner_private_source", "workspace_glossary"],
         status: .heldConflictingEvidence,
         summary: "Conflicting enrichment result.",
@@ -694,7 +745,7 @@ func barnOwlDatabaseStoresEnrichmentConflictsAndSourceUsefulness() async throws 
     try await database.upsertEnrichmentConflict(BarnOwlEnrichmentConflictRecord(
         jobID: job.id,
         ownerID: "owner",
-        conceptKey: "Rosalind",
+        conceptKey: "Orchid",
         summary: "Project vs person classification conflict.",
         conflictingSourceIDs: ["owner_private_source", "workspace_glossary"],
         createdAt: now
@@ -1017,7 +1068,7 @@ func enrichmentJobsPersistNormalizedEvidenceAndRemainUserScoped() async throws {
     let now = Date(timeIntervalSince1970: 1_800_003_700)
     let job = BarnOwlEnrichmentJobRecord(
         ownerID: "owner",
-        conceptKey: "Rosalind",
+        conceptKey: "Orchid",
         requestedSources: ["barnowl_memory", "public_web"],
         selectedSources: ["barnowl_memory"],
         status: .supportedCandidate,
@@ -1029,9 +1080,9 @@ func enrichmentJobsPersistNormalizedEvidenceAndRemainUserScoped() async throws {
         finishedAt: now
     )
     let evidence = BarnOwlEnrichmentEvidenceRecord(
-        subject: "Rosalind",
+        subject: "Orchid",
         candidateKind: "project",
-        canonicalName: "Rosalind",
+        canonicalName: "Orchid",
         summary: "Referenced in a planning meeting.",
         confidence: 0.84,
         sourceID: "barnowl_memory",
@@ -1053,7 +1104,7 @@ func enrichmentJobsPersistNormalizedEvidenceAndRemainUserScoped() async throws {
     ))
 
     let ownerJobs = try await database.enrichmentJobs(ownerID: "owner")
-    let matchingConceptJobs = try await database.enrichmentJobs(ownerID: "owner", conceptKey: "rosalind")
+    let matchingConceptJobs = try await database.enrichmentJobs(ownerID: "owner", conceptKey: "orchid")
     let teammateJobs = try await database.enrichmentJobs(ownerID: "teammate")
     let storedEvidence = try #require(await database.enrichmentJobEvidence(jobID: job.id).first)
 
@@ -1868,13 +1919,13 @@ private func makeLegacyContextLibraryDatabase(
         INSERT INTO context_entities (
             id, kind, canonical_name, confidence, is_confirmed, created_at, updated_at
         ) VALUES (
-            '\(entityID.uuidString)', 'person', 'Collin', 1.0, 1, 1800000000, 1800000010
+            '\(entityID.uuidString)', 'person', 'Taylor', 1.0, 1, 1800000000, 1800000010
         );
 
         INSERT INTO context_entity_aliases (
             id, entity_id, alias, confidence, is_confirmed, created_at, updated_at
         ) VALUES (
-            '\(aliasID.uuidString)', '\(entityID.uuidString)', 'Colin', 1.0, 1, 1800000000, 1800000010
+            '\(aliasID.uuidString)', '\(entityID.uuidString)', 'Tayler', 1.0, 1, 1800000000, 1800000010
         );
 
         PRAGMA user_version = 12;

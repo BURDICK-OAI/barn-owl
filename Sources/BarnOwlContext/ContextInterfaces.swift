@@ -330,6 +330,28 @@ public actor LocalMarkdownContextProvider: ReadWriteContextProvider {
         try protectPrivateFile(at: fileURL(forTitle: artifact.title))
     }
 
+    public func remove(title: String) throws {
+        let url = fileURL(forTitle: title)
+        guard fileExists(at: url) else {
+            return
+        }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    @discardableResult
+    public func removeFiles(named fileNames: [String]) throws -> Int {
+        var removed = 0
+        for fileName in fileNames {
+            let url = rootDirectory.appending(path: fileName, directoryHint: .notDirectory)
+            guard fileExists(at: url) else {
+                continue
+            }
+            try FileManager.default.removeItem(at: url)
+            removed += 1
+        }
+        return removed
+    }
+
     public func search(_ query: ContextQuery) throws -> [ContextItem] {
         let limit = max(0, query.limit)
         guard limit > 0, fileExists(at: rootDirectory) else {

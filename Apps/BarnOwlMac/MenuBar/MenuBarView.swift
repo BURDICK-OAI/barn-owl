@@ -330,7 +330,7 @@ struct MenuBarView: View {
     private var sessionsCard: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Text("Recent Sessions")
+                Text("Recent Meetings")
                     .font(.headline)
                 Spacer()
                 Button("Refresh") {
@@ -342,7 +342,7 @@ struct MenuBarView: View {
             }
 
             if model.quickAccessSessions.isEmpty {
-                Text("Completed sessions stay here briefly for quick access.")
+                Text("Completed meetings stay here briefly for quick access.")
                     .font(.callout)
                     .foregroundStyle(.white.opacity(0.48))
                     .frame(maxWidth: .infinity, alignment: .leading)

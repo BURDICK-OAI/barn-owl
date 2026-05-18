@@ -195,6 +195,30 @@ func updatingMarkdownForMissingSessionReturnsNil() async throws {
 }
 
 @Test
+func updatingMarkdownPrunesSupersededSiblingMarkdownFiles() async throws {
+    let rootDirectory = try makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: rootDirectory) }
+
+    let artifact = makeArtifact(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000322")!,
+        title: "Helios OpenAI Partnership",
+        markdown: "# Helios OpenAI Partnership\n\nOld notes"
+    )
+    let store = FilesystemLocalLibraryStore(rootDirectory: rootDirectory)
+    let location = try await store.saveArtifact(artifact)
+    let staleSibling = location.sessionDirectoryURL.appending(path: "the-context-layer.md")
+    try "stale".write(to: staleSibling, atomically: true, encoding: .utf8)
+
+    _ = try #require(await store.updateMarkdown(
+        sessionID: artifact.session.id,
+        markdown: "# Helios OpenAI Partnership\n\nRepaired notes"
+    ))
+
+    #expect(FileManager.default.fileExists(atPath: staleSibling.path(percentEncoded: false)) == false)
+    #expect(FileManager.default.fileExists(atPath: location.markdownFileURL.path(percentEncoded: false)) == true)
+}
+
+@Test
 func updatingSessionTitleRenamesFolderAndMarkdownHeading() async throws {
     let rootDirectory = try makeTempDirectory()
     defer { try? FileManager.default.removeItem(at: rootDirectory) }
@@ -220,6 +244,29 @@ func updatingSessionTitleRenamesFolderAndMarkdownHeading() async throws {
     #expect(reloadedArtifact == updatedArtifact)
     #expect(newLocation.lastPathComponent == "customer-launch-review--00000000-0000-0000-0000-000000000323")
     #expect(FileManager.default.fileExists(atPath: oldLocation.sessionDirectoryURL.path(percentEncoded: false)) == false)
+}
+
+@Test
+func savingArtifactPrunesDuplicateSessionDirectoriesForSameMeeting() async throws {
+    let rootDirectory = try makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: rootDirectory) }
+
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000325")!
+    let artifact = makeArtifact(
+        id: sessionID,
+        title: "Original Name",
+        markdown: "# Original Name\n\nNotes"
+    )
+    let store = FilesystemLocalLibraryStore(rootDirectory: rootDirectory)
+
+    let staleDirectory = rootDirectory.appending(
+        path: "stale-title--00000000-0000-0000-0000-000000000325",
+        directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: staleDirectory, withIntermediateDirectories: true)
+    _ = try await store.saveArtifact(artifact)
+
+    #expect(FileManager.default.fileExists(atPath: staleDirectory.path(percentEncoded: false)) == false)
 }
 
 @Test

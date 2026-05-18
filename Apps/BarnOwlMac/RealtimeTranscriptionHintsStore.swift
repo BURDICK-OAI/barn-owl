@@ -1,29 +1,69 @@
 import BarnOwlCore
+import BarnOwlPersistence
 import Foundation
 
 enum BarnOwlRealtimeTranscriptionHintsStore {
     private static let fileName = "realtime-transcription-hints.json"
     private static let maxStoredTerms = 80
     private static let maxPromptTerms = 28
+    private static let maxCuratedEntities = 12
+    private static let maxAliasesPerCuratedEntity = 2
 
     static func currentPrompt(
+        attachedContext: [String] = [],
+        curatedTerms: [String] = [],
         fileURL: URL = defaultFileURL()
     ) -> String? {
-        guard let hints = try? load(fileURL: fileURL),
-              !hints.terms.isEmpty
-        else {
-            return nil
-        }
+        let learnedTerms = (try? load(fileURL: fileURL))?.terms ?? []
+        let orderedTerms = normalizedTerms(
+            contextHintTerms(from: attachedContext)
+                + curatedTerms
+                + learnedTerms
+        )
 
-        let terms = normalizedTerms(hints.terms).prefix(maxPromptTerms).joined(separator: ", ")
+        let terms = orderedTerms.prefix(maxPromptTerms).joined(separator: ", ")
         guard !terms.isEmpty else {
             return nil
         }
 
         return """
-        Use these local Barn Owl vocabulary hints learned from prior final transcripts. Prefer these spellings when the audio matches: \(terms).
+        Use these Barn Owl vocabulary hints in source order: current meeting context first, curated Context Library entries second, compact learned transcript hints last. Prefer these spellings when the audio matches: \(terms).
         Keep transcription literal; do not add words that were not spoken.
         """
+    }
+
+    static func curatedHintTerms(
+        database: BarnOwlDatabase,
+        ownerID: String,
+        attachedContext: [String] = []
+    ) async throws -> [String] {
+        let normalizedContext = BarnOwlKnowledgeEntityRecord.normalized(attachedContext.joined(separator: "\n"))
+        let entities = try await database.knowledgeEntities(ownerID: ownerID, limit: maxCuratedEntities * 4)
+        var ranked: [(entity: BarnOwlKnowledgeEntityRecord, aliases: [BarnOwlKnowledgeAliasRecord], relevance: Int)] = []
+
+        for entity in entities {
+            let aliases = try await database.knowledgeAliases(entityID: entity.id)
+            let candidateTerms = [entity.normalizedCanonicalName] + aliases.map(\.normalizedAlias)
+            let relevance = candidateTerms.contains { !$0.isEmpty && normalizedContext.contains($0) } ? 1 : 0
+            ranked.append((entity, aliases, relevance))
+        }
+
+        return normalizedTerms(
+            ranked
+                .sorted {
+                    if $0.relevance != $1.relevance { return $0.relevance > $1.relevance }
+                    if $0.entity.confidence != $1.entity.confidence { return $0.entity.confidence > $1.entity.confidence }
+                    if $0.entity.updatedAt != $1.entity.updatedAt { return $0.entity.updatedAt > $1.entity.updatedAt }
+                    return $0.entity.canonicalName.localizedCaseInsensitiveCompare($1.entity.canonicalName) == .orderedAscending
+                }
+                .prefix(maxCuratedEntities)
+                .flatMap { item in
+                    [item.entity.canonicalName]
+                        + item.aliases
+                            .prefix(maxAliasesPerCuratedEntity)
+                            .map(\.alias)
+                }
+        )
     }
 
     static func learn(
@@ -105,6 +145,60 @@ enum BarnOwlRealtimeTranscriptionHintsStore {
         return Array(normalized.prefix(maxStoredTerms))
     }
 
+    private static func contextHintTerms(from lines: [String]) -> [String] {
+        let acceptedPrefixes = [
+            "meeting title:",
+            "calendar event:",
+            "calendar attendees:",
+            "participants:",
+            "customer:",
+            "customers:",
+            "account:",
+            "accounts:",
+            "organization:",
+            "organizations:",
+            "known person:",
+            "known organization:",
+            "known company:",
+            "known customer:",
+            "known customer_account:",
+            "known project:",
+            "known product:",
+            "known program:",
+            "known glossary_term:"
+        ]
+
+        var output: [String] = []
+        for line in lines {
+            let cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = cleaned
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .lowercased()
+            guard let prefix = acceptedPrefixes.first(where: normalized.hasPrefix) else {
+                continue
+            }
+            guard let separator = cleaned.firstIndex(of: ":") else {
+                continue
+            }
+            let value = String(cleaned[cleaned.index(after: separator)...])
+            let terms: [String]
+            if prefix.contains("attendees")
+                || prefix.contains("participants")
+                || prefix.contains("customers")
+                || prefix.contains("accounts")
+                || prefix.contains("organizations") {
+                terms = value
+                    .replacingOccurrences(of: " and ", with: ", ")
+                    .split(separator: ",")
+                    .map { String($0) }
+            } else {
+                terms = [value]
+            }
+            output.append(contentsOf: terms)
+        }
+        return output
+    }
+
     private static func shouldKeepTerm(_ term: String) -> Bool {
         let normalized = term
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
@@ -112,6 +206,7 @@ enum BarnOwlRealtimeTranscriptionHintsStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !normalized.localizedCaseInsensitiveContains("untitled meeting") else { return false }
+        guard !normalized.localizedCaseInsensitiveContains("conservative learned spelling hints") else { return false }
         guard !normalized.localizedCaseInsensitiveContains("smoke") else { return false }
         guard !normalized.localizedCaseInsensitiveContains("test") else { return false }
 
@@ -131,7 +226,10 @@ enum BarnOwlRealtimeTranscriptionHintsStore {
             "call speaker a",
             "call speaker b",
             "speaker a",
-            "speaker b"
+            "speaker b",
+            "room",
+            "sure",
+            "life"
         ]
         guard !genericTerms.contains(normalized) else { return false }
         guard !normalized.hasPrefix("room speaker ") else { return false }

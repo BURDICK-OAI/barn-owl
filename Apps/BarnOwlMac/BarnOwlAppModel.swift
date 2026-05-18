@@ -1294,9 +1294,26 @@ final class BarnOwlAppModel: ObservableObject {
         captureStatus = "Starting \(Self.audioSourceDescription(requestedAudioSources))."
         realtimeStatus = "Starting realtime transcription."
 
+        let realtimeHintContext = matchedCalendarContext?.contextLines ?? []
+        let realtimeCuratedHints: [String]
+        if let database = try? makeDatabase() {
+            realtimeCuratedHints = (try? await BarnOwlRealtimeTranscriptionHintsStore.curatedHintTerms(
+                database: database,
+                ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+                attachedContext: realtimeHintContext
+            )) ?? []
+        } else {
+            realtimeCuratedHints = []
+        }
+        let realtimePrompt = BarnOwlRealtimeTranscriptionHintsStore.currentPrompt(
+            attachedContext: realtimeHintContext,
+            curatedTerms: realtimeCuratedHints
+        )
+
         let realtimeController: BarnOwlRealtimeTranscriptionController
         realtimeController = BarnOwlRealtimeTranscriptionController(
             configuration: openAIConfiguration,
+            prompt: realtimePrompt,
             updateHandler: { [weak self] update in
                 self?.handleRealtimeTranscriptionUpdate(update, sessionID: session.id)
             },
@@ -1497,12 +1514,12 @@ final class BarnOwlAppModel: ObservableObject {
             apply(stateMachine.complete())
             progressFraction = nil
             liveTranscriptPreview = "Final processing queued in the background."
-            captureStatus = "Final transcript job queued. You can keep using Barn Owl."
-            finalTranscriptionStatus = "Final transcript and notes are running in the background."
+            captureStatus = "Final processing queued. You can keep using Barn Owl."
+            finalTranscriptionStatus = "Final transcript, notes, and meeting artifacts are running in the background."
             noteActionStatus = "Final processing queued."
             recordActivity(
                 category: "jobs",
-                message: "Final transcript job queued.",
+                message: "Final processing job queued.",
                 details: "Barn Owl will transcribe, clean up, title, summarize, index, and export this meeting in the background.",
                 sessionID: session.id
             )
@@ -1916,16 +1933,23 @@ final class BarnOwlAppModel: ObservableObject {
 
         do {
             let database = try makeDatabase()
-            _ = try await database.updateMeetingStateTitle(
+            let updatedState = try await database.updateMeetingStateTitle(
                 meetingID: displayedNote.id,
                 title: title,
                 actor: .user,
                 summary: "Renamed meeting to \(title)."
             )
             let store = try makeLibraryStore()
-            guard let artifact = try await store.updateSessionTitle(sessionID: displayedNote.id, title: title) else {
+            guard var artifact = try await store.updateSessionTitle(sessionID: displayedNote.id, title: title) else {
                 noteActionStatus = "Could not find the current note in the Barn Owl Library."
                 return
+            }
+            if let facts = updatedState?.meetingFacts {
+                let synchronizedMarkdown = Self.markdownReplacingMeetingFacts(
+                    in: artifact.markdown,
+                    with: Self.meetingFactsMarkdownSection(facts, session: artifact.session)
+                )
+                artifact = try await store.updateMarkdown(sessionID: displayedNote.id, markdown: synchronizedMarkdown) ?? artifact
             }
 
             self.displayedNote = BarnOwlDisplayedNote(
@@ -1933,11 +1957,7 @@ final class BarnOwlAppModel: ObservableObject {
                 title: artifact.session.title,
                 startedAt: artifact.session.startedAt,
                 markdown: artifact.markdown,
-                meetingFacts: {
-                    var facts = displayedNote.meetingFacts
-                    facts?.title = artifact.session.title
-                    return facts
-                }()
+                meetingFacts: updatedState?.meetingFacts ?? displayedNote.meetingFacts
             )
             noteTitleDraft = artifact.session.title
             noteDraft = artifact.markdown
@@ -1946,7 +1966,7 @@ final class BarnOwlAppModel: ObservableObject {
                 meetingID: displayedNote.id,
                 type: .updated
             )
-            await writeArtifactToLocalContext(artifact)
+            await writeArtifactToLocalContext(artifact, replacingTitle: displayedNote.title)
             await refreshMeetingHistory()
             noteActionStatus = "Renamed meeting to \(artifact.session.title)."
             await refreshRecentSessions()
@@ -2416,19 +2436,27 @@ final class BarnOwlAppModel: ObservableObject {
 
         do {
             let database = try makeDatabase()
-            guard try await database.updateMeetingStateTitle(
+            let previousTitle = try await database.meetingState(id: meetingID)?.title
+            guard let updatedState = try await database.updateMeetingStateTitle(
                 meetingID: meetingID,
                 title: cleanedTitle,
                 actor: .codexAPI,
                 summary: "Renamed meeting to \(cleanedTitle)."
-            ) != nil else {
+            ) else {
                 noteActionStatus = "Could not find meeting to rename."
                 return false
             }
             if let store = try? makeLibraryStore(),
-               let artifact = try? await store.updateSessionTitle(sessionID: meetingID, title: cleanedTitle) {
+               var artifact = try? await store.updateSessionTitle(sessionID: meetingID, title: cleanedTitle) {
+                if let facts = updatedState.meetingFacts {
+                    let synchronizedMarkdown = Self.markdownReplacingMeetingFacts(
+                        in: artifact.markdown,
+                        with: Self.meetingFactsMarkdownSection(facts, session: artifact.session)
+                    )
+                    artifact = try await store.updateMarkdown(sessionID: meetingID, markdown: synchronizedMarkdown) ?? artifact
+                }
                 _ = try? await database.updateMeetingStateNotes(meetingID: meetingID, markdown: artifact.markdown)
-                await writeArtifactToLocalContext(artifact)
+                await writeArtifactToLocalContext(artifact, replacingTitle: previousTitle)
             }
             await recordMeetingExportSnapshotEvent(
                 meetingID: meetingID,
@@ -3655,6 +3683,113 @@ final class BarnOwlAppModel: ObservableObject {
             )
         } catch {
             return controlStatusResponse(ok: false, message: "Could not queue summary repair.", error: BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    func controlDurabilityRepairResponse() async -> BarnOwlControlResponse {
+        do {
+            let database = try makeDatabase()
+            let removedTranscriptSegments = try await database.deleteUnsafeTranscriptSegments()
+            let states = try await database.meetingStates(limit: 2_000)
+            let libraryStore = try? makeLibraryStore()
+            let contextProvider = try? LocalMarkdownContextProvider(rootDirectory: BarnOwlMeetingProcessor.defaultContextRoot())
+            var synchronizedMeetings = 0
+            var refreshedFactPayloads = 0
+
+            for state in states {
+                guard !state.generatedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+
+                let repairedFacts = Self.durabilityRepairFacts(from: state)
+                let factsChanged = repairedFacts != state.meetingFacts
+                let refreshedState: BarnOwlMeetingState
+                if factsChanged,
+                   let updated = try await database.updateMeetingStateFacts(
+                    meetingID: state.id,
+                    facts: repairedFacts,
+                    actor: .job,
+                    changeType: .meetingFactsUpdate,
+                    summary: "Recomputed durable meeting facts during transcript accuracy repair."
+                   ) {
+                    refreshedState = updated
+                    refreshedFactPayloads += 1
+                } else {
+                    refreshedState = state
+                }
+
+                let repairedMarkdown = Self.durabilityRepairMarkdown(from: refreshedState)
+                let markdownChanged = repairedMarkdown != refreshedState.generatedNotes
+                if markdownChanged {
+                    _ = try await database.updateMeetingStateNotes(
+                        meetingID: refreshedState.id,
+                        markdown: repairedMarkdown,
+                        actor: .job,
+                        changeType: .summaryRegenerated,
+                        summary: "Repaired canonical meeting title/facts markdown synchronization."
+                    )
+                }
+
+                guard let libraryStore,
+                      var artifact = try await libraryStore.artifact(id: refreshedState.id)
+                else {
+                    if factsChanged || markdownChanged {
+                        synchronizedMeetings += 1
+                    }
+                    continue
+                }
+
+                let previousLibraryTitle = artifact.session.title
+                let canonicalTitle = MeetingFacts.clean(refreshedState.meeting.title) ?? refreshedState.title
+                if previousLibraryTitle.caseInsensitiveCompare(canonicalTitle) != .orderedSame,
+                   let renamed = try await libraryStore.updateSessionTitle(sessionID: refreshedState.id, title: canonicalTitle) {
+                    artifact = renamed
+                }
+                if artifact.markdown != repairedMarkdown,
+                   let updated = try await libraryStore.updateMarkdown(sessionID: refreshedState.id, markdown: repairedMarkdown) {
+                    artifact = updated
+                }
+                if let contextProvider {
+                    if previousLibraryTitle.caseInsensitiveCompare(artifact.session.title) != .orderedSame {
+                        try? await contextProvider.remove(title: previousLibraryTitle)
+                    }
+                    try? await contextProvider.write(ContextArtifact(
+                        title: artifact.session.title,
+                        markdown: artifact.markdown
+                    ))
+                }
+                if factsChanged
+                    || markdownChanged
+                    || previousLibraryTitle.caseInsensitiveCompare(canonicalTitle) != .orderedSame {
+                    synchronizedMeetings += 1
+                }
+            }
+
+            let removedContextDebris: Int
+            if let contextProvider {
+                removedContextDebris = try await contextProvider.removeFiles(named: [
+                    "no-transcript-content-provided-meeting-so-no.md",
+                    "no-transcript-content-captured-meeting-so-no.md",
+                    "transcript-only-contains-brief-incomplete-fragment-she.md",
+                    "the-new-jersey-mafia.md",
+                    "the-context-layer.md",
+                    "inferred-from-user-request-moderna-meeting-with-ed-and-suresh.md"
+                ])
+            } else {
+                removedContextDebris = 0
+            }
+
+            await refreshRecentSessions()
+            await refreshMeetingHistory()
+            return controlStatusResponse(
+                message: "Durability repair completed. Removed \(removedTranscriptSegments) unsafe transcript segment(s), refreshed \(refreshedFactPayloads) meeting fact payload(s), synchronized \(synchronizedMeetings) meeting artifact(s), and pruned \(removedContextDebris) stale Context mirror file(s)."
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Durability repair failed.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
         }
     }
 
@@ -6232,7 +6367,7 @@ final class BarnOwlAppModel: ObservableObject {
                 sessionID: session.id,
                 updatePreview: false
             )
-            captureStatus = "Saved final transcript, but temporary audio cleanup needs attention."
+            captureStatus = "Saved transcript and notes, but temporary audio cleanup needs attention."
             finalTranscriptionStatus = "Final transcript saved; cleanup needs attention."
             progressFraction = 1
             await refreshRecoveryAttentionItems()
@@ -6247,11 +6382,11 @@ final class BarnOwlAppModel: ObservableObject {
         )
         progressFraction = 1
         liveTranscriptPreview = "Saved notes to \(markdownURL.lastPathComponent)."
-        captureStatus = "Saved final transcript. Temporary audio deleted."
+        captureStatus = "Saved transcript and notes. Temporary audio deleted."
         finalTranscriptionStatus = "Final transcript and notes saved."
         recordActivity(
             category: "jobs",
-            message: "Final transcript job complete.",
+            message: "Final processing job complete.",
             details: markdownURL.lastPathComponent,
             sessionID: session.id
         )
@@ -6276,7 +6411,7 @@ final class BarnOwlAppModel: ObservableObject {
         } else if willRetry && BarnOwlProcessingRetryPolicy.shouldKeepQueuedForConnectivity(error) {
             "Saved locally. Final processing will retry when network is available."
         } else {
-            willRetry ? "Final transcript job will retry." : "Final transcript job failed."
+            willRetry ? "Final processing job will retry." : "Final processing job failed."
         }
         recordActivity(
             level: .warning,
@@ -6319,10 +6454,17 @@ final class BarnOwlAppModel: ObservableObject {
         }
     }
 
-    private func writeArtifactToLocalContext(_ artifact: LocalMeetingArtifact) async {
+    private func writeArtifactToLocalContext(
+        _ artifact: LocalMeetingArtifact,
+        replacingTitle previousTitle: String? = nil
+    ) async {
         do {
-            try await LocalMarkdownContextProvider(rootDirectory: try BarnOwlMeetingProcessor.defaultContextRoot())
-                .write(ContextArtifact(title: artifact.session.title, markdown: artifact.markdown))
+            let provider = LocalMarkdownContextProvider(rootDirectory: try BarnOwlMeetingProcessor.defaultContextRoot())
+            if let previousTitle,
+               previousTitle.caseInsensitiveCompare(artifact.session.title) != .orderedSame {
+                try await provider.remove(title: previousTitle)
+            }
+            try await provider.write(ContextArtifact(title: artifact.session.title, markdown: artifact.markdown))
         } catch {
             recordActivity(
                 level: .warning,
@@ -6371,11 +6513,18 @@ final class BarnOwlAppModel: ObservableObject {
             )
 
             if let store = try? makeLibraryStore() {
-                if let updatedArtifact = try? await store.updateMarkdown(sessionID: meetingID, markdown: renderedMarkdown) {
-                    await writeArtifactToLocalContext(updatedArtifact)
-                }
+                var synchronizedArtifact: LocalMeetingArtifact?
                 if stateForRendering.title != state.title {
-                    _ = try? await store.updateSessionTitle(sessionID: meetingID, title: stateForRendering.title)
+                    synchronizedArtifact = try? await store.updateSessionTitle(
+                        sessionID: meetingID,
+                        title: stateForRendering.title
+                    )
+                }
+                if let updatedArtifact = try? await store.updateMarkdown(sessionID: meetingID, markdown: renderedMarkdown) {
+                    synchronizedArtifact = updatedArtifact
+                }
+                if let synchronizedArtifact {
+                    await writeArtifactToLocalContext(synchronizedArtifact, replacingTitle: state.title)
                 }
             }
 
@@ -6641,6 +6790,17 @@ final class BarnOwlAppModel: ObservableObject {
         else {
             return
         }
+        guard let safeText = TranscriptPersistenceGuard.sanitizedText(update.text) else {
+            recordActivity(
+                level: .warning,
+                category: "realtime",
+                message: "Suppressed non-transcript realtime text.",
+                details: "Barn Owl rejected control or status text before transcript preview/persistence.",
+                sessionID: sessionID,
+                updatePreview: false
+            )
+            return
+        }
 
         if update.isFinal {
             if !didRecordFirstRealtimeTranscript {
@@ -6648,18 +6808,18 @@ final class BarnOwlAppModel: ObservableObject {
                 recordPerformance(.milestone(.firstRealtimeTranscriptReceived, at: Self.performanceNow()))
             }
             realtimeDraft = ""
-            appendRealtimeTranscript(update.text)
-            persistRealtimeTranscriptSegment(update.text, sessionID: sessionID)
+            appendRealtimeTranscript(safeText)
+            persistRealtimeTranscriptSegment(safeText, sessionID: sessionID)
             persistRealtimeState(sessionID: sessionID, force: true)
             updateRealtimeStatusIfNeeded("Realtime transcription updated.")
             lastRealtimePreviewPublishAt = Date()
         } else {
             if !didRecordFirstRealtimeTranscript,
-               !update.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+               !safeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 didRecordFirstRealtimeTranscript = true
                 recordPerformance(.milestone(.firstRealtimeTranscriptReceived, at: Self.performanceNow()))
             }
-            realtimeDraft = update.text
+            realtimeDraft = safeText
             realtimeDraft = String(realtimeDraft.suffix(Self.realtimePreviewCharacterLimit))
             updateRealtimeStatusIfNeeded("Realtime transcription streaming.")
             publishRealtimeDraftIfNeeded()
@@ -6879,10 +7039,7 @@ final class BarnOwlAppModel: ObservableObject {
     }
 
     private func persistRealtimeTranscriptSegment(_ text: String, sessionID: UUID) {
-        let cleaned = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-        guard !cleaned.isEmpty else { return }
+        guard let cleaned = TranscriptPersistenceGuard.sanitizedText(text) else { return }
 
         let now = Date()
         let startedAt = activeSession?.startedAt ?? now
@@ -7403,6 +7560,66 @@ final class BarnOwlAppModel: ObservableObject {
     static func reviewTranscriptPreview(from text: String) -> String {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return isLiveTranscriptPlaceholder(cleaned) ? "" : cleaned
+    }
+
+    static func durabilityRepairMarkdown(from state: BarnOwlMeetingState) -> String {
+        let canonicalTitle = MeetingFacts.clean(state.meeting.title) ?? state.title
+        let canonicalFacts: MeetingFacts = {
+            var facts = state.meetingFacts
+                ?? meetingFactsFromMarkdown(state.generatedNotes)
+                ?? MeetingFacts(title: canonicalTitle)
+            facts.title = canonicalTitle
+            return facts
+        }()
+        let session = RecordingSession(
+            id: state.id,
+            title: canonicalTitle,
+            startedAt: state.startedAt,
+            endedAt: state.endedAt,
+            audioSources: .defaultMeetingCapture
+        )
+        let titleSynchronized = markdownReplacingTopLevelTitle(
+            in: state.generatedNotes,
+            title: canonicalTitle
+        )
+        return markdownReplacingMeetingFacts(
+            in: titleSynchronized,
+            with: meetingFactsMarkdownSection(canonicalFacts, session: session)
+        )
+    }
+
+    static func durabilityRepairFacts(from state: BarnOwlMeetingState) -> MeetingFacts {
+        let canonicalTitle = MeetingFacts.clean(state.meeting.title) ?? state.title
+        let transcript = state.transcriptSegments
+            .map { "\($0.speakerLabel ?? "Speaker"): \($0.text)" }
+            .joined(separator: "\n")
+        let freeformContext = state.externalContextItems
+            .map(\.body)
+            .joined(separator: "\n")
+        var repairSeed = state.meetingFacts ?? MeetingFacts(title: canonicalTitle)
+        repairSeed.title = canonicalTitle
+        repairSeed.customers = []
+        repairSeed.organizations = []
+        repairSeed.projects = []
+        repairSeed.goals = []
+        var facts = MeetingFactsExtractor().extract(
+            transcript: transcript,
+            freeformContext: freeformContext,
+            existingFacts: repairSeed,
+            currentTitle: canonicalTitle
+        )
+        facts.title = canonicalTitle
+        return facts
+    }
+
+    static func markdownReplacingTopLevelTitle(in markdown: String, title: String) -> String {
+        let normalizedTitle = MeetingFacts.clean(title) ?? "Untitled Meeting"
+        var lines = markdown.components(separatedBy: "\n")
+        if let firstIndex = lines.firstIndex(where: { $0.hasPrefix("# ") }) {
+            lines[firstIndex] = "# \(normalizedTitle)"
+            return lines.joined(separator: "\n")
+        }
+        return "# \(normalizedTitle)\n\n\(markdown)"
     }
 
     static func suggestPostRecordingContext(

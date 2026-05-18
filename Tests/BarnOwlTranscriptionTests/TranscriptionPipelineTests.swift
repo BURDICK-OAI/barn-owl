@@ -350,7 +350,7 @@ func pipelineEnrichesSummaryContextAfterTranscriptReview() async throws {
     let pipeline = FinalTranscriptionPipeline(
         transcriptionClient: StubAudioFileTranscriptionClient(responses: [
             audioFile.url: AudioFileTranscriptionResponse(segments: [
-                AudioFileTranscriptionSegment(text: "Rosalind launch is on track.", startTime: 0, endTime: 1)
+                AudioFileTranscriptionSegment(text: "Orchid launch is on track.", startTime: 0, endTime: 1)
             ])
         ]),
         summaryGenerator: CapturingSummaryGenerator(
@@ -358,10 +358,10 @@ func pipelineEnrichesSummaryContextAfterTranscriptReview() async throws {
             capturedContexts: capturedContexts
         ),
         summaryContextProvider: { _, segments, context in
-            guard segments.map(\.text).joined(separator: " ").contains("Rosalind") else {
+            guard segments.map(\.text).joined(separator: " ").contains("Orchid") else {
                 return context
             }
-            return context + ["Known project: Rosalind. Internal launch workstream."]
+            return context + ["Known project: Orchid. Internal launch workstream."]
         }
     )
 
@@ -374,7 +374,7 @@ func pipelineEnrichesSummaryContextAfterTranscriptReview() async throws {
     #expect(result.summary.overview == "Context-aware summary.")
     #expect(await capturedContexts.latest() == [
         "Calendar context: GTM review.",
-        "Known project: Rosalind. Internal launch workstream."
+        "Known project: Orchid. Internal launch workstream."
     ])
 }
 
