@@ -65,8 +65,8 @@ barnowl wait --session <uuid> --until complete --timeout 10m
 Barn Owl owns the enrichment registry, evidence jobs, adjudication, and durable
 knowledge. Codex owns retrieval from authenticated private connectors and the
 judgment about what meeting-specific context is worth hydrating into Barn Owl.
-Do not imply Barn Owl directly signs into Google Drive, Slack, Notion, or
-Salesforce on its own.
+Do not imply Barn Owl directly signs into Google Drive, Slack, Notion,
+Salesforce, Gmail, Calendar, Gong, or ChatGPT Meetings on its own.
 
 Use this flow when the user asks to set up, improve, or rely on enrichment
 sources:
@@ -86,6 +86,10 @@ barnowl enrichment-sources setup google_drive_reference --source-id google_drive
 barnowl enrichment-sources setup slack_reference --source-id slack_reference
 barnowl enrichment-sources setup notion_reference --source-id notion_reference
 barnowl enrichment-sources setup salesforce_reference --source-id salesforce_reference
+barnowl enrichment-sources setup gmail_reference --source-id gmail_reference
+barnowl enrichment-sources setup calendar_reference --source-id calendar_reference
+barnowl enrichment-sources setup gong_reference --source-id gong_reference
+barnowl enrichment-sources setup chatgpt_meetings_reference --source-id chatgpt_meetings_reference
 ```
 
 3. Check source health:
@@ -117,9 +121,9 @@ barnowl enrichment-sources upsert google_drive_reference \
   --config-json '{"entries":[...]}'
 ```
 
-Use the analogous connector reference and scope for Slack, Notion, and
-Salesforce. Preserve existing useful entries when refreshing a source rather
-than replacing them blindly.
+Use the analogous connector reference and scope for Slack, Notion, Salesforce,
+Gmail, Calendar, Gong, and ChatGPT Meetings. Preserve existing useful entries
+when refreshing a source rather than replacing them blindly.
 
 5. When a high-value recurring person, account, project, product, or internal
 term is ambiguous or newly important, run targeted enrichment:
@@ -132,10 +136,11 @@ Barn Owl may auto-persist strong candidates, hold ambiguous concepts for more
 evidence, or preserve conflict memory. Treat those holds as policy working as
 designed, not as failures to work around.
 
-6. At meeting start, prefer just-in-time context over permanent clutter:
-attach relevant connector-derived facts to the live session with
-`barnowl context add`, and only extend durable enrichment payloads for concepts
-that recur or are strategically worth stabilizing.
+6. Hydration is ongoing, not install-time. Around each meeting or enrichment
+job, prefer just-in-time context over permanent clutter: attach relevant
+connector-derived facts to the live session with `barnowl context add`, and only
+extend durable enrichment payloads for concepts that recur or are strategically
+worth stabilizing.
 
 ## Commands
 

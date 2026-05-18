@@ -77,7 +77,7 @@ for required in "${required_entries[@]}"; do
   fi
 done
 
-forbidden_pattern='(^|/)\.git/|(^|/)\.tools/|(^|/)\.build/|(^|/)DerivedData/|(^|/)build/|(^|/)dist/|(^|/)\.DS_Store$|(^|/)\.env$|(^|/)\.env\.[^/]+$|\.xcuserdata/|\.xcuserstate$|BarnOwl-source-handoff\.zip$|BarnOwl\.app\.zip$|BarnOwl-release-manifest\.json$|SHA256SUMS$|manual-capture-qa-evidence-[0-9-]+\.md$'
+forbidden_pattern='(^|/)\.git/|(^|/)\.tools/|(^|/)\.build/|(^|/)DerivedData[^/]*/|(^|/)build/|(^|/)dist/|(^|/)\.DS_Store$|(^|/)\.env$|(^|/)\.env\.[^/]+$|\.xcuserdata/|\.xcuserstate$|BarnOwl-source-handoff\.zip$|BarnOwl\.app\.zip$|BarnOwl-release-manifest\.json$|SHA256SUMS$|manual-capture-qa-evidence-[0-9-]+\.md$'
 
 while IFS= read -r entry; do
   [[ "$entry" == "BarnOwl/.env.example" ]] && continue

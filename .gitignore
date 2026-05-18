@@ -2,7 +2,7 @@
 .env
 .env.*
 !.env.example
-DerivedData/
+DerivedData*/
 .build/
 build/
 dist/

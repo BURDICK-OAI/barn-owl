@@ -288,7 +288,7 @@ private struct BarnOwlMemoryEnrichmentSourceAdapter: BarnOwlEnrichmentSourceAdap
     func healthSnapshot(
         for source: BarnOwlEnrichmentSourceDescriptor
     ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
-        BarnOwlEnrichmentSourceHealthSnapshot(
+        return BarnOwlEnrichmentSourceHealthSnapshot(
             status: .ready,
             authState: .notRequired,
             detail: "\(source.displayName) is backed by the local Barn Owl meeting index."
@@ -398,7 +398,7 @@ struct BarnOwlPublicReferenceResearchAdapter: BarnOwlEnrichmentSourceAdapter {
     func healthSnapshot(
         for source: BarnOwlEnrichmentSourceDescriptor
     ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
-        BarnOwlEnrichmentSourceHealthSnapshot(
+        return BarnOwlEnrichmentSourceHealthSnapshot(
             status: .ready,
             authState: .notRequired,
             detail: "\(source.displayName) can issue public Wikidata reference lookups."
@@ -524,12 +524,13 @@ private struct BarnOwlConfiguredInternalReferenceAdapter: BarnOwlEnrichmentSourc
     func healthSnapshot(
         for source: BarnOwlEnrichmentSourceDescriptor
     ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
-        BarnOwlEnrichmentSourceHealthSnapshot(
-            status: source.configJSON == nil ? .partial : .ready,
+        let entryCount = Self.configuredEntryCount(in: source.configJSON)
+        return BarnOwlEnrichmentSourceHealthSnapshot(
+            status: entryCount > 0 ? .ready : .partial,
             authState: .configured,
-            detail: source.configJSON == nil
-                ? "\(source.displayName) has no configured internal reference payload."
-                : "\(source.displayName) can emit normalized private/internal evidence from its configured reference payload."
+            detail: entryCount > 0
+                ? "\(source.displayName) can emit normalized private/internal evidence from its configured reference payload."
+                : "\(source.displayName) is configured, but it does not contain hydrated internal reference entries yet."
         )
     }
 
@@ -585,6 +586,16 @@ private struct BarnOwlConfiguredInternalReferenceAdapter: BarnOwlEnrichmentSourc
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
     }
+
+    private static func configuredEntryCount(in configJSON: String?) -> Int {
+        guard let configJSON,
+              let data = configJSON.data(using: .utf8),
+              let configuration = try? JSONDecoder().decode(Configuration.self, from: data)
+        else {
+            return 0
+        }
+        return configuration.entries.count
+    }
 }
 
 private struct BarnOwlConfiguredPublicReferenceAdapter: BarnOwlEnrichmentSourceAdapter {
@@ -609,12 +620,13 @@ private struct BarnOwlConfiguredPublicReferenceAdapter: BarnOwlEnrichmentSourceA
     func healthSnapshot(
         for source: BarnOwlEnrichmentSourceDescriptor
     ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
-        BarnOwlEnrichmentSourceHealthSnapshot(
-            status: source.configJSON == nil ? .partial : .ready,
+        let entryCount = Self.configuredEntryCount(in: source.configJSON)
+        return BarnOwlEnrichmentSourceHealthSnapshot(
+            status: entryCount > 0 ? .ready : .partial,
             authState: .notRequired,
-            detail: source.configJSON == nil
-                ? "\(source.displayName) is enabled, but no public/reference evidence payload is configured yet."
-                : "\(source.displayName) can emit normalized public/reference evidence from its configured retrieval payload."
+            detail: entryCount > 0
+                ? "\(source.displayName) can emit normalized public/reference evidence from its configured retrieval payload."
+                : "\(source.displayName) is configured, but it does not contain hydrated public/reference entries yet."
         )
     }
 
@@ -669,6 +681,16 @@ private struct BarnOwlConfiguredPublicReferenceAdapter: BarnOwlEnrichmentSourceA
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+
+    private static func configuredEntryCount(in configJSON: String?) -> Int {
+        guard let configJSON,
+              let data = configJSON.data(using: .utf8),
+              let configuration = try? JSONDecoder().decode(Configuration.self, from: data)
+        else {
+            return 0
+        }
+        return configuration.entries.count
     }
 }
 
@@ -3208,6 +3230,62 @@ final class BarnOwlAppModel: ObservableObject {
             authorityProfile: "private_internal_reference",
             connectorReference: "salesforce",
             bestUsedFor: ["accounts", "customers", "opportunities", "company context"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "gmail_reference",
+            displayName: "Gmail Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.personalPrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.personalPrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "gmail",
+            bestUsedFor: ["recent meeting-relevant email threads", "commitments and follow-ups", "account/customer context from inbox"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "calendar_reference",
+            displayName: "Calendar Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.personalPrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.personalPrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "google-calendar",
+            bestUsedFor: ["meeting titles and attendees", "recurring participant/account associations", "event metadata for recording context"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "gong_reference",
+            displayName: "Gong Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.organizationScoped.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.organizationScoped.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "gong",
+            bestUsedFor: ["prior customer/account conversation history", "repeated objections and commitments", "participant disambiguation for customer meetings"],
+            defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
+            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
+            privacyCopyPolicy: "summary_or_pointer_only",
+            queryBudgetPolicy: "connector_policy_controlled"
+        ),
+        BarnOwlControlEnrichmentSourcePreset(
+            id: "chatgpt_meetings_reference",
+            displayName: "ChatGPT Meetings Reference",
+            sourceType: "private_reference",
+            scope: BarnOwlEnrichmentSourceScope.workspacePrivate.rawValue,
+            scopeLabel: BarnOwlEnrichmentSourceScope.workspacePrivate.displayName,
+            authorityProfile: "private_internal_reference",
+            connectorReference: "chatgpt-meetings",
+            bestUsedFor: ["prior meeting transcripts and summaries", "recurring names and concepts", "cross-meeting follow-up context"],
             defaultAuthState: BarnOwlEnrichmentSourceAuthState.needsAuthentication.rawValue,
             defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue,
             privacyCopyPolicy: "summary_or_pointer_only",

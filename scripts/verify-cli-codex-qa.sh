@@ -154,8 +154,12 @@ grep -q 'barnowl enrichment-sources list' "$skill_path" \
   || fail "bundled Codex skill does not mention enrichment source inspection"
 grep -q 'barnowl knowledge enrich "<concept>"' "$skill_path" \
   || fail "bundled Codex skill does not mention targeted durable enrichment"
-grep -q 'Do not imply Barn Owl directly signs into Google Drive, Slack, Notion, or' "$skill_path" \
+grep -q 'Do not imply Barn Owl directly signs into Google Drive, Slack, Notion,' "$skill_path" \
   || fail "bundled Codex skill does not describe Codex-mediated connector retrieval"
+grep -q 'barnowl enrichment-sources setup gmail_reference --source-id gmail_reference' "$skill_path" \
+  || fail "bundled Codex skill does not mention Gmail enrichment setup"
+grep -q 'Hydration is ongoing, not install-time' "$skill_path" \
+  || fail "bundled Codex skill does not explain recurring hydration"
 
 mark_checked() {
   local label="$1"

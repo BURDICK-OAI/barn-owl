@@ -720,13 +720,70 @@ func controlEnrichmentSourcePresetsConfigureConnectorBackedSourcesAndHealthCheck
     let health = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "drive_reference")
     let stored = try #require(await database.enrichmentSource(ownerID: "owner", id: "drive_reference"))
 
-    #expect(presets.enrichmentSourcePresets?.map(\.id).contains("google_drive_reference") == true)
+    let presetIDs = presets.enrichmentSourcePresets?.map(\.id) ?? []
+    #expect(presetIDs.contains("google_drive_reference"))
+    #expect(presetIDs.contains("gmail_reference"))
+    #expect(presetIDs.contains("calendar_reference"))
+    #expect(presetIDs.contains("gong_reference"))
+    #expect(presetIDs.contains("chatgpt_meetings_reference"))
     #expect(setup.enrichmentSources?.first?.connectorReference == "google-drive")
     #expect(stored.scope == .personalPrivate)
     #expect(stored.authState == .needsAuthentication)
     #expect(stored.healthStatus == .needsAuth)
     #expect(health.enrichmentSources?.first?.healthStatus == BarnOwlEnrichmentSourceHealthStatus.needsAuth.rawValue)
     #expect(health.enrichmentSources?.first?.lastCheckedAt != nil)
+}
+
+@Test
+@MainActor
+func configuredConnectorPayloadsStayPartialUntilHydratedEntriesExist() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
+
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "gmail_reference",
+        sourceDisplayName: "Gmail Reference",
+        sourceType: "private_reference",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "private_internal_reference",
+        configJSON: #"{"entries":[]}"#,
+        connectorReference: "gmail",
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    let emptyHealth = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "gmail_reference")
+
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "gmail_reference",
+        sourceDisplayName: "Gmail Reference",
+        sourceType: "private_reference",
+        enabled: true,
+        scope: "personal_private",
+        authorityProfile: "private_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Aster"],
+              "candidateKind": "project",
+              "canonicalName": "Aster",
+              "summary": "Recent Gmail thread references Aster.",
+              "citations": ["gmail:thread/aster"]
+            }
+          ]
+        }
+        """,
+        connectorReference: "gmail",
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    let hydratedHealth = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "gmail_reference")
+
+    #expect(emptyHealth.enrichmentSources?.first?.healthStatus == BarnOwlEnrichmentSourceHealthStatus.partial.rawValue)
+    #expect(hydratedHealth.enrichmentSources?.first?.healthStatus == BarnOwlEnrichmentSourceHealthStatus.ready.rawValue)
 }
 
 @Test

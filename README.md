@@ -226,11 +226,16 @@ scripts/barnowl enrichment-sources setup google_drive_reference --source-id goog
 scripts/barnowl enrichment-sources setup slack_reference --source-id slack_reference
 scripts/barnowl enrichment-sources setup notion_reference --source-id notion_reference
 scripts/barnowl enrichment-sources setup salesforce_reference --source-id salesforce_reference
+scripts/barnowl enrichment-sources setup gmail_reference --source-id gmail_reference
+scripts/barnowl enrichment-sources setup calendar_reference --source-id calendar_reference
+scripts/barnowl enrichment-sources setup gong_reference --source-id gong_reference
+scripts/barnowl enrichment-sources setup chatgpt_meetings_reference --source-id chatgpt_meetings_reference
 ```
 
 3. Codex uses authenticated connector tools to retrieve relevant Drive, Slack,
-Notion, or Salesforce evidence, then hydrates Barn Owl with concise normalized
-reference payloads through `enrichment-sources upsert`.
+Notion, Salesforce, Gmail, Calendar, Gong, or ChatGPT Meetings evidence, then
+hydrates Barn Owl with concise normalized reference payloads through
+`enrichment-sources upsert`.
 
 4. Barn Owl adjudicates targeted concepts with:
 
@@ -242,10 +247,11 @@ Strongly supported concepts can become durable knowledge automatically.
 Ambiguous or weak concepts stay held until there is enough corroboration. This
 is intentional.
 
-5. At meeting start, Codex should still prefer just-in-time `context add`
-updates for meeting-specific attendees, files, account details, and fresh
-connector findings. Durable enrichment payloads should remain compact and
-focused on recurring people, accounts, projects, products, and terminology.
+5. Hydration is ongoing, not install-time. Around each meeting or enrichment
+job, Codex should retrieve only the private context that is actually relevant,
+attach highly situational facts with just-in-time `context add` updates, and
+refresh durable source payloads only for recurring people, accounts, projects,
+products, and terminology.
 
 ## Privacy Notes
 
