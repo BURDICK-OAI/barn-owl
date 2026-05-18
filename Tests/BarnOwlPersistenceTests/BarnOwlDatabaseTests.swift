@@ -625,6 +625,38 @@ func barnOwlDatabaseSuppressesAndReactivatesDurableKnowledgeWithoutDestroyingPro
 }
 
 @Test
+func activeDurableKnowledgeListingsHideSuppressedRowsWhileAuditListingsKeepThem() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let now = Date(timeIntervalSince1970: 1_800_004_300)
+
+    try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
+        ownerID: "owner",
+        kind: "organization",
+        canonicalName: "Moderna",
+        confidence: 0.99,
+        createdAt: now,
+        updatedAt: now
+    ))
+    try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
+        ownerID: "owner",
+        kind: "person",
+        canonicalName: "Nice",
+        confidence: 0.11,
+        lifecycleStatus: .suppressed,
+        lifecycleReason: "Removed from Context Library.",
+        lifecycleUpdatedAt: now,
+        createdAt: now,
+        updatedAt: now
+    ))
+
+    let visibleRows = try await database.knowledgeEntities(ownerID: "owner", limit: 10)
+    let auditRows = try await database.knowledgeEntitiesIncludingSuppressed(ownerID: "owner", limit: 10)
+
+    #expect(visibleRows.map(\.canonicalName) == ["Moderna"])
+    #expect(Set(auditRows.map(\.canonicalName)) == ["Moderna", "Nice"])
+}
+
+@Test
 func barnOwlDatabaseMatchesDurableKnowledgeByAliasAndUpdatesConfidence() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let now = Date(timeIntervalSince1970: 1_800_004_200)

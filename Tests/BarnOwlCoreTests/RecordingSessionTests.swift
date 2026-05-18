@@ -749,9 +749,9 @@ func configuredConnectorPayloadsStayPartialUntilHydratedEntriesExist() async thr
         scope: "personal_private",
         authorityProfile: "private_internal_reference",
         configJSON: #"{"entries":[]}"#,
-        connectorReference: "gmail",
         authState: "configured",
-        healthStatus: "ready"
+        healthStatus: "ready",
+        connectorReference: "gmail"
     ))
     let emptyHealth = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "gmail_reference")
 
@@ -776,9 +776,9 @@ func configuredConnectorPayloadsStayPartialUntilHydratedEntriesExist() async thr
           ]
         }
         """,
-        connectorReference: "gmail",
         authState: "configured",
-        healthStatus: "ready"
+        healthStatus: "ready",
+        connectorReference: "gmail"
     ))
     let hydratedHealth = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "gmail_reference")
 
@@ -3512,6 +3512,36 @@ func recurringConceptCandidatesExtractStandaloneAndMultiwordConceptsWithoutSpeak
     #expect(!candidates.contains("And"))
     #expect(!candidates.contains("Room Speaker"))
     #expect(!candidates.contains("Call Speaker"))
+}
+
+@Test
+func automaticRecurringConceptCandidatesRejectObservedSingleTokenJunkSeeds() {
+    let candidates = BarnOwlAppModel.automaticRecurringConceptCandidates(
+        in: """
+        Room Speaker A: API came up again.
+        Room Speaker A: Get kept appearing in later notes.
+        Room Speaker A: Hey showed up repeatedly.
+        Room Speaker A: Josh was mentioned without enough identity.
+        Room Speaker A: MIT appeared in loose transcript fragments.
+        Room Speaker A: Man was just filler.
+        Room Speaker A: Nice was sentence noise.
+        Room Speaker A: Only was not a durable concept.
+        Room Speaker A: Very was not a durable concept.
+        Room Speaker A: XYZ should not become a company automatically.
+        Room Speaker B: NovaBio Life Sciences stayed relevant across planning.
+        """
+    )
+
+    #expect(candidates == ["NovaBio Life Sciences"])
+}
+
+@Test
+func automaticRecurringConceptEnrichmentRequiresMoreThanAmbiguousSingleWords() {
+    for concept in ["API", "Get", "Hey", "Josh", "MIT", "Man", "Nice", "Only", "Very", "XYZ", "Orchid"] {
+        #expect(!BarnOwlAppModel.isEligibleForAutomaticRecurringConceptEnrichment(concept))
+    }
+
+    #expect(BarnOwlAppModel.isEligibleForAutomaticRecurringConceptEnrichment("NovaBio Life Sciences"))
 }
 
 @Test

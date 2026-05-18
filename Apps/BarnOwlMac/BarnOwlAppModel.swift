@@ -8461,7 +8461,7 @@ final class BarnOwlAppModel: ObservableObject {
         database: BarnOwlDatabase,
         now: Date
     ) async throws -> [String] {
-        let candidates = Self.recurringConceptCandidates(in: transcript)
+        let candidates = Self.automaticRecurringConceptCandidates(in: transcript)
         guard !candidates.isEmpty else { return [] }
 
         let existingJobs = try await database.enrichmentJobs(ownerID: ownerID, limit: 200)
@@ -8539,6 +8539,11 @@ final class BarnOwlAppModel: ObservableObject {
         return ordered
     }
 
+    nonisolated static func automaticRecurringConceptCandidates(in transcript: String, limit: Int = 16) -> [String] {
+        recurringConceptCandidates(in: transcript, limit: limit)
+            .filter(isEligibleForAutomaticRecurringConceptEnrichment)
+    }
+
     private nonisolated static let recurringConceptStopTerms: Set<String> = [
         "barn owl",
         "call speaker",
@@ -8600,6 +8605,18 @@ final class BarnOwlAppModel: ObservableObject {
             concept,
             normalized: BarnOwlKnowledgeEntityRecord.normalized(concept)
         )
+    }
+
+    nonisolated static func isEligibleForAutomaticRecurringConceptEnrichment(_ concept: String) -> Bool {
+        guard isMeaningfulRecurringConcept(concept) else {
+            return false
+        }
+
+        // Single-token concepts are often just transcript residue or underspecified names.
+        // They can still be enriched deliberately, but should not self-promote automatically.
+        return concept
+            .split(whereSeparator: \.isWhitespace)
+            .count >= 2
     }
 
     private nonisolated static func isMeaningfulRecurringConcept(

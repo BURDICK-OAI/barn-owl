@@ -59,7 +59,7 @@ private struct BarnOwlContextEntityAliasRecord: Sendable {
 
 private extension BarnOwlDatabase {
     func contextEntities(limit: Int) throws -> [BarnOwlContextEntityRecord] {
-        try knowledgeEntitiesIncludingSuppressed(
+        try knowledgeEntities(
             ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
             limit: limit
         ).map { entity in
