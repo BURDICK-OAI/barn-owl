@@ -839,6 +839,88 @@ func controlKnowledgeEnrichUsesActivePolicyPackThresholds() async throws {
 
 @Test
 @MainActor
+func controlKnowledgeEnrichPrivateConfiguredEvidenceOutranksConflictingPublicReferenceNoise() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
+    try await database.seedDefaultEnrichmentSources(ownerID: "owner")
+    try await database.upsertEnrichmentPolicyPack(BarnOwlEnrichmentPolicyPackRecord(
+        id: "single_private_truth",
+        ownerID: "owner",
+        displayName: "Single private truth",
+        description: "Prefer one clear private/internal candidate over weaker public reference disagreement.",
+        minimumSupportingEvidenceCount: 1,
+        minimumIndependentSourceCountAfterConflictMemory: 2,
+        active: true
+    ))
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "workspace_reference",
+        sourceDisplayName: "Workspace Reference",
+        sourceType: "internal_memory",
+        enabled: true,
+        scope: "workspace_private",
+        authorityProfile: "private_internal_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Aster"],
+              "candidateKind": "project",
+              "canonicalName": "Aster",
+              "summary": "Workspace project.",
+              "confidence": 0.94,
+              "citations": ["workspace:projects/aster"]
+            }
+          ]
+        }
+        """,
+        authState: "configured",
+        healthStatus: "ready"
+    ))
+    _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
+        command: .enrichmentSourceUpsert,
+        sourceID: "public_reference_noise",
+        sourceDisplayName: "Public Reference Noise",
+        sourceType: "public_reference",
+        enabled: true,
+        scope: "public",
+        authorityProfile: "public_reference",
+        configJSON: """
+        {
+          "entries": [
+            {
+              "matchTerms": ["Aster"],
+              "candidateKind": "company",
+              "canonicalName": "Aster Public",
+              "summary": "Weaker public-reference disagreement.",
+              "confidence": 0.88,
+              "citations": ["public:aster"]
+            }
+          ]
+        }
+        """,
+        authState: "not_required",
+        healthStatus: "ready"
+    ))
+
+    let response = await model.controlKnowledgeEnrichResponse(concept: "Aster", limit: 8)
+    let entity = try #require(await database.knowledgeEntity(
+        ownerID: "owner",
+        kind: "project",
+        canonicalName: "Aster"
+    ))
+
+    #expect(response.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
+    #expect(entity.summary?.contains("Workspace project.") == true)
+    #expect(try await database.knowledgeEntity(
+        ownerID: "owner",
+        kind: "company",
+        canonicalName: "Aster Public"
+    ) == nil)
+}
+
+@Test
+@MainActor
 func controlPlaneManagesAuthorityProfilesPolicyPacksAndKnowledgeSuppression() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")

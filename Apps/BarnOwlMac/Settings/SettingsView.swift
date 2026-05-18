@@ -761,7 +761,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                ForEach(parsed.highlights, id: \.self) { highlight in
+                ForEach(Array(parsed.highlights.enumerated()), id: \.offset) { _, highlight in
                     HStack(alignment: .top, spacing: 5) {
                         Text("-")
                             .font(.caption.weight(.semibold))

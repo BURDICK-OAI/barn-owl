@@ -4700,7 +4700,11 @@ final class BarnOwlAppModel: ObservableObject {
                 && !$0.contradiction
                 && $0.candidateKind != "unresolved_concept"
         }
-        guard let strongest = semanticEvidence.max(by: { $0.confidence < $1.confidence }) else {
+        let preferredPersistenceEvidence = semanticEvidence.filter { $0.scope != .publicReference }
+        let persistenceEvidence = preferredPersistenceEvidence.isEmpty
+            ? semanticEvidence
+            : preferredPersistenceEvidence
+        guard let strongest = persistenceEvidence.max(by: { $0.confidence < $1.confidence }) else {
             return nil
         }
 
@@ -5729,7 +5733,7 @@ final class BarnOwlAppModel: ObservableObject {
         if state.status == .failed, !transcriptReady, !notesReady, !summaryReady {
             return .blocked
         }
-        if state.status == .completed, transcriptReady, notesReady, summaryReady {
+        if state.status != .failed, transcriptReady, notesReady, summaryReady {
             return .ready
         }
         if transcriptReady, summaryReady {
@@ -8242,7 +8246,7 @@ final class BarnOwlAppModel: ObservableObject {
             type: type,
             meetingID: meetingID,
             meetingStableKey: evidence.meeting.stableKey,
-            occurredAt: Date(),
+            occurredAt: max(Date(), state.updatedAt),
             schemaVersion: evidence.schemaVersion,
             envelopeJSON: evidenceJSON
         ))

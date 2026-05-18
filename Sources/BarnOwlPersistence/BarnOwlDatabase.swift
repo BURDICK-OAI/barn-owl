@@ -308,6 +308,43 @@ public actor BarnOwlDatabase {
                 metadataJSON: #"{"source":"meeting-state"}"#
             ))
         }
+        if !state.actionItems.isEmpty {
+            try replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+                meetingID: state.id,
+                kind: "actions",
+                content: state.actionItems.joined(separator: "\n"),
+                contentType: "text/plain",
+                updatedAt: state.updatedAt,
+                metadataJSON: #"{"source":"meeting-state"}"#
+            ))
+        } else {
+            try deleteMeetingOutput(meetingID: state.id, kind: "actions")
+            try deleteMeetingOutput(meetingID: state.id, kind: "action_items")
+        }
+        if !state.decisions.isEmpty {
+            try replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+                meetingID: state.id,
+                kind: "decisions",
+                content: state.decisions.joined(separator: "\n"),
+                contentType: "text/plain",
+                updatedAt: state.updatedAt,
+                metadataJSON: #"{"source":"meeting-state"}"#
+            ))
+        } else {
+            try deleteMeetingOutput(meetingID: state.id, kind: "decisions")
+        }
+        if !state.openQuestions.isEmpty {
+            try replaceMeetingOutput(BarnOwlMeetingOutputRecord(
+                meetingID: state.id,
+                kind: "open_questions",
+                content: state.openQuestions.joined(separator: "\n"),
+                contentType: "text/plain",
+                updatedAt: state.updatedAt,
+                metadataJSON: #"{"source":"meeting-state"}"#
+            ))
+        } else {
+            try deleteMeetingOutput(meetingID: state.id, kind: "open_questions")
+        }
         if !state.realtimePreview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try replaceMeetingOutput(BarnOwlMeetingOutputRecord(
                 meetingID: state.id,
@@ -3484,7 +3521,13 @@ private extension BarnOwlDatabase {
                     .split(whereSeparator: \.isNewline)
                     .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
                     .map { line in
-                        line.trimmingCharacters(in: CharacterSet(charactersIn: "-*•0123456789. )"))
+                        line
+                            .replacingOccurrences(
+                                of: #"^\s*(?:[-*•]\s+|\d+[.)]\s+)"#,
+                                with: "",
+                                options: .regularExpression
+                            )
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
                     }
                     .filter { !$0.isEmpty }
             }

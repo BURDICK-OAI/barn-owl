@@ -681,17 +681,27 @@ public struct BarnOwlEnrichmentOrchestrator: Sendable {
         }
 
         let explicitContradiction = evidence.contains { $0.contradiction || $0.negativeEvidence }
-        let semanticCandidates = Set(
-            evidence
-                .filter { !$0.negativeEvidence && $0.candidateKind != "unresolved_concept" }
-                .map { "\($0.candidateKind.lowercased())|\($0.canonicalName.lowercased())" }
-        )
-        let hasSemanticConflict = explicitContradiction || semanticCandidates.count > 1
         let semanticEvidence = evidence.filter {
             !$0.negativeEvidence
                 && !$0.contradiction
                 && $0.candidateKind != "unresolved_concept"
         }
+        let semanticCandidateKey: (BarnOwlEnrichmentEvidenceRecord) -> String = {
+            "\($0.candidateKind.lowercased())|\($0.canonicalName.lowercased())"
+        }
+        let nonPublicSemanticCandidates = Set(
+            semanticEvidence
+                .filter { $0.scope != .publicReference }
+                .map(semanticCandidateKey)
+        )
+        let publicSemanticCandidates = Set(
+            semanticEvidence
+                .filter { $0.scope == .publicReference }
+                .map(semanticCandidateKey)
+        )
+        let hasSemanticConflict = explicitContradiction
+            || nonPublicSemanticCandidates.count > 1
+            || (nonPublicSemanticCandidates.isEmpty && publicSemanticCandidates.count > 1)
         let hasNonPublicSupport = evidence.contains {
             !$0.negativeEvidence
                 && !$0.contradiction
