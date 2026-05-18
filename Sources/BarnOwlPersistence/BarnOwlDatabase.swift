@@ -20,11 +20,12 @@ public enum BarnOwlDatabaseError: Error, Equatable, Sendable {
     case prepareFailed(sql: String, message: String)
     case bindFailed(sql: String, index: Int32, message: String)
     case stepFailed(sql: String, message: String)
+    case decodeFailed(String)
     case invalidUUID(String)
 }
 
 public actor BarnOwlDatabase {
-    public static let latestSchemaVersion = 13
+    public static let latestSchemaVersion = 14
 
     private let url: URL
     private let database: SQLiteDatabaseHandle
@@ -134,9 +135,108 @@ public actor BarnOwlDatabase {
         }
     }
 
+    public func recordMeetingExportEvent(_ event: BarnOwlMeetingExportEventRecord) throws {
+        try withStatement(
+            """
+            INSERT INTO meeting_export_events (
+                id, event_type, meeting_id, meeting_stable_key, occurred_at,
+                schema_version, envelope_json, tombstone_reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        ) { statement, sql in
+            try bind(event.id, at: 1, in: statement, sql: sql)
+            try bind(event.type.rawValue, at: 2, in: statement, sql: sql)
+            try bind(event.meetingID, at: 3, in: statement, sql: sql)
+            try bind(event.meetingStableKey, at: 4, in: statement, sql: sql)
+            try bind(event.occurredAt, at: 5, in: statement, sql: sql)
+            try bind(event.schemaVersion, at: 6, in: statement, sql: sql)
+            try bind(event.envelopeJSON, at: 7, in: statement, sql: sql)
+            try bind(event.tombstoneReason, at: 8, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
+    public func meetingExportEvents(
+        since lowerBound: Date,
+        limit: Int = 50
+    ) throws -> [BarnOwlMeetingExportEventRecord] {
+        try withStatement(
+            """
+            SELECT * FROM meeting_export_events
+            WHERE occurred_at >= ?
+            ORDER BY occurred_at ASC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(lowerBound, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readMeetingExportEvent)
+        }
+    }
+
+    public func meetingExportEvents(
+        after lowerBound: Date,
+        eventID: UUID,
+        limit: Int = 50
+    ) throws -> [BarnOwlMeetingExportEventRecord] {
+        try withStatement(
+            """
+            SELECT * FROM meeting_export_events
+            WHERE occurred_at > ?
+               OR (occurred_at = ? AND id > ?)
+            ORDER BY occurred_at ASC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(lowerBound, at: 1, in: statement, sql: sql)
+            try bind(lowerBound, at: 2, in: statement, sql: sql)
+            try bind(eventID, at: 3, in: statement, sql: sql)
+            try bind(max(0, limit), at: 4, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readMeetingExportEvent)
+        }
+    }
+
     public func meetings(limit: Int = 50) throws -> [BarnOwlMeetingRecord] {
         try withStatement("SELECT * FROM meetings ORDER BY COALESCE(started_at, created_at) DESC, id ASC LIMIT ?") { statement, sql in
             try bind(max(0, limit), at: 1, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readMeeting)
+        }
+    }
+
+    public func meetingsUpdated(since lowerBound: Date, limit: Int = 50) throws -> [BarnOwlMeetingRecord] {
+        try withStatement(
+            """
+            SELECT * FROM meetings
+            WHERE updated_at >= ?
+            ORDER BY updated_at ASC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(lowerBound, at: 1, in: statement, sql: sql)
+            try bind(max(0, limit), at: 2, in: statement, sql: sql)
+            return try readRows(statement, sql: sql, readMeeting)
+        }
+    }
+
+    public func meetingsUpdated(
+        after lowerBound: Date,
+        meetingID: UUID,
+        limit: Int = 50
+    ) throws -> [BarnOwlMeetingRecord] {
+        try withStatement(
+            """
+            SELECT * FROM meetings
+            WHERE updated_at > ?
+               OR (updated_at = ? AND id > ?)
+            ORDER BY updated_at ASC, id ASC
+            LIMIT ?
+            """
+        ) { statement, sql in
+            try bind(lowerBound, at: 1, in: statement, sql: sql)
+            try bind(lowerBound, at: 2, in: statement, sql: sql)
+            try bind(meetingID, at: 3, in: statement, sql: sql)
+            try bind(max(0, limit), at: 4, in: statement, sql: sql)
             return try readRows(statement, sql: sql, readMeeting)
         }
     }
@@ -150,6 +250,20 @@ public actor BarnOwlDatabase {
 
     public func meetingStates(limit: Int = 50) throws -> [BarnOwlMeetingState] {
         try meetings(limit: limit).map { try meetingState(from: $0) }
+    }
+
+    public func meetingStatesUpdated(since lowerBound: Date, limit: Int = 50) throws -> [BarnOwlMeetingState] {
+        try meetingsUpdated(since: lowerBound, limit: limit).map { try meetingState(from: $0) }
+    }
+
+    public func meetingStatesUpdated(
+        after lowerBound: Date,
+        meetingID: UUID,
+        limit: Int = 50
+    ) throws -> [BarnOwlMeetingState] {
+        try meetingsUpdated(after: lowerBound, meetingID: meetingID, limit: limit).map {
+            try meetingState(from: $0)
+        }
     }
 
     public func upsertMeetingState(_ state: BarnOwlMeetingState) throws {
@@ -1783,6 +1897,19 @@ public actor BarnOwlDatabase {
         }
     }
 
+    public func deleteKnowledgeAliases(entityID: UUID, ownerID: String) throws {
+        try withStatement(
+            """
+            DELETE FROM knowledge_aliases
+            WHERE entity_id = ? AND owner_id = ?
+            """
+        ) { statement, sql in
+            try bind(entityID, at: 1, in: statement, sql: sql)
+            try bind(ownerID, at: 2, in: statement, sql: sql)
+            try stepDone(statement, sql: sql)
+        }
+    }
+
     public func upsertKnowledgeMeetingLink(_ link: BarnOwlKnowledgeMeetingLinkRecord) throws {
         try withStatement(
             """
@@ -2307,6 +2434,17 @@ private extension BarnOwlDatabase {
             try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
             do {
                 try execute(schemaV13SQL, database: database)
+                try execute("PRAGMA user_version = 13", database: database)
+                try execute("COMMIT", database: database)
+            } catch {
+                try? execute("ROLLBACK", database: database)
+                throw error
+            }
+        }
+        if version < 14 {
+            try execute("BEGIN IMMEDIATE TRANSACTION", database: database)
+            do {
+                try execute(schemaV14SQL, database: database)
                 try execute("PRAGMA user_version = \(latestSchemaVersion)", database: database)
                 try execute("COMMIT", database: database)
             } catch {
@@ -2433,6 +2571,12 @@ private extension BarnOwlDatabase {
         if version < 13 {
             try transaction {
                 try execute(Self.schemaV13SQL)
+                try execute("PRAGMA user_version = 13")
+            }
+        }
+        if version < 14 {
+            try transaction {
+                try execute(Self.schemaV14SQL)
                 try execute("PRAGMA user_version = \(Self.latestSchemaVersion)")
             }
         }
@@ -2610,6 +2754,23 @@ private extension BarnOwlDatabase {
             createdAt: columnRequiredDate(statement, 5),
             updatedAt: columnRequiredDate(statement, 6),
             metadataJSON: columnString(statement, 7)
+        )
+    }
+
+    func readMeetingExportEvent(_ statement: OpaquePointer) throws -> BarnOwlMeetingExportEventRecord {
+        let typeValue = columnRequiredString(statement, 1)
+        guard let type = BarnOwlMeetingExportEventType(rawValue: typeValue) else {
+            throw BarnOwlDatabaseError.decodeFailed("Unknown meeting export event type: \(typeValue)")
+        }
+        return BarnOwlMeetingExportEventRecord(
+            id: try columnRequiredUUID(statement, 0),
+            type: type,
+            meetingID: try columnRequiredUUID(statement, 2),
+            meetingStableKey: columnRequiredString(statement, 3),
+            occurredAt: columnRequiredDate(statement, 4),
+            schemaVersion: columnRequiredString(statement, 5),
+            envelopeJSON: columnString(statement, 6),
+            tombstoneReason: columnString(statement, 7)
         )
     }
 
@@ -3602,5 +3763,21 @@ private extension BarnOwlDatabase {
 
     CREATE INDEX IF NOT EXISTS idx_knowledge_entities_lifecycle
         ON knowledge_entities(owner_id, lifecycle_status, updated_at);
+    """
+
+    static let schemaV14SQL = """
+    CREATE TABLE IF NOT EXISTS meeting_export_events (
+        id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        meeting_id TEXT NOT NULL,
+        meeting_stable_key TEXT NOT NULL,
+        occurred_at REAL NOT NULL,
+        schema_version TEXT NOT NULL,
+        envelope_json TEXT,
+        tombstone_reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_meeting_export_events_cursor
+        ON meeting_export_events(occurred_at, id);
     """
 }

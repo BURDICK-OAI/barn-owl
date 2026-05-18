@@ -475,32 +475,40 @@ struct MenuBarView: View {
     private var audioSourcePicker: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                audioSourceOption(
-                    title: "Mic Only",
+                audioSourceToggle(
+                    title: "Microphone",
                     systemImage: "mic",
-                    isSelected: !model.selectedAudioSources.capturesSystemAudio,
-                    capturesSystemAudio: false
+                    isEnabled: model.selectedAudioSources.capturesMicrophone,
+                    toggle: {
+                        model.setMicrophoneCaptureEnabled(!model.selectedAudioSources.capturesMicrophone)
+                    }
                 )
-                audioSourceOption(
-                    title: "Mic + System",
+                audioSourceToggle(
+                    title: "System Audio",
                     systemImage: "speaker.wave.2",
-                    isSelected: model.selectedAudioSources.capturesSystemAudio,
-                    capturesSystemAudio: true
+                    isEnabled: model.selectedAudioSources.capturesSystemAudio,
+                    toggle: {
+                        model.setSystemAudioCaptureEnabled(!model.selectedAudioSources.capturesSystemAudio)
+                    }
                 )
             }
 
             HStack(spacing: 6) {
-                audioSourceOption(
+                audioSourceToggle(
                     title: "Mic",
                     systemImage: "mic",
-                    isSelected: !model.selectedAudioSources.capturesSystemAudio,
-                    capturesSystemAudio: false
+                    isEnabled: model.selectedAudioSources.capturesMicrophone,
+                    toggle: {
+                        model.setMicrophoneCaptureEnabled(!model.selectedAudioSources.capturesMicrophone)
+                    }
                 )
-                audioSourceOption(
+                audioSourceToggle(
                     title: "System",
                     systemImage: "speaker.wave.2",
-                    isSelected: model.selectedAudioSources.capturesSystemAudio,
-                    capturesSystemAudio: true
+                    isEnabled: model.selectedAudioSources.capturesSystemAudio,
+                    toggle: {
+                        model.setSystemAudioCaptureEnabled(!model.selectedAudioSources.capturesSystemAudio)
+                    }
                 )
             }
         }
@@ -508,17 +516,17 @@ struct MenuBarView: View {
         .background(.black.opacity(0.20), in: Capsule())
         .overlay { Capsule().stroke(.white.opacity(0.08)) }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Audio source")
+        .accessibilityLabel("Audio sources")
     }
 
-    private func audioSourceOption(
+    private func audioSourceToggle(
         title: String,
         systemImage: String,
-        isSelected: Bool,
-        capturesSystemAudio: Bool
+        isEnabled: Bool,
+        toggle: @escaping () -> Void
     ) -> some View {
         Button {
-            model.setSystemAudioCaptureEnabled(capturesSystemAudio)
+            toggle()
         } label: {
             Label(title, systemImage: systemImage)
                 .font(.caption.weight(.semibold))
@@ -526,21 +534,21 @@ struct MenuBarView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .padding(.horizontal, 8)
-                .foregroundStyle(isSelected ? .black.opacity(0.82) : .white.opacity(0.68))
+                .foregroundStyle(isEnabled ? .black.opacity(0.82) : .white.opacity(0.68))
                 .background(
-                    isSelected
+                    isEnabled
                         ? BarnOwlDesign.amber.opacity(model.status == .recording ? 0.40 : 0.95)
                         : .black.opacity(0.20),
                     in: Capsule()
                 )
                 .overlay {
                     Capsule()
-                        .stroke(isSelected ? BarnOwlDesign.amberLight.opacity(0.34) : .white.opacity(0.07))
+                        .stroke(isEnabled ? BarnOwlDesign.amberLight.opacity(0.34) : .white.opacity(0.07))
                 }
         }
         .buttonStyle(.plain)
         .disabled(model.status == .recording)
-        .help(model.status == .recording ? "Audio source can be changed before the next recording." : "Use \(title.lowercased()) for the next recording.")
+        .help(model.status == .recording ? "Audio sources can be changed before the next recording." : "Toggle \(title.lowercased()) for the next recording.")
     }
 
     private var openAppButton: some View {

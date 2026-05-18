@@ -1,5 +1,6 @@
 import BarnOwlAudio
 import BarnOwlOpenAI
+import BarnOwlPersistence
 import Foundation
 
 enum BarnOwlErrorFormatter {
@@ -25,6 +26,8 @@ enum BarnOwlErrorFormatter {
             return "OpenAI summary response did not include output text."
         case OpenAIResponsesClientError.refused:
             return "OpenAI refused to generate notes for this meeting."
+        case is BarnOwlDatabaseError:
+            return "Barn Owl could not read or update its local database. Restart the app and try again. If it persists, export Developer Diagnostics."
         default:
             if let localizedError = error as? LocalizedError,
                let description = localizedError.errorDescription,

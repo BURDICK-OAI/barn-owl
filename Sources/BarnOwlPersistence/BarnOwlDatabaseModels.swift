@@ -401,6 +401,46 @@ public struct BarnOwlMeetingRecord: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum BarnOwlMeetingExportEventType: String, Codable, CaseIterable, Equatable, Sendable {
+    case created = "meeting.created"
+    case processingCompleted = "meeting.processing_completed"
+    case summaryRepaired = "meeting.summary_repaired"
+    case updated = "meeting.updated"
+    case deleted = "meeting.deleted"
+    case purged = "meeting.purged"
+}
+
+public struct BarnOwlMeetingExportEventRecord: Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var type: BarnOwlMeetingExportEventType
+    public var meetingID: UUID
+    public var meetingStableKey: String
+    public var occurredAt: Date
+    public var schemaVersion: String
+    public var envelopeJSON: String?
+    public var tombstoneReason: String?
+
+    public init(
+        id: UUID = UUID(),
+        type: BarnOwlMeetingExportEventType,
+        meetingID: UUID,
+        meetingStableKey: String,
+        occurredAt: Date = Date(),
+        schemaVersion: String = "1.0",
+        envelopeJSON: String? = nil,
+        tombstoneReason: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.meetingID = meetingID
+        self.meetingStableKey = meetingStableKey
+        self.occurredAt = occurredAt
+        self.schemaVersion = schemaVersion
+        self.envelopeJSON = envelopeJSON
+        self.tombstoneReason = tombstoneReason
+    }
+}
+
 public enum BarnOwlRecordingSessionStatus: String, Codable, Equatable, Sendable {
     case pending
     case recording

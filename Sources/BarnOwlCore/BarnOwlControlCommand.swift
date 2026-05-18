@@ -18,12 +18,15 @@ public enum BarnOwlControlCommandName: String, Codable, CaseIterable, Sendable {
     case current = "current"
     case meetingsRecent = "meetings_recent"
     case meetingsSearch = "meetings_search"
+    case meetingsEvidence = "meetings_evidence"
+    case meetingExportEvents = "meeting_export_events"
     case meetingGet = "meeting_get"
     case meetingTranscript = "meeting_transcript"
     case meetingNotes = "meeting_notes"
     case meetingSummary = "meeting_summary"
     case meetingContext = "meeting_context"
     case meetingActions = "meeting_actions"
+    case meetingEvidence = "meeting_evidence"
     case meetingDelete = "meeting_delete"
     case meetingPurgeTempAudio = "meeting_purge_temp_audio"
     case wait
@@ -70,6 +73,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
     public var query: String?
     public var limit: Int?
     public var format: String?
+    public var since: String?
+    public var cursor: String?
+    public var exportPolicy: String?
+    public var includeTranscriptSegments: Bool?
     public var humanReadable: Bool?
     public var until: String?
     public var latest: Bool?
@@ -118,6 +125,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         query: String? = nil,
         limit: Int? = nil,
         format: String? = nil,
+        since: String? = nil,
+        cursor: String? = nil,
+        exportPolicy: String? = nil,
+        includeTranscriptSegments: Bool? = nil,
         humanReadable: Bool? = nil,
         until: String? = nil,
         latest: Bool? = nil,
@@ -165,6 +176,10 @@ public struct BarnOwlControlCommand: Codable, Equatable, Sendable {
         self.query = query
         self.limit = limit
         self.format = format
+        self.since = since
+        self.cursor = cursor
+        self.exportPolicy = exportPolicy
+        self.includeTranscriptSegments = includeTranscriptSegments
         self.humanReadable = humanReadable
         self.until = until
         self.latest = latest
@@ -1222,6 +1237,421 @@ public struct BarnOwlControlCitation: Codable, Equatable, Sendable {
     }
 }
 
+public enum BarnOwlMeetingEvidenceContentPolicy: String, Codable, CaseIterable, Equatable, Sendable {
+    case metadataOnly = "metadata_only"
+    case summaryTranscriptAndPointers = "summary_transcript_and_pointers"
+    case structuredOutputsTranscriptAndPointers = "structured_outputs_transcript_and_pointers"
+    case fullTextAllowed = "full_text_allowed"
+
+    public var allowsSummaryText: Bool {
+        self != .metadataOnly
+    }
+
+    public var allowsTranscriptText: Bool {
+        self != .metadataOnly
+    }
+
+    public var allowsStructuredOutputs: Bool {
+        switch self {
+        case .structuredOutputsTranscriptAndPointers, .fullTextAllowed:
+            true
+        case .metadataOnly, .summaryTranscriptAndPointers:
+            false
+        }
+    }
+}
+
+public enum BarnOwlMeetingEvidenceIngestReadiness: String, Codable, CaseIterable, Equatable, Sendable {
+    case notReady = "not_ready"
+    case ready
+    case readyWithCaveat = "ready_with_caveat"
+    case requiresRepair = "requires_repair"
+    case blocked
+}
+
+public struct BarnOwlMeetingEvidenceSource: Codable, Equatable, Sendable {
+    public var producer: String
+    public var producerVersion: String
+    public var tenantScope: String
+
+    public init(producer: String, producerVersion: String, tenantScope: String) {
+        self.producer = producer
+        self.producerVersion = producerVersion
+        self.tenantScope = tenantScope
+    }
+}
+
+public struct BarnOwlMeetingEvidenceMeeting: Codable, Equatable, Sendable {
+    public var id: UUID
+    public var stableKey: String
+    public var externalID: String?
+    public var title: String
+    public var meetingType: String?
+    public var startedAt: Date?
+    public var endedAt: Date?
+    public var updatedAt: Date
+
+    public init(
+        id: UUID,
+        stableKey: String,
+        externalID: String? = nil,
+        title: String,
+        meetingType: String? = nil,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.stableKey = stableKey
+        self.externalID = externalID
+        self.title = title
+        self.meetingType = meetingType
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BarnOwlMeetingEvidenceParticipant: Codable, Equatable, Sendable {
+    public var displayName: String
+    public var roleHint: String?
+    public var speakerLabel: String?
+
+    public init(displayName: String, roleHint: String? = nil, speakerLabel: String? = nil) {
+        self.displayName = displayName
+        self.roleHint = roleHint
+        self.speakerLabel = speakerLabel
+    }
+}
+
+public struct BarnOwlMeetingEvidenceArtifact: Codable, Equatable, Sendable {
+    public var pointer: String
+    public var ready: Bool
+    public var text: String?
+
+    public init(pointer: String, ready: Bool, text: String? = nil) {
+        self.pointer = pointer
+        self.ready = ready
+        self.text = text
+    }
+}
+
+public struct BarnOwlMeetingEvidenceArtifacts: Codable, Equatable, Sendable {
+    public var transcript: BarnOwlMeetingEvidenceArtifact
+    public var notes: BarnOwlMeetingEvidenceArtifact
+    public var summary: BarnOwlMeetingEvidenceArtifact
+    public var actions: BarnOwlMeetingEvidenceArtifact
+
+    public init(
+        transcript: BarnOwlMeetingEvidenceArtifact,
+        notes: BarnOwlMeetingEvidenceArtifact,
+        summary: BarnOwlMeetingEvidenceArtifact,
+        actions: BarnOwlMeetingEvidenceArtifact
+    ) {
+        self.transcript = transcript
+        self.notes = notes
+        self.summary = summary
+        self.actions = actions
+    }
+}
+
+public struct BarnOwlMeetingEvidenceSummary: Codable, Equatable, Sendable {
+    public var overview: String
+
+    public init(overview: String) {
+        self.overview = overview
+    }
+}
+
+public struct BarnOwlMeetingEvidenceMeetingFacts: Codable, Equatable, Sendable {
+    public var title: String?
+    public var meetingType: String?
+    public var participants: [String]
+    public var customers: [String]
+    public var organizations: [String]
+    public var projects: [String]
+    public var goals: [String]
+    public var extensions: [String: String]
+
+    public init(
+        title: String? = nil,
+        meetingType: String? = nil,
+        participants: [String] = [],
+        customers: [String] = [],
+        organizations: [String] = [],
+        projects: [String] = [],
+        goals: [String] = [],
+        extensions: [String: String] = [:]
+    ) {
+        self.title = title
+        self.meetingType = meetingType
+        self.participants = participants
+        self.customers = customers
+        self.organizations = organizations
+        self.projects = projects
+        self.goals = goals
+        self.extensions = extensions
+    }
+}
+
+public struct BarnOwlMeetingEvidenceDerived: Codable, Equatable, Sendable {
+    public var summary: BarnOwlMeetingEvidenceSummary?
+    public var decisions: [String]
+    public var actionItems: [String]
+    public var openQuestions: [String]
+    public var meetingFacts: BarnOwlMeetingEvidenceMeetingFacts?
+
+    public init(
+        summary: BarnOwlMeetingEvidenceSummary? = nil,
+        decisions: [String] = [],
+        actionItems: [String] = [],
+        openQuestions: [String] = [],
+        meetingFacts: BarnOwlMeetingEvidenceMeetingFacts? = nil
+    ) {
+        self.summary = summary
+        self.decisions = decisions
+        self.actionItems = actionItems
+        self.openQuestions = openQuestions
+        self.meetingFacts = meetingFacts
+    }
+}
+
+public struct BarnOwlMeetingEvidenceTranscriptSegment: Codable, Equatable, Sendable {
+    public var sequence: Int
+    public var speakerLabel: String?
+    public var text: String
+    public var startTime: TimeInterval
+    public var endTime: TimeInterval
+    public var confidence: Double?
+
+    public init(
+        sequence: Int,
+        speakerLabel: String? = nil,
+        text: String,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        confidence: Double? = nil
+    ) {
+        self.sequence = sequence
+        self.speakerLabel = speakerLabel
+        self.text = text
+        self.startTime = startTime
+        self.endTime = endTime
+        self.confidence = confidence
+    }
+}
+
+public struct BarnOwlMeetingEvidenceProcessing: Codable, Equatable, Sendable {
+    public var state: String
+    public var ingestReadiness: BarnOwlMeetingEvidenceIngestReadiness
+    public var transcriptReady: Bool
+    public var notesReady: Bool
+    public var summaryReady: Bool
+    public var usedFallbackSummary: Bool
+    public var repairRecommended: Bool
+    public var lastSuccessfulProcessingAt: Date?
+
+    public init(
+        state: String,
+        ingestReadiness: BarnOwlMeetingEvidenceIngestReadiness,
+        transcriptReady: Bool,
+        notesReady: Bool,
+        summaryReady: Bool,
+        usedFallbackSummary: Bool,
+        repairRecommended: Bool,
+        lastSuccessfulProcessingAt: Date? = nil
+    ) {
+        self.state = state
+        self.ingestReadiness = ingestReadiness
+        self.transcriptReady = transcriptReady
+        self.notesReady = notesReady
+        self.summaryReady = summaryReady
+        self.usedFallbackSummary = usedFallbackSummary
+        self.repairRecommended = repairRecommended
+        self.lastSuccessfulProcessingAt = lastSuccessfulProcessingAt
+    }
+}
+
+public struct BarnOwlMeetingEvidenceProvenance: Codable, Equatable, Sendable {
+    public var sourceOfTruth: String
+    public var contentPolicy: BarnOwlMeetingEvidenceContentPolicy
+    public var generatedAt: Date
+
+    public init(
+        sourceOfTruth: String,
+        contentPolicy: BarnOwlMeetingEvidenceContentPolicy,
+        generatedAt: Date
+    ) {
+        self.sourceOfTruth = sourceOfTruth
+        self.contentPolicy = contentPolicy
+        self.generatedAt = generatedAt
+    }
+}
+
+public struct BarnOwlMeetingEvidenceEnvelope: Codable, Equatable, Sendable {
+    public var schemaVersion: String
+    public var evidenceType: String
+    public var source: BarnOwlMeetingEvidenceSource
+    public var meeting: BarnOwlMeetingEvidenceMeeting
+    public var participants: [BarnOwlMeetingEvidenceParticipant]
+    public var artifacts: BarnOwlMeetingEvidenceArtifacts
+    public var derived: BarnOwlMeetingEvidenceDerived
+    public var transcriptSegments: [BarnOwlMeetingEvidenceTranscriptSegment]?
+    public var processing: BarnOwlMeetingEvidenceProcessing
+    public var provenance: BarnOwlMeetingEvidenceProvenance
+
+    public init(
+        schemaVersion: String = "1.0",
+        evidenceType: String = "barnowl.meeting",
+        source: BarnOwlMeetingEvidenceSource,
+        meeting: BarnOwlMeetingEvidenceMeeting,
+        participants: [BarnOwlMeetingEvidenceParticipant],
+        artifacts: BarnOwlMeetingEvidenceArtifacts,
+        derived: BarnOwlMeetingEvidenceDerived,
+        transcriptSegments: [BarnOwlMeetingEvidenceTranscriptSegment]? = nil,
+        processing: BarnOwlMeetingEvidenceProcessing,
+        provenance: BarnOwlMeetingEvidenceProvenance
+    ) {
+        self.schemaVersion = schemaVersion
+        self.evidenceType = evidenceType
+        self.source = source
+        self.meeting = meeting
+        self.participants = participants
+        self.artifacts = artifacts
+        self.derived = derived
+        self.transcriptSegments = transcriptSegments
+        self.processing = processing
+        self.provenance = provenance
+    }
+}
+
+public enum BarnOwlMeetingEvidenceSyncMode: String, Codable, Equatable, Sendable {
+    case timestamp
+    case cursor
+}
+
+public struct BarnOwlMeetingEvidenceSyncPage: Codable, Equatable, Sendable {
+    public var mode: BarnOwlMeetingEvidenceSyncMode
+    public var requestedSince: Date?
+    public var requestedCursor: String?
+    public var nextSince: Date?
+    public var nextCursor: String?
+    public var limit: Int
+    public var returnedCount: Int
+    public var hasMore: Bool
+
+    public init(
+        mode: BarnOwlMeetingEvidenceSyncMode,
+        requestedSince: Date? = nil,
+        requestedCursor: String? = nil,
+        nextSince: Date? = nil,
+        nextCursor: String? = nil,
+        limit: Int,
+        returnedCount: Int,
+        hasMore: Bool
+    ) {
+        self.mode = mode
+        self.requestedSince = requestedSince
+        self.requestedCursor = requestedCursor
+        self.nextSince = nextSince
+        self.nextCursor = nextCursor
+        self.limit = limit
+        self.returnedCount = returnedCount
+        self.hasMore = hasMore
+    }
+}
+
+public struct BarnOwlMeetingEvidenceBatch: Codable, Equatable, Sendable {
+    public var items: [BarnOwlMeetingEvidenceEnvelope]
+    public var sync: BarnOwlMeetingEvidenceSyncPage
+
+    public init(items: [BarnOwlMeetingEvidenceEnvelope], sync: BarnOwlMeetingEvidenceSyncPage) {
+        self.items = items
+        self.sync = sync
+    }
+}
+
+public enum BarnOwlMeetingExportEventKind: String, Codable, CaseIterable, Equatable, Sendable {
+    case created = "meeting.created"
+    case processingCompleted = "meeting.processing_completed"
+    case summaryRepaired = "meeting.summary_repaired"
+    case updated = "meeting.updated"
+    case deleted = "meeting.deleted"
+    case purged = "meeting.purged"
+}
+
+public struct BarnOwlMeetingExportEvent: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var type: BarnOwlMeetingExportEventKind
+    public var meetingID: UUID
+    public var meetingStableKey: String
+    public var occurredAt: Date
+    public var schemaVersion: String
+    public var meetingEvidence: BarnOwlMeetingEvidenceEnvelope?
+    public var tombstoneReason: String?
+
+    public init(
+        id: UUID,
+        type: BarnOwlMeetingExportEventKind,
+        meetingID: UUID,
+        meetingStableKey: String,
+        occurredAt: Date,
+        schemaVersion: String,
+        meetingEvidence: BarnOwlMeetingEvidenceEnvelope? = nil,
+        tombstoneReason: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.meetingID = meetingID
+        self.meetingStableKey = meetingStableKey
+        self.occurredAt = occurredAt
+        self.schemaVersion = schemaVersion
+        self.meetingEvidence = meetingEvidence
+        self.tombstoneReason = tombstoneReason
+    }
+}
+
+public struct BarnOwlMeetingExportEventSyncPage: Codable, Equatable, Sendable {
+    public var mode: BarnOwlMeetingEvidenceSyncMode
+    public var requestedSince: Date?
+    public var requestedCursor: String?
+    public var nextSince: Date?
+    public var nextCursor: String?
+    public var limit: Int
+    public var returnedCount: Int
+    public var hasMore: Bool
+
+    public init(
+        mode: BarnOwlMeetingEvidenceSyncMode,
+        requestedSince: Date? = nil,
+        requestedCursor: String? = nil,
+        nextSince: Date? = nil,
+        nextCursor: String? = nil,
+        limit: Int,
+        returnedCount: Int,
+        hasMore: Bool
+    ) {
+        self.mode = mode
+        self.requestedSince = requestedSince
+        self.requestedCursor = requestedCursor
+        self.nextSince = nextSince
+        self.nextCursor = nextCursor
+        self.limit = limit
+        self.returnedCount = returnedCount
+        self.hasMore = hasMore
+    }
+}
+
+public struct BarnOwlMeetingExportEventBatch: Codable, Equatable, Sendable {
+    public var items: [BarnOwlMeetingExportEvent]
+    public var sync: BarnOwlMeetingExportEventSyncPage
+
+    public init(items: [BarnOwlMeetingExportEvent], sync: BarnOwlMeetingExportEventSyncPage) {
+        self.items = items
+        self.sync = sync
+    }
+}
+
 public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var ok: Bool
     public var message: String
@@ -1252,6 +1682,9 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var enrichmentConflicts: [BarnOwlControlEnrichmentConflict]?
     public var enrichmentConceptHistories: [BarnOwlControlEnrichmentConceptHistory]?
     public var knowledgeEntities: [BarnOwlControlKnowledgeEntity]?
+    public var meetingEvidence: BarnOwlMeetingEvidenceEnvelope?
+    public var meetingEvidenceBatch: BarnOwlMeetingEvidenceBatch?
+    public var meetingExportEventBatch: BarnOwlMeetingExportEventBatch?
     public var transcript: String?
     public var notes: String?
     public var summary: String?
@@ -1310,6 +1743,9 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         enrichmentConflicts: [BarnOwlControlEnrichmentConflict]? = nil,
         enrichmentConceptHistories: [BarnOwlControlEnrichmentConceptHistory]? = nil,
         knowledgeEntities: [BarnOwlControlKnowledgeEntity]? = nil,
+        meetingEvidence: BarnOwlMeetingEvidenceEnvelope? = nil,
+        meetingEvidenceBatch: BarnOwlMeetingEvidenceBatch? = nil,
+        meetingExportEventBatch: BarnOwlMeetingExportEventBatch? = nil,
         transcript: String? = nil,
         notes: String? = nil,
         summary: String? = nil,
@@ -1367,6 +1803,9 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.enrichmentConflicts = enrichmentConflicts
         self.enrichmentConceptHistories = enrichmentConceptHistories
         self.knowledgeEntities = knowledgeEntities
+        self.meetingEvidence = meetingEvidence
+        self.meetingEvidenceBatch = meetingEvidenceBatch
+        self.meetingExportEventBatch = meetingExportEventBatch
         self.transcript = transcript
         self.notes = notes
         self.summary = summary

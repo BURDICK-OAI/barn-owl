@@ -1,7 +1,7 @@
 {
   "version": "0.1.0",
-  "build": "21",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.21/BarnOwl.app.zip",
-  "sha256": "feecc63be77b1ce32403ea58af7e29eedb2394f8e3d17d4eb2c19fc84d39def2",
-  "notes": "Added the autonomous enrichment source registry with configurable adapters, presets, source health, and authority controls. Expanded Barn Owl settings, CLI commands, persistence, and downstream enrichment flows so teams can manage production knowledge sources directly. Hardened the internal release packager so nested frameworks are signed consistently and generated DerivedData folders stay out of source handoff archives."
+  "build": "22",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.22/BarnOwl.app.zip",
+  "sha256": "abd508794f663486ca5bd819ac40d9de9d2b8ddea0cae3a4a2cee436ec7822ed",
+  "notes": "Added Barn Owl's consumer-agnostic meeting evidence export layer with one-shot export, timestamp and cursor sync, durable export events, tombstones, and a reference downstream consumer. Continued the broader enrichment and settings production hardening included in this release."
 }

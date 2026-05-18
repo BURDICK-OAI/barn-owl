@@ -369,266 +369,6 @@ struct BarnOwlSystemCommandRunner: BarnOwlCommandRunning {
     }
 }
 
-struct BarnOwlCollinOSReferenceAdapter: BarnOwlEnrichmentSourceAdapter {
-    struct Configuration: Decodable {
-        var cliScriptPath: String?
-        var baseURL: String?
-        var authenticatedUser: String?
-        var audience: String?
-        var scope: String?
-        var allowUnauthenticated: Bool?
-
-        init(
-            cliScriptPath: String? = nil,
-            baseURL: String? = nil,
-            authenticatedUser: String? = nil,
-            audience: String? = nil,
-            scope: String? = nil,
-            allowUnauthenticated: Bool? = nil
-        ) {
-            self.cliScriptPath = cliScriptPath
-            self.baseURL = baseURL
-            self.authenticatedUser = authenticatedUser
-            self.audience = audience
-            self.scope = scope
-            self.allowUnauthenticated = allowUnauthenticated
-        }
-    }
-
-    let sourceID: String
-    let commandRunner: any BarnOwlCommandRunning
-    let defaultCLIScriptPath: String
-
-    init(
-        sourceID: String,
-        commandRunner: any BarnOwlCommandRunning = BarnOwlSystemCommandRunner(),
-        defaultCLIScriptPath: String = "/Users/burdick/Documents/Collin OS/automation-context/scripts/collin_os_cli.py"
-    ) {
-        self.sourceID = sourceID
-        self.commandRunner = commandRunner
-        self.defaultCLIScriptPath = defaultCLIScriptPath
-    }
-
-    func healthSnapshot(
-        for source: BarnOwlEnrichmentSourceDescriptor
-    ) async -> BarnOwlEnrichmentSourceHealthSnapshot {
-        let configuration = decodedConfiguration(from: source)
-        let scriptPath = configuration.cliScriptPath ?? defaultCLIScriptPath
-        let scriptExists = FileManager.default.fileExists(atPath: scriptPath)
-        return BarnOwlEnrichmentSourceHealthSnapshot(
-            status: scriptExists ? .ready : .partial,
-            authState: .configured,
-            detail: scriptExists
-                ? "\(source.displayName) can query Collin OS through the local CLI bridge."
-                : "\(source.displayName) is configured for Collin OS, but its CLI script was not found."
-        )
-    }
-
-    func enrich(
-        request: BarnOwlEnrichmentSourceRequest,
-        source: BarnOwlEnrichmentSourceDescriptor
-    ) async throws -> BarnOwlEnrichmentSourceResult {
-        let configuration = decodedConfiguration(from: source)
-        let scriptPath = configuration.cliScriptPath ?? defaultCLIScriptPath
-        guard FileManager.default.fileExists(atPath: scriptPath) else {
-            return BarnOwlEnrichmentSourceResult(
-                sourceID: source.id,
-                evidence: [],
-                caveats: ["\(source.id) could not find the configured Collin OS CLI script."]
-            )
-        }
-
-        var arguments = [
-            "python3",
-            scriptPath,
-            "recall",
-            request.conceptKey,
-            "--format",
-            "json",
-            "--scope",
-            configuration.scope ?? "all",
-            "--audience",
-            configuration.audience ?? "owner",
-            "--limit",
-            String(max(1, min(request.limit, 24)))
-        ]
-        if let baseURL = configuration.baseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !baseURL.isEmpty {
-            arguments.append(contentsOf: ["--base-url", baseURL])
-        }
-        if let authenticatedUser = configuration.authenticatedUser?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !authenticatedUser.isEmpty {
-            arguments.append(contentsOf: ["--authenticated-user", authenticatedUser])
-        }
-        if configuration.allowUnauthenticated == true {
-            arguments.append("--allow-unauthenticated")
-        }
-
-        let result = try await commandRunner.run(
-            executableURL: URL(fileURLWithPath: "/usr/bin/env"),
-            arguments: arguments,
-            environment: ProcessInfo.processInfo.environment
-        )
-        guard !result.standardOutput.isEmpty,
-              let packet = try JSONSerialization.jsonObject(with: result.standardOutput) as? [String: Any]
-        else {
-            let stderr = String(decoding: result.standardError, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return BarnOwlEnrichmentSourceResult(
-                sourceID: source.id,
-                evidence: [],
-                caveats: [
-                    stderr.isEmpty
-                        ? "\(source.id) returned no Collin OS recall payload."
-                        : "\(source.id) returned no readable Collin OS recall payload: \(stderr)"
-                ]
-            )
-        }
-
-        if String(describing: packet["status"] ?? "").lowercased() == "blocked" {
-            let blocker = packet["blocker"] as? String
-                ?? packet["recommended_next_step"] as? String
-                ?? "Collin OS recall was blocked."
-            return BarnOwlEnrichmentSourceResult(
-                sourceID: source.id,
-                evidence: [],
-                caveats: ["\(source.id) blocked: \(blocker)"]
-            )
-        }
-
-        let response = packet["response"] as? [String: Any] ?? packet
-        let answerPacket = response["answer_packet"] as? [String: Any] ?? [:]
-        let recallDigest = response["recall_digest"] as? [String: Any] ?? [:]
-        let trustSummary = response["trust_summary"] as? [String: Any] ?? [:]
-        let operatorDecision = response["operator_decision"] as? [String: Any] ?? [:]
-        let evidenceItems = answerPacket["evidence"] as? [[String: Any]] ?? []
-        let currentRead = recallDigest["current_read"] as? String
-        let fallbackSummary = currentRead
-            ?? trustSummary["summary"] as? String
-            ?? "Collin OS returned a scoped recall packet for \(request.conceptKey)."
-        let freshness = Self.freshness(from: recallDigest["source_health_state"] as? String)
-        let confidence = Self.confidence(
-            trustPosture: trustSummary["posture"] as? String,
-            downstreamReuseAllowed: operatorDecision["downstream_reuse_allowed"] as? Bool
-        )
-
-        var evidence = evidenceItems.prefix(max(1, request.limit)).map { item in
-            let evidenceKind = Self.candidateKind(from: item["kind"] as? String)
-            let title = (item["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let summary = (item["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let renderedSummary = [title, summary]
-                .compactMap { value in
-                    guard let value, !value.isEmpty else { return nil }
-                    return value
-                }
-                .joined(separator: ": ")
-            return BarnOwlEnrichmentEvidenceRecord(
-                subject: request.conceptKey,
-                candidateKind: evidenceKind,
-                canonicalName: evidenceKind == "unresolved_concept"
-                    ? request.conceptKey
-                    : title ?? request.conceptKey,
-                summary: renderedSummary.isEmpty ? fallbackSummary : renderedSummary,
-                confidence: confidence,
-                sourceID: source.id,
-                sourceDisplayName: source.displayName,
-                authorityProfile: source.authorityProfile,
-                freshness: freshness,
-                scope: source.scope,
-                citations: ["collin-os:recall:\(Self.normalized(request.conceptKey))"],
-                observedAt: request.requestedAt
-            )
-        }
-
-        if evidence.isEmpty {
-            evidence = [
-                BarnOwlEnrichmentEvidenceRecord(
-                    subject: request.conceptKey,
-                    candidateKind: "unresolved_concept",
-                    canonicalName: request.conceptKey,
-                    summary: fallbackSummary,
-                    confidence: confidence,
-                    sourceID: source.id,
-                    sourceDisplayName: source.displayName,
-                    authorityProfile: source.authorityProfile,
-                    freshness: freshness,
-                    scope: source.scope,
-                    citations: ["collin-os:recall:\(Self.normalized(request.conceptKey))"],
-                    observedAt: request.requestedAt
-                )
-            ]
-        }
-
-        let reuseAllowed = operatorDecision["downstream_reuse_allowed"] as? Bool
-        let caveats = reuseAllowed == false
-            ? ["\(source.id) returned recall evidence with an explicit downstream-reuse caveat."]
-            : []
-
-        return BarnOwlEnrichmentSourceResult(
-            sourceID: source.id,
-            evidence: evidence,
-            summary: "\(source.displayName) returned \(evidence.count) live Collin OS evidence item\(evidence.count == 1 ? "" : "s").",
-            caveats: caveats
-        )
-    }
-
-    private func decodedConfiguration(from source: BarnOwlEnrichmentSourceDescriptor) -> Configuration {
-        guard let configJSON = source.configJSON,
-              let data = configJSON.data(using: .utf8),
-              let configuration = try? JSONDecoder().decode(Configuration.self, from: data)
-        else {
-            return Configuration()
-        }
-        return configuration
-    }
-
-    private static func candidateKind(from rawKind: String?) -> String {
-        switch rawKind?.lowercased() {
-        case "person", "company", "project", "event", "account", "customer", "internal_term":
-            return rawKind?.lowercased() ?? "unresolved_concept"
-        default:
-            return "unresolved_concept"
-        }
-    }
-
-    private static func freshness(from rawValue: String?) -> BarnOwlEnrichmentEvidenceFreshness {
-        switch rawValue?.lowercased() {
-        case "fresh", "current", "source_backed":
-            return .current
-        case "recent":
-            return .recent
-        case "stale":
-            return .stale
-        default:
-            return .unknown
-        }
-    }
-
-    private static func confidence(
-        trustPosture: String?,
-        downstreamReuseAllowed: Bool?
-    ) -> Double {
-        let base: Double = switch trustPosture?.lowercased() {
-        case "ready":
-            0.93
-        case "review_required":
-            0.78
-        case "thin":
-            0.64
-        default:
-            0.72
-        }
-        return downstreamReuseAllowed == false ? max(0.55, base - 0.12) : base
-    }
-
-    private static func normalized(_ value: String) -> String {
-        value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "-")
-    }
-}
-
 struct BarnOwlPublicReferenceResearchAdapter: BarnOwlEnrichmentSourceAdapter {
     struct SearchResponse: Decodable {
         var search: [SearchItem]
@@ -1355,6 +1095,15 @@ final class BarnOwlAppModel: ObservableObject {
         publishRecordingReadinessSummary()
     }
 
+    func setMicrophoneCaptureEnabled(_ enabled: Bool) {
+        guard status != .recording else {
+            captureStatus = "Microphone can be changed before the next recording."
+            return
+        }
+        selectedAudioSources.capturesMicrophone = enabled
+        publishRecordingReadinessSummary()
+    }
+
     func checkForUpdatesAndInstallLatest() async {
         guard !isUpdateInFlight else { return }
         if case .unknown = updateAvailability {
@@ -1453,6 +1202,16 @@ final class BarnOwlAppModel: ObservableObject {
             updatePreview: false
         )
 
+        guard requestedAudioSources.capturesMicrophone || requestedAudioSources.capturesSystemAudio else {
+            fail(
+                reason: .captureUnavailable,
+                message: "Select at least one audio source before recording.",
+                sessionID: nil,
+                preview: "Recording could not start."
+            )
+            return
+        }
+
         let openAIConfiguration: OpenAIConfiguration
         do {
             openAIConfiguration = try BarnOwlAPIKeyStore.makeConfiguration()
@@ -1466,19 +1225,23 @@ final class BarnOwlAppModel: ObservableObject {
             return
         }
         let startedAt = Date()
-        captureStatus = "Requesting microphone permission."
-        let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
-        guard microphoneDecision == .granted else {
-            BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
-            publishRecordingReadinessSummary()
-            let message = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
-            fail(
-                reason: .permissionDenied,
-                message: message,
-                sessionID: nil,
-                preview: "Recording could not start."
-            )
-            return
+        if requestedAudioSources.capturesMicrophone {
+            captureStatus = "Requesting microphone permission."
+            let microphoneDecision = await BarnOwlFirstRunReadiness.requestMicrophoneDecision()
+            guard microphoneDecision == .granted else {
+                BarnOwlFirstRunReadiness.clearLocalCaptureReadiness()
+                publishRecordingReadinessSummary()
+                let message = BarnOwlFirstRunReadiness.microphonePermissionBlockedMessage(for: microphoneDecision)
+                fail(
+                    reason: .permissionDenied,
+                    message: message,
+                    sessionID: nil,
+                    preview: "Recording could not start."
+                )
+                return
+            }
+        } else {
+            captureStatus = "Microphone disabled for this recording."
         }
 
         if requestedAudioSources.capturesSystemAudio {
@@ -1527,9 +1290,7 @@ final class BarnOwlAppModel: ObservableObject {
         apply(startResult)
         guard case .accepted = startResult else { return }
         await persistSessionState(session, status: .pending)
-        liveTranscriptPreview = requestedAudioSources.capturesSystemAudio
-            ? "Checking mic and system audio..."
-            : "Checking microphone audio..."
+        liveTranscriptPreview = Self.audioReadinessPreview(for: requestedAudioSources)
         captureStatus = "Starting \(Self.audioSourceDescription(requestedAudioSources))."
         realtimeStatus = "Starting realtime transcription."
 
@@ -2128,6 +1889,10 @@ final class BarnOwlAppModel: ObservableObject {
                     summary: summary
                 )
             }
+            await recordMeetingExportSnapshotEvent(
+                meetingID: displayedNote.id,
+                type: .updated
+            )
             await writeArtifactToLocalContext(artifact)
             await refreshMeetingHistory()
             noteActionStatus = "Saved note edits."
@@ -2177,6 +1942,10 @@ final class BarnOwlAppModel: ObservableObject {
             noteTitleDraft = artifact.session.title
             noteDraft = artifact.markdown
             _ = try? await database.updateMeetingStateNotes(meetingID: displayedNote.id, markdown: artifact.markdown)
+            await recordMeetingExportSnapshotEvent(
+                meetingID: displayedNote.id,
+                type: .updated
+            )
             await writeArtifactToLocalContext(artifact)
             await refreshMeetingHistory()
             noteActionStatus = "Renamed meeting to \(artifact.session.title)."
@@ -2625,6 +2394,10 @@ final class BarnOwlAppModel: ObservableObject {
             updated.title = cleanedTitle
             self.activeSession = updated
             await persistSessionState(updated, status: .recording)
+            await recordMeetingExportSnapshotEvent(
+                meetingID: updated.id,
+                type: .updated
+            )
             noteTitleDraft = cleanedTitle
             noteActionStatus = "Set active meeting title to \(cleanedTitle)."
             return true
@@ -2657,6 +2430,10 @@ final class BarnOwlAppModel: ObservableObject {
                 _ = try? await database.updateMeetingStateNotes(meetingID: meetingID, markdown: artifact.markdown)
                 await writeArtifactToLocalContext(artifact)
             }
+            await recordMeetingExportSnapshotEvent(
+                meetingID: meetingID,
+                type: .updated
+            )
             await refreshRecentSessions()
             await refreshMeetingHistory()
             noteActionStatus = "Renamed meeting to \(cleanedTitle)."
@@ -2755,6 +2532,11 @@ final class BarnOwlAppModel: ObservableObject {
             message: "Purged temporary audio.",
             sessionID: id,
             updatePreview: false
+        )
+        await recordMeetingExportTombstone(
+            meetingID: id,
+            type: .purged,
+            reason: "temporary_audio_purged"
         )
     }
 
@@ -3200,6 +2982,9 @@ final class BarnOwlAppModel: ObservableObject {
         enrichmentConflicts: [BarnOwlControlEnrichmentConflict]? = nil,
         enrichmentConceptHistories: [BarnOwlControlEnrichmentConceptHistory]? = nil,
         knowledgeEntities: [BarnOwlControlKnowledgeEntity]? = nil,
+        meetingEvidence: BarnOwlMeetingEvidenceEnvelope? = nil,
+        meetingEvidenceBatch: BarnOwlMeetingEvidenceBatch? = nil,
+        meetingExportEventBatch: BarnOwlMeetingExportEventBatch? = nil,
         transcript: String? = nil,
         notes: String? = nil,
         summary: String? = nil,
@@ -3272,6 +3057,9 @@ final class BarnOwlAppModel: ObservableObject {
             enrichmentConflicts: enrichmentConflicts,
             enrichmentConceptHistories: enrichmentConceptHistories,
             knowledgeEntities: knowledgeEntities,
+            meetingEvidence: meetingEvidence,
+            meetingEvidenceBatch: meetingEvidenceBatch,
+            meetingExportEventBatch: meetingExportEventBatch,
             transcript: transcript,
             notes: notes,
             summary: summary,
@@ -3339,20 +3127,6 @@ final class BarnOwlAppModel: ObservableObject {
     ]
 
     nonisolated static let enrichmentSourcePresets: [BarnOwlControlEnrichmentSourcePreset] = [
-        BarnOwlControlEnrichmentSourcePreset(
-            id: "collin_os",
-            displayName: "Collin OS",
-            sourceType: "internal_memory",
-            scope: BarnOwlEnrichmentSourceScope.personalPrivate.rawValue,
-            scopeLabel: BarnOwlEnrichmentSourceScope.personalPrivate.displayName,
-            authorityProfile: "private_internal_reference",
-            connectorReference: "collin-os",
-            bestUsedFor: ["projects", "people", "customer/account context", "internal terminology"],
-            defaultAuthState: BarnOwlEnrichmentSourceAuthState.configured.rawValue,
-            defaultHealthStatus: BarnOwlEnrichmentSourceHealthStatus.partial.rawValue,
-            privacyCopyPolicy: "private_source_summary_only",
-            queryBudgetPolicy: "owner_scoped"
-        ),
         BarnOwlControlEnrichmentSourcePreset(
             id: "google_drive_reference",
             displayName: "Google Drive Reference",
@@ -4095,7 +3869,6 @@ final class BarnOwlAppModel: ObservableObject {
             let now = Date()
             let snapshot: BarnOwlEnrichmentSourceHealthSnapshot
             let connectorNeedsSetup = source.connectorReference != nil
-                && source.connectorReference?.lowercased() != "collin-os"
                 && source.configJSON?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
             if connectorNeedsSetup {
                 snapshot = BarnOwlEnrichmentSourceHealthSnapshot(
@@ -4636,9 +4409,6 @@ final class BarnOwlAppModel: ObservableObject {
             return BarnOwlMemoryEnrichmentSourceAdapter(database: database)
         }
         if source.sourceType == "internal_memory" || source.sourceType == "private_reference" {
-            if source.connectorReference?.lowercased() == "collin-os" {
-                return BarnOwlCollinOSReferenceAdapter(sourceID: source.id)
-            }
             return BarnOwlConfiguredInternalReferenceAdapter(sourceID: source.id)
         }
         if source.sourceType == "public_reference" {
@@ -4901,6 +4671,11 @@ final class BarnOwlAppModel: ObservableObject {
             sessionID: meetingID,
             updatePreview: false
         )
+        await recordMeetingExportTombstone(
+            meetingID: meetingID,
+            type: .purged,
+            reason: "temporary_audio_purged"
+        )
         return controlStatusResponse(
             message: "Purged temporary audio for meeting.",
             activeMeetingID: meetingID,
@@ -5082,6 +4857,545 @@ final class BarnOwlAppModel: ObservableObject {
         } catch {
             return controlStatusResponse(ok: false, message: "Could not load actions.", error: BarnOwlErrorFormatter.message(for: error))
         }
+    }
+
+    func controlMeetingEvidenceResponse(
+        meetingID: UUID,
+        exportPolicy rawPolicy: String? = nil,
+        includeTranscriptSegments: Bool = false
+    ) async -> BarnOwlControlResponse {
+        let policy: BarnOwlMeetingEvidenceContentPolicy
+        if let rawPolicy {
+            guard let resolved = BarnOwlMeetingEvidenceContentPolicy(rawValue: rawPolicy) else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "meeting_evidence received an unsupported export policy.",
+                    errorCode: "invalid_export_policy",
+                    error: rawPolicy
+                )
+            }
+            policy = resolved
+        } else {
+            policy = .structuredOutputsTranscriptAndPointers
+        }
+
+        do {
+            let database = try makeDatabase()
+            guard let state = try await database.meetingState(id: meetingID) else {
+                return controlStatusResponse(ok: false, message: "Meeting not found.", error: "meeting_not_found")
+            }
+            let evidence = meetingEvidenceEnvelope(
+                from: state,
+                policy: policy,
+                includeTranscriptSegments: includeTranscriptSegments
+            )
+            return controlStatusResponse(
+                message: "Barn Owl meeting evidence.",
+                meetingEvidence: evidence,
+                activeMeetingID: meetingID,
+                notesReady: evidence.processing.notesReady,
+                transcriptReady: evidence.processing.transcriptReady,
+                summaryReady: evidence.processing.summaryReady
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not export meeting evidence.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlMeetingEvidenceBatchResponse(
+        since rawSince: String?,
+        cursor rawCursor: String? = nil,
+        limit: Int,
+        exportPolicy rawPolicy: String? = nil,
+        includeTranscriptSegments: Bool = false
+    ) async -> BarnOwlControlResponse {
+        let trimmedSince = rawSince?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCursor = rawCursor?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasSince = !(trimmedSince?.isEmpty ?? true)
+        let hasCursor = !(trimmedCursor?.isEmpty ?? true)
+
+        guard hasSince || hasCursor else {
+            return controlStatusResponse(
+                ok: false,
+                message: "meetings_evidence requires --since or --cursor.",
+                errorCode: "missing_sync_anchor",
+                error: "Provide an ISO-8601 timestamp or an opaque cursor."
+            )
+        }
+        guard !(hasSince && hasCursor) else {
+            return controlStatusResponse(
+                ok: false,
+                message: "meetings_evidence accepts either --since or --cursor, not both.",
+                errorCode: "conflicting_sync_anchor",
+                error: "Choose one incremental sync mode."
+            )
+        }
+
+        let policy: BarnOwlMeetingEvidenceContentPolicy
+        if let rawPolicy {
+            guard let resolved = BarnOwlMeetingEvidenceContentPolicy(rawValue: rawPolicy) else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "meetings_evidence received an unsupported export policy.",
+                    errorCode: "invalid_export_policy",
+                    error: rawPolicy
+                )
+            }
+            policy = resolved
+        } else {
+            policy = .structuredOutputsTranscriptAndPointers
+        }
+
+        do {
+            let boundedLimit = max(1, min(limit, 100))
+            let database = try makeDatabase()
+            let syncRequest: BarnOwlMeetingEvidenceSyncRequest
+            let states: [BarnOwlMeetingState]
+
+            if let rawCursor = trimmedCursor, hasCursor {
+                guard let cursor = Self.meetingEvidenceCursor(from: rawCursor) else {
+                    return controlStatusResponse(
+                        ok: false,
+                        message: "meetings_evidence received an invalid --cursor token.",
+                        errorCode: "invalid_cursor",
+                        error: rawCursor
+                    )
+                }
+                syncRequest = .cursor(rawValue: rawCursor, position: cursor)
+                states = try await database.meetingStatesUpdated(
+                    after: cursor.updatedAt,
+                    meetingID: cursor.meetingID,
+                    limit: boundedLimit + 1
+                )
+            } else if let rawSince = trimmedSince,
+                      let since = Self.meetingEvidenceSyncDate(from: rawSince) {
+                syncRequest = .timestamp(since)
+                states = try await database.meetingStatesUpdated(
+                    since: since,
+                    limit: boundedLimit + 1
+                )
+            } else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "meetings_evidence received an invalid --since timestamp.",
+                    errorCode: "invalid_since",
+                    error: trimmedSince
+                )
+            }
+            let pageStates = Array(states.prefix(boundedLimit))
+            let evidenceItems = pageStates.map {
+                meetingEvidenceEnvelope(
+                    from: $0,
+                    policy: policy,
+                    includeTranscriptSegments: includeTranscriptSegments
+                )
+            }
+            let lastCursor = pageStates.last.flatMap(Self.meetingEvidenceCursorToken(from:))
+            let syncPage: BarnOwlMeetingEvidenceSyncPage
+            switch syncRequest {
+            case .timestamp(let since):
+                syncPage = BarnOwlMeetingEvidenceSyncPage(
+                    mode: .timestamp,
+                    requestedSince: since,
+                    nextSince: evidenceItems.last?.meeting.updatedAt,
+                    nextCursor: lastCursor,
+                    limit: boundedLimit,
+                    returnedCount: evidenceItems.count,
+                    hasMore: states.count > boundedLimit
+                )
+            case .cursor(let rawValue, _):
+                syncPage = BarnOwlMeetingEvidenceSyncPage(
+                    mode: .cursor,
+                    requestedCursor: rawValue,
+                    nextSince: evidenceItems.last?.meeting.updatedAt,
+                    nextCursor: lastCursor,
+                    limit: boundedLimit,
+                    returnedCount: evidenceItems.count,
+                    hasMore: states.count > boundedLimit
+                )
+            }
+            let batch = BarnOwlMeetingEvidenceBatch(
+                items: evidenceItems,
+                sync: syncPage
+            )
+            return controlStatusResponse(
+                message: "Barn Owl meeting evidence batch.",
+                meetingEvidenceBatch: batch
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not export meeting evidence batch.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    func controlMeetingExportEventBatchResponse(
+        since rawSince: String?,
+        cursor rawCursor: String? = nil,
+        limit: Int
+    ) async -> BarnOwlControlResponse {
+        let trimmedSince = rawSince?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCursor = rawCursor?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasSince = !(trimmedSince?.isEmpty ?? true)
+        let hasCursor = !(trimmedCursor?.isEmpty ?? true)
+
+        guard hasSince || hasCursor else {
+            return controlStatusResponse(
+                ok: false,
+                message: "meeting_export_events requires --since or --cursor.",
+                errorCode: "missing_sync_anchor",
+                error: "Provide an ISO-8601 timestamp or an opaque cursor."
+            )
+        }
+        guard !(hasSince && hasCursor) else {
+            return controlStatusResponse(
+                ok: false,
+                message: "meeting_export_events accepts either --since or --cursor, not both.",
+                errorCode: "conflicting_sync_anchor",
+                error: "Choose one incremental sync mode."
+            )
+        }
+
+        do {
+            let boundedLimit = max(1, min(limit, 100))
+            let database = try makeDatabase()
+            let syncRequest: BarnOwlMeetingExportEventSyncRequest
+            let events: [BarnOwlMeetingExportEventRecord]
+
+            if let rawCursor = trimmedCursor, hasCursor {
+                guard let cursor = Self.meetingExportEventCursor(from: rawCursor) else {
+                    return controlStatusResponse(
+                        ok: false,
+                        message: "meeting_export_events received an invalid --cursor token.",
+                        errorCode: "invalid_cursor",
+                        error: rawCursor
+                    )
+                }
+                syncRequest = .cursor(rawValue: rawCursor, position: cursor)
+                events = try await database.meetingExportEvents(
+                    after: cursor.occurredAt,
+                    eventID: cursor.eventID,
+                    limit: boundedLimit + 1
+                )
+            } else if let rawSince = trimmedSince,
+                      let since = Self.meetingEvidenceSyncDate(from: rawSince) {
+                syncRequest = .timestamp(since)
+                events = try await database.meetingExportEvents(
+                    since: since,
+                    limit: boundedLimit + 1
+                )
+            } else {
+                return controlStatusResponse(
+                    ok: false,
+                    message: "meeting_export_events received an invalid --since timestamp.",
+                    errorCode: "invalid_since",
+                    error: trimmedSince
+                )
+            }
+
+            let pageEvents = Array(events.prefix(boundedLimit))
+            let items = pageEvents.compactMap(Self.meetingExportEvent(from:))
+            let lastCursor = pageEvents.last.flatMap(Self.meetingExportEventCursorToken(from:))
+            let syncPage: BarnOwlMeetingExportEventSyncPage
+            switch syncRequest {
+            case .timestamp(let since):
+                syncPage = BarnOwlMeetingExportEventSyncPage(
+                    mode: .timestamp,
+                    requestedSince: since,
+                    nextSince: pageEvents.last?.occurredAt,
+                    nextCursor: lastCursor,
+                    limit: boundedLimit,
+                    returnedCount: items.count,
+                    hasMore: events.count > boundedLimit
+                )
+            case .cursor(let rawValue, _):
+                syncPage = BarnOwlMeetingExportEventSyncPage(
+                    mode: .cursor,
+                    requestedCursor: rawValue,
+                    nextSince: pageEvents.last?.occurredAt,
+                    nextCursor: lastCursor,
+                    limit: boundedLimit,
+                    returnedCount: items.count,
+                    hasMore: events.count > boundedLimit
+                )
+            }
+            return controlStatusResponse(
+                message: "Barn Owl meeting export event batch.",
+                meetingExportEventBatch: BarnOwlMeetingExportEventBatch(
+                    items: items,
+                    sync: syncPage
+                )
+            )
+        } catch {
+            return controlStatusResponse(
+                ok: false,
+                message: "Could not export meeting event batch.",
+                error: BarnOwlErrorFormatter.message(for: error)
+            )
+        }
+    }
+
+    private nonisolated static func meetingEvidenceSyncDate(from rawValue: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: rawValue) {
+            return date
+        }
+
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: rawValue)
+    }
+
+    private enum BarnOwlMeetingEvidenceSyncRequest {
+        case timestamp(Date)
+        case cursor(rawValue: String, position: BarnOwlMeetingEvidenceCursor)
+    }
+
+    private enum BarnOwlMeetingExportEventSyncRequest {
+        case timestamp(Date)
+        case cursor(rawValue: String, position: BarnOwlMeetingExportEventCursor)
+    }
+
+    private struct BarnOwlMeetingEvidenceCursor: Codable {
+        var updatedAt: Date
+        var meetingID: UUID
+    }
+
+    private struct BarnOwlMeetingExportEventCursor: Codable {
+        var occurredAt: Date
+        var eventID: UUID
+    }
+
+    private nonisolated static func meetingEvidenceCursorToken(
+        from state: BarnOwlMeetingState
+    ) -> String? {
+        let cursor = BarnOwlMeetingEvidenceCursor(
+            updatedAt: state.updatedAt,
+            meetingID: state.id
+        )
+        guard let data = try? JSONEncoder().encode(cursor) else {
+            return nil
+        }
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private nonisolated static func meetingEvidenceCursor(
+        from rawValue: String
+    ) -> BarnOwlMeetingEvidenceCursor? {
+        let normalized = rawValue
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+        guard let data = Data(base64Encoded: normalized + padding),
+              let cursor = try? JSONDecoder().decode(BarnOwlMeetingEvidenceCursor.self, from: data) else {
+            return nil
+        }
+        return cursor
+    }
+
+    private nonisolated static func meetingExportEventCursorToken(
+        from event: BarnOwlMeetingExportEventRecord
+    ) -> String? {
+        let cursor = BarnOwlMeetingExportEventCursor(
+            occurredAt: event.occurredAt,
+            eventID: event.id
+        )
+        guard let data = try? JSONEncoder().encode(cursor) else {
+            return nil
+        }
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private nonisolated static func meetingExportEventCursor(
+        from rawValue: String
+    ) -> BarnOwlMeetingExportEventCursor? {
+        let normalized = rawValue
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+        guard let data = Data(base64Encoded: normalized + padding),
+              let cursor = try? JSONDecoder().decode(BarnOwlMeetingExportEventCursor.self, from: data) else {
+            return nil
+        }
+        return cursor
+    }
+
+    private nonisolated static func meetingExportEvent(
+        from record: BarnOwlMeetingExportEventRecord
+    ) -> BarnOwlMeetingExportEvent? {
+        guard let kind = BarnOwlMeetingExportEventKind(rawValue: record.type.rawValue) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let meetingEvidence = record.envelopeJSON
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? decoder.decode(BarnOwlMeetingEvidenceEnvelope.self, from: $0) }
+        return BarnOwlMeetingExportEvent(
+            id: record.id,
+            type: kind,
+            meetingID: record.meetingID,
+            meetingStableKey: record.meetingStableKey,
+            occurredAt: record.occurredAt,
+            schemaVersion: record.schemaVersion,
+            meetingEvidence: meetingEvidence,
+            tombstoneReason: record.tombstoneReason
+        )
+    }
+
+    private func meetingEvidenceEnvelope(
+        from state: BarnOwlMeetingState,
+        policy: BarnOwlMeetingEvidenceContentPolicy,
+        includeTranscriptSegments: Bool
+    ) -> BarnOwlMeetingEvidenceEnvelope {
+        let meetingKey = "barnowl:meeting:\(state.id.uuidString)"
+        let transcriptReady = !state.transcriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let notesReady = !state.generatedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let summaryOverview = state.summary?.overview.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summaryReady = summaryOverview?.isEmpty == false
+        let usedFallbackSummary = state.summary?.overview.contains(Self.summaryFallbackMarker) == true
+            || state.generatedNotes.contains(Self.summaryFallbackMarker)
+        let repairRecommended = usedFallbackSummary
+        let ingestReadiness = meetingEvidenceReadiness(
+            state: state,
+            transcriptReady: transcriptReady,
+            notesReady: notesReady,
+            summaryReady: summaryReady,
+            repairRecommended: repairRecommended
+        )
+        let lastSuccessfulProcessingAt = state.jobs
+            .filter { $0.status == .succeeded }
+            .compactMap(\.completedAt)
+            .max() ?? (state.status == .completed ? state.updatedAt : nil)
+        let participants = (state.meetingFacts?.participants ?? []).map {
+            BarnOwlMeetingEvidenceParticipant(displayName: $0, roleHint: "participant")
+        }
+        let portableFacts = state.meetingFacts.map {
+            BarnOwlMeetingEvidenceMeetingFacts(
+                title: $0.title,
+                meetingType: $0.meetingType,
+                participants: $0.participants,
+                customers: $0.customers,
+                organizations: $0.organizations,
+                projects: $0.projects,
+                goals: $0.goals,
+                extensions: $0.glossary
+            )
+        }
+        let derivedSummary = policy.allowsSummaryText
+            ? summaryOverview.flatMap { $0.isEmpty ? nil : BarnOwlMeetingEvidenceSummary(overview: $0) }
+            : nil
+        let derived = BarnOwlMeetingEvidenceDerived(
+            summary: derivedSummary,
+            decisions: policy.allowsStructuredOutputs ? state.decisions : [],
+            actionItems: policy.allowsStructuredOutputs ? state.actionItems : [],
+            openQuestions: policy.allowsStructuredOutputs ? state.openQuestions : [],
+            meetingFacts: policy.allowsStructuredOutputs ? portableFacts : nil
+        )
+        let transcriptSegments = includeTranscriptSegments && policy.allowsTranscriptText
+            ? state.transcriptSegments
+                .sorted { $0.sequence < $1.sequence }
+                .map {
+                    BarnOwlMeetingEvidenceTranscriptSegment(
+                        sequence: $0.sequence,
+                        speakerLabel: $0.speakerLabel,
+                        text: $0.text,
+                        startTime: $0.startTime,
+                        endTime: $0.endTime,
+                        confidence: $0.confidence
+                    )
+                }
+            : nil
+        let producerVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        return BarnOwlMeetingEvidenceEnvelope(
+            source: BarnOwlMeetingEvidenceSource(
+                producer: "barnowl",
+                producerVersion: producerVersion,
+                tenantScope: "local_user"
+            ),
+            meeting: BarnOwlMeetingEvidenceMeeting(
+                id: state.id,
+                stableKey: meetingKey,
+                externalID: state.meeting.externalID,
+                title: state.title,
+                meetingType: state.meetingFacts?.meetingType,
+                startedAt: state.startedAt,
+                endedAt: state.endedAt,
+                updatedAt: state.updatedAt
+            ),
+            participants: participants,
+            artifacts: BarnOwlMeetingEvidenceArtifacts(
+                transcript: BarnOwlMeetingEvidenceArtifact(
+                    pointer: "\(meetingKey)#transcript",
+                    ready: transcriptReady,
+                    text: policy.allowsTranscriptText ? state.transcriptText : nil
+                ),
+                notes: BarnOwlMeetingEvidenceArtifact(
+                    pointer: "\(meetingKey)#notes",
+                    ready: notesReady
+                ),
+                summary: BarnOwlMeetingEvidenceArtifact(
+                    pointer: "\(meetingKey)#summary",
+                    ready: summaryReady
+                ),
+                actions: BarnOwlMeetingEvidenceArtifact(
+                    pointer: "\(meetingKey)#actions",
+                    ready: !state.actionItems.isEmpty || !state.decisions.isEmpty
+                )
+            ),
+            derived: derived,
+            transcriptSegments: transcriptSegments,
+            processing: BarnOwlMeetingEvidenceProcessing(
+                state: state.status?.rawValue ?? "unknown",
+                ingestReadiness: ingestReadiness,
+                transcriptReady: transcriptReady,
+                notesReady: notesReady,
+                summaryReady: summaryReady,
+                usedFallbackSummary: usedFallbackSummary,
+                repairRecommended: repairRecommended,
+                lastSuccessfulProcessingAt: lastSuccessfulProcessingAt
+            ),
+            provenance: BarnOwlMeetingEvidenceProvenance(
+                sourceOfTruth: "barnowl",
+                contentPolicy: policy,
+                generatedAt: Date()
+            )
+        )
+    }
+
+    private func meetingEvidenceReadiness(
+        state: BarnOwlMeetingState,
+        transcriptReady: Bool,
+        notesReady: Bool,
+        summaryReady: Bool,
+        repairRecommended: Bool
+    ) -> BarnOwlMeetingEvidenceIngestReadiness {
+        if repairRecommended {
+            return .requiresRepair
+        }
+        if state.status == .failed, !transcriptReady, !notesReady, !summaryReady {
+            return .blocked
+        }
+        if state.status == .completed, transcriptReady, notesReady, summaryReady {
+            return .ready
+        }
+        if transcriptReady, summaryReady {
+            return .readyWithCaveat
+        }
+        return .notReady
     }
 
     func controlChatResponse(question: String) async -> BarnOwlControlResponse {
@@ -5927,6 +6241,10 @@ final class BarnOwlAppModel: ObservableObject {
         recordPerformance(.phase(.cleanup, .finished, at: Self.performanceNow()))
         await persistSessionState(session, status: .completed, endedAt: session.endedAt ?? Date())
         await persistProcessedArtifact(sessionID: session.id)
+        await recordMeetingExportSnapshotEvent(
+            meetingID: session.id,
+            type: .processingCompleted
+        )
         progressFraction = 1
         liveTranscriptPreview = "Saved notes to \(markdownURL.lastPathComponent)."
         captureStatus = "Saved final transcript. Temporary audio deleted."
@@ -7355,6 +7673,7 @@ final class BarnOwlAppModel: ObservableObject {
         do {
             let database = try makeDatabase()
             let now = Date()
+            let existingMeeting = try await database.meeting(id: session.id)
             try await database.upsertMeeting(BarnOwlMeetingRecord(
                 id: session.id,
                 title: session.title,
@@ -7374,6 +7693,13 @@ final class BarnOwlAppModel: ObservableObject {
                 createdAt: session.startedAt,
                 updatedAt: now
             ))
+            if existingMeeting == nil {
+                try await recordMeetingExportSnapshotEvent(
+                    database: database,
+                    meetingID: session.id,
+                    type: .created
+                )
+            }
         } catch {
             recordActivity(
                 level: .warning,
@@ -7389,6 +7715,13 @@ final class BarnOwlAppModel: ObservableObject {
     private func deletePersistedMeeting(_ id: UUID) async {
         do {
             let database = try makeDatabase()
+            try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+                type: .deleted,
+                meetingID: id,
+                meetingStableKey: "barnowl:meeting:\(id.uuidString)",
+                occurredAt: Date(),
+                tombstoneReason: "meeting_deleted"
+            ))
             try await database.deleteMeeting(id: id)
         } catch {
             recordActivity(
@@ -7400,6 +7733,82 @@ final class BarnOwlAppModel: ObservableObject {
                 updatePreview: false
             )
         }
+    }
+
+    private func recordMeetingExportTombstone(
+        meetingID: UUID,
+        type: BarnOwlMeetingExportEventType,
+        reason: String
+    ) async {
+        do {
+            let database = try makeDatabase()
+            try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+                type: type,
+                meetingID: meetingID,
+                meetingStableKey: "barnowl:meeting:\(meetingID.uuidString)",
+                occurredAt: Date(),
+                tombstoneReason: reason
+            ))
+        } catch {
+            recordActivity(
+                level: .warning,
+                category: "export",
+                message: "Could not record Barn Owl export tombstone.",
+                details: BarnOwlErrorFormatter.message(for: error),
+                sessionID: meetingID,
+                updatePreview: false
+            )
+        }
+    }
+
+    private func recordMeetingExportSnapshotEvent(
+        meetingID: UUID,
+        type: BarnOwlMeetingExportEventType
+    ) async {
+        do {
+            let database = try makeDatabase()
+            try await recordMeetingExportSnapshotEvent(
+                database: database,
+                meetingID: meetingID,
+                type: type
+            )
+        } catch {
+            recordActivity(
+                level: .warning,
+                category: "export",
+                message: "Could not record Barn Owl export update event.",
+                details: BarnOwlErrorFormatter.message(for: error),
+                sessionID: meetingID,
+                updatePreview: false
+            )
+        }
+    }
+
+    private func recordMeetingExportSnapshotEvent(
+        database: BarnOwlDatabase,
+        meetingID: UUID,
+        type: BarnOwlMeetingExportEventType
+    ) async throws {
+        guard let state = try await database.meetingState(id: meetingID) else {
+            return
+        }
+        let evidence = meetingEvidenceEnvelope(
+            from: state,
+            policy: .structuredOutputsTranscriptAndPointers,
+            includeTranscriptSegments: false
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let evidenceJSON = String(decoding: try encoder.encode(evidence), as: UTF8.self)
+        try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+            type: type,
+            meetingID: meetingID,
+            meetingStableKey: evidence.meeting.stableKey,
+            occurredAt: Date(),
+            schemaVersion: evidence.schemaVersion,
+            envelopeJSON: evidenceJSON
+        ))
     }
 
     private func persistCalendarContext(_ context: CalendarMeetingContext, meetingID: UUID) async {
@@ -7544,6 +7953,11 @@ final class BarnOwlAppModel: ObservableObject {
                     after: BarnOwlMeetingVersionSnapshot(state: afterState)
                 )
             }
+            try await recordMeetingExportSnapshotEvent(
+                database: database,
+                meetingID: artifact.session.id,
+                type: .updated
+            )
         } catch {
             recordActivity(
                 level: .warning,
@@ -7729,6 +8143,19 @@ final class BarnOwlAppModel: ObservableObject {
             "system audio only"
         case (false, false):
             "no audio sources"
+        }
+    }
+
+    private nonisolated static func audioReadinessPreview(for configuration: AudioSourceConfiguration) -> String {
+        switch (configuration.capturesMicrophone, configuration.capturesSystemAudio) {
+        case (true, true):
+            "Checking mic and system audio..."
+        case (true, false):
+            "Checking microphone audio..."
+        case (false, true):
+            "Checking system audio..."
+        case (false, false):
+            "No audio sources selected."
         }
     }
 

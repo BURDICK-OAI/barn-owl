@@ -39,6 +39,7 @@ NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
     "missing_prompt",
     "missing_query",
     "missing_question",
+    "missing_sync_anchor",
     "missing_source_display_name",
     "missing_source_id",
     "missing_source_type",
@@ -53,6 +54,7 @@ NON_REPORTABLE_FEEDBACK_ERROR_CODES = {
     "enrichment_source_preset_not_found",
     "enrichment_source_not_found",
     "knowledge_entity_not_found",
+    "invalid_cursor",
     "unsupported_quick_command",
 }
 REDACTION_PATTERNS = [
@@ -712,6 +714,88 @@ def markdown_response(response: dict) -> str:
             lines.append(f"Next: `{response['nextCommand']}`")
         append_feedback_suggestion(lines, response)
         return "\n".join(lines).rstrip()
+    if response.get("meetingEvidenceBatch"):
+        batch = response["meetingEvidenceBatch"]
+        sync = batch.get("sync") or {}
+        items = batch.get("items") or []
+        lines = ["# Barn Owl Meeting Evidence Batch", ""]
+        lines.append(f"- Returned: {sync.get('returnedCount', len(items))}")
+        lines.append(f"- Limit: {sync.get('limit', 'unknown')}")
+        lines.append(f"- Has more: {sync.get('hasMore', False)}")
+        if sync.get("requestedSince"):
+            lines.append(f"- Since: {sync['requestedSince']}")
+        if sync.get("requestedCursor"):
+            lines.append(f"- Cursor: {sync['requestedCursor']}")
+        if sync.get("nextSince"):
+            lines.append(f"- Next since: {sync['nextSince']}")
+        if sync.get("nextCursor"):
+            lines.append(f"- Next cursor: {sync['nextCursor']}")
+        if items:
+            lines.append("")
+            lines.append("## Meetings")
+            lines.append("")
+            for item in items:
+                meeting = item.get("meeting") or {}
+                processing = item.get("processing") or {}
+                title = meeting.get("title", "Untitled meeting")
+                stable_key = meeting.get("stableKey", "unknown")
+                readiness = processing.get("ingestReadiness", "unknown")
+                updated_at = meeting.get("updatedAt", "unknown")
+                lines.append(f"- {title} | `{stable_key}` | {readiness} | updated {updated_at}")
+        return "\n".join(lines).rstrip()
+    if response.get("meetingExportEventBatch"):
+        batch = response["meetingExportEventBatch"]
+        sync = batch.get("sync") or {}
+        items = batch.get("items") or []
+        lines = ["# Barn Owl Meeting Export Events", ""]
+        lines.append(f"- Returned: {sync.get('returnedCount', len(items))}")
+        lines.append(f"- Limit: {sync.get('limit', 'unknown')}")
+        lines.append(f"- Has more: {sync.get('hasMore', False)}")
+        if sync.get("requestedSince"):
+            lines.append(f"- Since: {sync['requestedSince']}")
+        if sync.get("requestedCursor"):
+            lines.append(f"- Cursor: {sync['requestedCursor']}")
+        if sync.get("nextSince"):
+            lines.append(f"- Next since: {sync['nextSince']}")
+        if sync.get("nextCursor"):
+            lines.append(f"- Next cursor: {sync['nextCursor']}")
+        if items:
+            lines.append("")
+            lines.append("## Events")
+            lines.append("")
+            for item in items:
+                event_type = item.get("type", "unknown")
+                stable_key = item.get("meetingStableKey", "unknown")
+                occurred_at = item.get("occurredAt", "unknown")
+                suffix = ""
+                if item.get("tombstoneReason"):
+                    suffix = f" | {item['tombstoneReason']}"
+                lines.append(f"- {event_type} | `{stable_key}` | {occurred_at}{suffix}")
+        return "\n".join(lines).rstrip()
+    if response.get("meetingEvidence"):
+        evidence = response["meetingEvidence"]
+        meeting = evidence.get("meeting") or {}
+        processing = evidence.get("processing") or {}
+        lines = [f"# {meeting.get('title', 'Barn Owl Meeting Evidence')}"]
+        lines.append("")
+        lines.append(f"- Stable key: `{meeting.get('stableKey', 'unknown')}`")
+        lines.append(f"- Readiness: {processing.get('ingestReadiness', 'unknown')}")
+        lines.append(f"- Policy: {(evidence.get('provenance') or {}).get('contentPolicy', 'unknown')}")
+        if meeting.get("updatedAt"):
+            lines.append(f"- Updated: {meeting['updatedAt']}")
+        summary = ((evidence.get("derived") or {}).get("summary") or {}).get("overview")
+        if summary:
+            lines.append("")
+            lines.append("## Summary")
+            lines.append("")
+            lines.append(summary)
+        transcript = (((evidence.get("artifacts") or {}).get("transcript") or {}).get("text"))
+        if transcript:
+            lines.append("")
+            lines.append("## Transcript")
+            lines.append("")
+            lines.append(transcript)
+        return "\n".join(lines).rstrip()
     if response.get("notes"):
         return response["notes"].rstrip()
     if response.get("diagnosticsPath"):
@@ -900,6 +984,28 @@ def build_parser() -> argparse.ArgumentParser:
     meetings_recent = meetings_subparsers.add_parser("recent")
     meetings_recent.add_argument("--limit", type=int, default=10)
     add_format(meetings_recent)
+    meetings_evidence = meetings_subparsers.add_parser("evidence")
+    meetings_evidence_sync = meetings_evidence.add_mutually_exclusive_group(required=True)
+    meetings_evidence_sync.add_argument("--since")
+    meetings_evidence_sync.add_argument("--cursor")
+    meetings_evidence.add_argument("--limit", type=int, default=100)
+    meetings_evidence.add_argument(
+        "--policy",
+        choices=[
+            "metadata_only",
+            "summary_transcript_and_pointers",
+            "structured_outputs_transcript_and_pointers",
+            "full_text_allowed",
+        ],
+    )
+    meetings_evidence.add_argument("--include-transcript-segments", action="store_true")
+    add_format(meetings_evidence)
+    meetings_export_events = meetings_subparsers.add_parser("evidence-events")
+    meetings_export_events_sync = meetings_export_events.add_mutually_exclusive_group(required=True)
+    meetings_export_events_sync.add_argument("--since")
+    meetings_export_events_sync.add_argument("--cursor")
+    meetings_export_events.add_argument("--limit", type=int, default=100)
+    add_format(meetings_export_events)
 
     meeting = subparsers.add_parser("meeting")
     meeting_subparsers = meeting.add_subparsers(dest="meeting_command", required=True)
@@ -907,6 +1013,19 @@ def build_parser() -> argparse.ArgumentParser:
         leaf = meeting_subparsers.add_parser(name)
         leaf.add_argument("meeting_id")
         add_format(leaf)
+    meeting_evidence = meeting_subparsers.add_parser("evidence")
+    meeting_evidence.add_argument("meeting_id")
+    meeting_evidence.add_argument(
+        "--policy",
+        choices=[
+            "metadata_only",
+            "summary_transcript_and_pointers",
+            "structured_outputs_transcript_and_pointers",
+            "full_text_allowed",
+        ],
+    )
+    meeting_evidence.add_argument("--include-transcript-segments", action="store_true")
+    add_format(meeting_evidence)
     meeting_delete = meeting_subparsers.add_parser("delete")
     meeting_delete.add_argument("meeting_id")
     meeting_delete.add_argument("--yes", action="store_true")
@@ -1163,6 +1282,26 @@ def main(argv: list[str]) -> int:
             "limit": args.limit,
             "format": output_format,
         }
+    elif args.command == "meetings" and args.meetings_command == "evidence":
+        payload = {
+            "command": "meetings_evidence",
+            "since": args.since,
+            "cursor": args.cursor,
+            "limit": args.limit,
+            "exportPolicy": args.policy,
+            "includeTranscriptSegments": args.include_transcript_segments,
+            "format": output_format,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+    elif args.command == "meetings" and args.meetings_command == "evidence-events":
+        payload = {
+            "command": "meeting_export_events",
+            "since": args.since,
+            "cursor": args.cursor,
+            "limit": args.limit,
+            "format": output_format,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
     elif args.command == "meeting":
         command_map = {
             "get": "meeting_get",
@@ -1171,6 +1310,7 @@ def main(argv: list[str]) -> int:
             "summary": "meeting_summary",
             "context": "meeting_context",
             "actions": "meeting_actions",
+            "evidence": "meeting_evidence",
             "delete": "meeting_delete",
             "purge-temp-audio": "meeting_purge_temp_audio",
         }
@@ -1187,8 +1327,11 @@ def main(argv: list[str]) -> int:
             "command": command_map[args.meeting_command],
             "meetingID": args.meeting_id,
             "confirmed": getattr(args, "yes", None),
+            "exportPolicy": getattr(args, "policy", None),
+            "includeTranscriptSegments": getattr(args, "include_transcript_segments", None),
             "format": output_format,
         }
+        payload = {key: value for key, value in payload.items() if value is not None}
     elif args.command == "jobs":
         if args.jobs_command == "list":
             payload = {

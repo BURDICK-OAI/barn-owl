@@ -7,16 +7,16 @@ Refer to:
 
 Design, implement, test, and iterate Barn Owl's user-scoped enrichment source
 registry so autonomous knowledge enrichment can draw from Barn Owl memory,
-private/internal systems such as Collin OS, public internet/reference sources,
-and future connectors without hardcoding any one user's source stack.
+user-private/internal systems, public internet/reference sources, and future
+connectors without hardcoding any one user's source stack.
 
 Barn Owl must add a durable per-user source registry, a clear Settings surface,
 source health/status tracking, authority/best-used-for metadata, and a source
 adapter foundation that supports future orchestrated enrichment. The design must
 preserve Barn Owl's automation-first direction: high-confidence enrichment may
 act automatically, but evidence, provenance, user scope, confidence, and failure
-states must remain inspectable. Collin OS should be representable as Collin's
-configured source, not as a universal default.
+states must remain inspectable. Private sources should be representable as
+owner-configured sources, not as universal defaults.
 
 The work should include:
 
@@ -39,7 +39,7 @@ tests.
 Score ready only when all are true:
 
 1. **Per-user registry**: enrichment sources are stored per user/owner scope;
-   Collin OS can exist for Collin without appearing for unrelated users.
+   owner-private sources can exist without appearing for unrelated users.
 2. **Source model**: entries support stable id, display name, source type,
    enabled state, scope, authority/best-used-for metadata, config payload, and
    timestamps.
@@ -49,8 +49,8 @@ Score ready only when all are true:
    configured sources clearly and supports at least safe enable/disable plus
    status inspection without misleading global assumptions.
 5. **Extensibility**: the implementation introduces a reusable source-adapter or
-   source-contract foundation rather than hardcoding Collin OS behavior into
-   Barn Owl's core enrichment logic.
+   source-contract foundation rather than hardcoding one user's private system
+   into Barn Owl's core enrichment logic.
 6. **Control plane**: CLI/control APIs can inspect configured sources and make
    the core registry manageable without GUI-only dependence where practical.
 7. **Privacy/provenance**: scope and source identity are preserved so private,

@@ -17,6 +17,25 @@ func defaultCaptureIncludesMicAndSystemAudio() {
 }
 
 @Test
+@MainActor
+func appModelKeepsMicrophoneAndSystemAudioSelectionIndependent() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+
+    model.setMicrophoneCaptureEnabled(false)
+    #expect(!model.selectedAudioSources.capturesMicrophone)
+    #expect(model.selectedAudioSources.capturesSystemAudio)
+
+    model.setSystemAudioCaptureEnabled(false)
+    #expect(!model.selectedAudioSources.capturesMicrophone)
+    #expect(!model.selectedAudioSources.capturesSystemAudio)
+
+    model.setMicrophoneCaptureEnabled(true)
+    #expect(model.selectedAudioSources.capturesMicrophone)
+    #expect(!model.selectedAudioSources.capturesSystemAudio)
+}
+
+@Test
 func finishingSessionSetsEndDateWithoutChangingIdentity() {
     let session = RecordingSession(
         id: .init(uuidString: "00000000-0000-0000-0000-000000000001")!,
@@ -453,6 +472,20 @@ func errorFormatterUsesLocalizedErrorDescriptions() {
 }
 
 @Test
+func errorFormatterMapsDatabaseFailuresToActionableCopy() {
+    let error = BarnOwlDatabaseError.stepFailed(
+        sql: "ALTER TABLE knowledge_entities ADD COLUMN lifecycle_status TEXT NOT NULL DEFAULT 'active';",
+        message: "duplicate column name: lifecycle_status"
+    )
+    let message = BarnOwlErrorFormatter.message(for: error)
+
+    #expect(message.contains("local database"))
+    #expect(message.contains("Restart the app"))
+    #expect(!message.contains("ALTER TABLE"))
+    #expect(!message.contains("duplicate column"))
+}
+
+@Test
 func errorFormatterMapsAudioCapturePermissionErrorsToActionableCopy() {
     let message = BarnOwlErrorFormatter.message(for: AudioCaptureError.permissionDenied)
 
@@ -536,7 +569,7 @@ func controlResponsesRedactUserVisibleErrorFields() async throws {
 @MainActor
 func controlEnrichmentSourcesManageUserScopedRegistry() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
 
     let initial = await model.controlEnrichmentSourcesListResponse()
     #expect(initial.enrichmentSources?.map(\.id).contains("barnowl_memory") == true)
@@ -546,43 +579,43 @@ func controlEnrichmentSourcesManageUserScopedRegistry() async throws {
 
     let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         bestUsedFor: ["projects", "people"],
         authState: "configured",
         healthStatus: "ready"
     ))
     #expect(created.ok)
-    #expect(created.enrichmentSources?.first?.id == "collin_os")
+    #expect(created.enrichmentSources?.first?.id == "owner_private_source")
     #expect(created.enrichmentSources?.first?.scope == "personal_private")
 
-    let disabled = await model.controlEnrichmentSourceEnabledResponse(sourceID: "collin_os", enabled: false)
+    let disabled = await model.controlEnrichmentSourceEnabledResponse(sourceID: "owner_private_source", enabled: false)
     #expect(disabled.enrichmentSources?.first?.enabled == false)
     #expect(disabled.enrichmentSources?.first?.healthStatus == "disabled")
 
     let teammateModel = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "teammate")
     let teammateList = await teammateModel.controlEnrichmentSourcesListResponse()
-    #expect(teammateList.enrichmentSources?.map(\.id).contains("collin_os") == false)
+    #expect(teammateList.enrichmentSources?.map(\.id).contains("owner_private_source") == false)
 }
 
 @Test
 @MainActor
 func controlEnrichmentSourcePresetsConfigureConnectorBackedSourcesAndHealthChecks() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
 
     let presets = model.controlEnrichmentSourcePresetsListResponse()
     let setup = await model.controlEnrichmentSourceSetupPresetResponse(BarnOwlControlCommand(
         command: .enrichmentSourceSetupPreset,
-        presetID: "google_drive_reference",
         sourceID: "drive_reference",
+        presetID: "google_drive_reference",
         sourceDisplayName: "Drive Knowledge"
     ))
     let health = await model.controlEnrichmentSourceHealthCheckResponse(sourceID: "drive_reference")
-    let stored = try #require(await database.enrichmentSource(ownerID: "collin", id: "drive_reference"))
+    let stored = try #require(await database.enrichmentSource(ownerID: "owner", id: "drive_reference"))
 
     #expect(presets.enrichmentSourcePresets?.map(\.id).contains("google_drive_reference") == true)
     #expect(setup.enrichmentSources?.first?.connectorReference == "google-drive")
@@ -597,11 +630,11 @@ func controlEnrichmentSourcePresetsConfigureConnectorBackedSourcesAndHealthCheck
 @MainActor
 func controlKnowledgeEnrichUsesActivePolicyPackThresholds() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
-    try await database.seedDefaultEnrichmentSources(ownerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
+    try await database.seedDefaultEnrichmentSources(ownerID: "owner")
     try await database.upsertEnrichmentPolicyPack(BarnOwlEnrichmentPolicyPackRecord(
         id: "single_strong_internal_evidence",
-        ownerID: "collin",
+        ownerID: "owner",
         displayName: "Single strong internal evidence",
         description: "Used only in tests to prove orchestration reads active user policy.",
         minimumSupportingEvidenceCount: 1,
@@ -635,7 +668,7 @@ func controlKnowledgeEnrichUsesActivePolicyPackThresholds() async throws {
 
     let response = await model.controlKnowledgeEnrichResponse(concept: "Aster", limit: 8)
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Aster"
     ))
@@ -648,7 +681,7 @@ func controlKnowledgeEnrichUsesActivePolicyPackThresholds() async throws {
 @MainActor
 func controlPlaneManagesAuthorityProfilesPolicyPacksAndKnowledgeSuppression() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     let profileResponse = await model.controlEnrichmentAuthorityProfileUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentAuthorityProfileUpsert,
         authorityProfileID: "workspace_reference",
@@ -660,12 +693,12 @@ func controlPlaneManagesAuthorityProfilesPolicyPacksAndKnowledgeSuppression() as
     ))
     let policyResponse = await model.controlEnrichmentPolicyPackUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentPolicyPackUpsert,
+        enabled: false,
         policyPackID: "strict_workspace",
         displayName: "Strict workspace",
         description: "Require three evidence items.",
         minimumSupportingEvidenceCount: 3,
-        minimumIndependentSourceCountAfterConflictMemory: 3,
-        enabled: false
+        minimumIndependentSourceCountAfterConflictMemory: 3
     ))
     let activated = await model.controlEnrichmentPolicyPackActivateResponse(policyPackID: "strict_workspace")
 
@@ -674,14 +707,14 @@ func controlPlaneManagesAuthorityProfilesPolicyPacksAndKnowledgeSuppression() as
     #expect(activated.enrichmentPolicyPacks?.first(where: { $0.id == "strict_workspace" })?.active == true)
 
     try await database.upsertKnowledgeEntity(BarnOwlKnowledgeEntityRecord(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Aster",
         summary: "Workspace project.",
         confidence: 0.91
     ))
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Aster"
     ))
@@ -706,7 +739,7 @@ func controlPlaneManagesAuthorityProfilesPolicyPacksAndKnowledgeSuppression() as
 @MainActor
 func controlKnowledgeEnrichRecordsSupportedMemoryEvidenceForRecurringConcept() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E101")!,
         title: "Rosalind Planning",
@@ -720,7 +753,7 @@ func controlKnowledgeEnrichRecordsSupportedMemoryEvidenceForRecurringConcept() a
 
     let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
-    let storedJobs = try await database.enrichmentJobs(ownerID: "collin")
+    let storedJobs = try await database.enrichmentJobs(ownerID: "owner")
     let storedEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
 
     #expect(response.ok)
@@ -738,7 +771,7 @@ func controlKnowledgeEnrichRecordsSupportedMemoryEvidenceForRecurringConcept() a
 @MainActor
 func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E201")!,
         title: "Rosalind Launch",
@@ -752,12 +785,12 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
 
     let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         bestUsedFor: ["projects", "internal terminology"],
         configJSON: """
         {
@@ -768,7 +801,7 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
               "canonicalName": "Rosalind",
               "summary": "Internal launch workstream referenced in account, product, and pricing discussions.",
               "confidence": 0.97,
-              "citations": ["collin-os:projects/rosalind"],
+              "citations": ["owner-private:projects/rosalind"],
               "freshness": "current"
             }
           ]
@@ -783,7 +816,7 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
     let job = try #require(response.enrichmentJobs?.first)
     let sourceIDs = Set(response.enrichmentEvidence?.map(\.sourceID) ?? [])
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
@@ -791,9 +824,9 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
     let meetingLinks = try await database.knowledgeMeetingLinks(entityID: entity.id)
 
     #expect(job.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
-    #expect(Set(job.selectedSources).isSuperset(of: ["barnowl_memory", "collin_os"]))
+    #expect(Set(job.selectedSources).isSuperset(of: ["barnowl_memory", "owner_private_source"]))
     #expect(sourceIDs.contains("barnowl_memory"))
-    #expect(sourceIDs.contains("collin_os"))
+    #expect(sourceIDs.contains("owner_private_source"))
     #expect(entity.summary?.contains("Internal launch workstream") == true)
     #expect(Set(aliases.map(\.alias)) == ["Rosalind"])
     #expect(Set(meetingLinks.map(\.meetingID)) == Set([
@@ -806,7 +839,7 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredInternalReferenceEvidence(
 @MainActor
 func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     try await database.upsertMeetingState(makeQuickCommandMeetingState(
         id: UUID(uuidString: "00000000-0000-0000-0000-00000000E211")!,
         title: "Moderna Account Review",
@@ -846,7 +879,7 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() 
     let job = try #require(response.enrichmentJobs?.first)
     let evidenceSourceIDs = Set(response.enrichmentEvidence?.map(\.sourceID) ?? [])
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "company",
         canonicalName: "Moderna"
     ))
@@ -861,7 +894,7 @@ func controlKnowledgeEnrichCombinesMemoryAndConfiguredPublicReferenceEvidence() 
 @MainActor
 func controlKnowledgeEnrichHoldsPublicOnlyPrivateTruth() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     let updatedPublicSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
         sourceID: "public_web",
@@ -899,7 +932,7 @@ func controlKnowledgeEnrichHoldsPublicOnlyPrivateTruth() async throws {
 
     let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
-    let entity = try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind")
+    let entity = try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind")
 
     #expect(job.status == BarnOwlEnrichmentJobStatus.heldInsufficientEvidence.rawValue)
     #expect(job.rationale?.contains("public-only evidence") == true)
@@ -910,15 +943,15 @@ func controlKnowledgeEnrichHoldsPublicOnlyPrivateTruth() async throws {
 @MainActor
 func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     let projectSource = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -927,7 +960,7 @@ func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async th
               "candidateKind": "project",
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
-              "citations": ["collin-os:projects/rosalind"]
+              "citations": ["owner-private:projects/rosalind"]
             }
           ]
         }
@@ -965,32 +998,32 @@ func controlKnowledgeEnrichHoldsConflictingConfiguredInternalEvidence() async th
     let response = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     let job = try #require(response.enrichmentJobs?.first)
     let storedEvidence = try await database.enrichmentJobEvidence(jobID: job.id)
-    let conflicts = try await database.enrichmentConflicts(ownerID: "collin")
-    let collinUsefulness = try #require(await database.enrichmentSourceUsefulness(ownerID: "collin", sourceID: "collin_os"))
+    let conflicts = try await database.enrichmentConflicts(ownerID: "owner")
+    let ownerPrivateUsefulness = try #require(await database.enrichmentSourceUsefulness(ownerID: "owner", sourceID: "owner_private_source"))
 
     #expect(job.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
     #expect(job.rationale?.contains("blocked") == true)
     #expect(storedEvidence.count == 2)
     #expect(storedEvidence.filter(\.acceptedByAdjudicator).isEmpty)
     #expect(conflicts.first?.jobID == job.id)
-    #expect(Set(conflicts.first?.conflictingSourceIDs ?? []) == Set(["collin_os", "workspace_glossary"]))
-    #expect(collinUsefulness.attempts == 1)
-    #expect(collinUsefulness.conflictingJobs == 1)
+    #expect(Set(conflicts.first?.conflictingSourceIDs ?? []) == Set(["owner_private_source", "workspace_glossary"]))
+    #expect(ownerPrivateUsefulness.attempts == 1)
+    #expect(ownerPrivateUsefulness.conflictingJobs == 1)
 }
 
 @Test
 @MainActor
 func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -999,7 +1032,7 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
               "candidateKind": "project",
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
-              "citations": ["collin-os:projects/rosalind"]
+              "citations": ["owner-private:projects/rosalind"]
             }
           ]
         }
@@ -1036,12 +1069,12 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
 
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -1050,14 +1083,14 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
               "candidateKind": "project",
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
-              "citations": ["collin-os:projects/rosalind:a"]
+              "citations": ["owner-private:projects/rosalind:a"]
             },
             {
               "matchTerms": ["Rosalind"],
               "candidateKind": "project",
               "canonicalName": "Rosalind",
-              "summary": "Same internal project corroborated by a second Collin OS record.",
-              "citations": ["collin-os:projects/rosalind:b"]
+              "summary": "Same internal project corroborated by a second Private Reference Source record.",
+              "citations": ["owner-private:projects/rosalind:b"]
             }
           ]
         }
@@ -1071,7 +1104,7 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
     let followUpJob = try #require(followUp.enrichmentJobs?.first)
     let conceptHistory = try #require(followUp.enrichmentConceptHistories?.first)
     let entity = try await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     )
@@ -1088,15 +1121,15 @@ func controlKnowledgeEnrichConflictMemoryBlocksLaterSingleSourceAutoPersist() as
 @MainActor
 func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurableKnowledge() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -1106,7 +1139,7 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
               "confidence": 0.96,
-              "citations": ["collin-os:projects/rosalind:a"]
+              "citations": ["owner-private:projects/rosalind:a"]
             },
             {
               "matchTerms": ["Rosalind"],
@@ -1114,7 +1147,7 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
               "canonicalName": "Rosalind",
               "summary": "Same project from a second private record.",
               "confidence": 0.94,
-              "citations": ["collin-os:projects/rosalind:b"]
+              "citations": ["owner-private:projects/rosalind:b"]
             }
           ]
         }
@@ -1126,7 +1159,7 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
     let accepted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     #expect(accepted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
@@ -1160,7 +1193,7 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
 
     let conflicted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     #expect(conflicted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
-    let decayed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    let decayed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     #expect(decayed.lifecycleStatus == .active)
     #expect(abs(decayed.confidence - max(0.05, originalConfidence - 0.15)) < 0.0001)
 
@@ -1193,25 +1226,25 @@ func controlKnowledgeEnrichPrivateConflictDecaysThenContradictionSuppressesDurab
 
     let reversed = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     #expect(reversed.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
-    let suppressed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    let suppressed = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     #expect(suppressed.lifecycleStatus == .suppressed)
     #expect(suppressed.lifecycleReason?.contains("Automatically suppressed") == true)
-    #expect(try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind") == nil)
+    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind") == nil)
 }
 
 @Test
 @MainActor
 func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurableKnowledge() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -1221,7 +1254,7 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
               "confidence": 0.96,
-              "citations": ["collin-os:projects/rosalind:a"]
+              "citations": ["owner-private:projects/rosalind:a"]
             },
             {
               "matchTerms": ["Rosalind"],
@@ -1229,7 +1262,7 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
               "canonicalName": "Rosalind",
               "summary": "Same project from a second private record.",
               "confidence": 0.94,
-              "citations": ["collin-os:projects/rosalind:b"]
+              "citations": ["owner-private:projects/rosalind:b"]
             }
           ]
         }
@@ -1240,12 +1273,12 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
     let accepted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     #expect(accepted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.supportedCandidate.rawValue)
     let entity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
 
-    _ = await model.controlEnrichmentSourceEnabledResponse(sourceID: "collin_os", enabled: false)
+    _ = await model.controlEnrichmentSourceEnabledResponse(sourceID: "owner_private_source", enabled: false)
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
         sourceID: "public_reference",
@@ -1275,24 +1308,24 @@ func controlKnowledgeEnrichPublicOnlyNegativeEvidenceDoesNotSuppressPrivateDurab
 
     let contradicted = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     #expect(contradicted.enrichmentJobs?.first?.status == BarnOwlEnrichmentJobStatus.heldConflictingEvidence.rawValue)
-    let preserved = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "collin"))
+    let preserved = try #require(await database.knowledgeEntity(id: entity.id, ownerID: "owner"))
     #expect(preserved.lifecycleStatus == .active)
-    #expect(try await database.knowledgeEntity(ownerID: "collin", kind: "project", canonicalName: "Rosalind") != nil)
+    #expect(try await database.knowledgeEntity(ownerID: "owner", kind: "project", canonicalName: "Rosalind") != nil)
 }
 
 @Test
 @MainActor
 func controlKnowledgeJobsListIncludesRecentConceptHistory() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     _ = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -1301,14 +1334,14 @@ func controlKnowledgeJobsListIncludesRecentConceptHistory() async throws {
               "candidateKind": "project",
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
-              "citations": ["collin-os:projects/rosalind:a"]
+              "citations": ["owner-private:projects/rosalind:a"]
             },
             {
               "matchTerms": ["Rosalind"],
               "candidateKind": "project",
               "canonicalName": "Rosalind",
               "summary": "Internal project duplicate evidence.",
-              "citations": ["collin-os:projects/rosalind:b"]
+              "citations": ["owner-private:projects/rosalind:b"]
             }
           ]
         }
@@ -1331,15 +1364,15 @@ func controlKnowledgeJobsListIncludesRecentConceptHistory() async throws {
 @MainActor
 func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async throws {
     let database = try BarnOwlDatabase.inMemory()
-    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "collin")
+    let model = try makeQuickCommandTestModel(database: database, enrichmentOwnerID: "owner")
     let created = await model.controlEnrichmentSourceUpsertResponse(BarnOwlControlCommand(
         command: .enrichmentSourceUpsert,
-        sourceID: "collin_os",
-        sourceDisplayName: "Collin OS",
+        sourceID: "owner_private_source",
+        sourceDisplayName: "Private Reference Source",
         sourceType: "internal_memory",
         enabled: true,
         scope: "personal_private",
-        authorityProfile: "collin_internal_reference",
+        authorityProfile: "private_internal_reference",
         configJSON: """
         {
           "entries": [
@@ -1349,7 +1382,7 @@ func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async thro
               "canonicalName": "Rosalind",
               "summary": "Internal project.",
               "confidence": 0.82,
-              "citations": ["collin-os:projects/rosalind:a"]
+              "citations": ["owner-private:projects/rosalind:a"]
             },
             {
               "matchTerms": ["Rosalind"],
@@ -1357,7 +1390,7 @@ func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async thro
               "canonicalName": "Rosalind",
               "summary": "Internal project duplicate evidence.",
               "confidence": 0.80,
-              "citations": ["collin-os:projects/rosalind:b"]
+              "citations": ["owner-private:projects/rosalind:b"]
             }
           ]
         }
@@ -1369,13 +1402,13 @@ func controlKnowledgeEnrichRepeatedSupportRaisesPersistedConfidence() async thro
 
     let first = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     let firstEntity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
     let second = await model.controlKnowledgeEnrichResponse(concept: "Rosalind", limit: 8)
     let secondEntity = try #require(await database.knowledgeEntity(
-        ownerID: "collin",
+        ownerID: "owner",
         kind: "project",
         canonicalName: "Rosalind"
     ))
@@ -1431,99 +1464,6 @@ func publicReferenceResearchAdapterNormalizesLiveCompanyEvidence() async throws 
     #expect(evidence.canonicalName == "Moderna")
     #expect(evidence.scope == .publicReference)
     #expect(evidence.citations == ["https://www.wikidata.org/wiki/Q899"])
-}
-
-@Test
-func collinOSReferenceAdapterNormalizesLiveRecallEvidence() async throws {
-    let runner = CapturingCollinOSCommandRunner(
-        stdout: """
-        {
-          "status": "read",
-          "response": {
-            "answer_packet": {
-              "evidence": [
-                {
-                  "kind": "project",
-                  "title": "Rosalind",
-                  "summary": "Internal launch workstream for Life Sciences."
-                }
-              ]
-            },
-            "recall_digest": {
-              "source_health_state": "fresh"
-            },
-            "trust_summary": {
-              "posture": "ready",
-              "summary": "Scoped internal recall is source-backed."
-            },
-            "operator_decision": {
-              "downstream_reuse_allowed": true
-            }
-          }
-        }
-        """
-    )
-    let adapter = BarnOwlCollinOSReferenceAdapter(
-        sourceID: "collin_os",
-        commandRunner: runner
-    )
-    let source = BarnOwlEnrichmentSourceDescriptor(
-        id: "collin_os",
-        displayName: "Collin OS",
-        sourceType: "internal_memory",
-        scope: .personalPrivate,
-        authorityProfile: "collin_internal_reference"
-    )
-
-    let result = try await adapter.enrich(
-        request: BarnOwlEnrichmentSourceRequest(
-            conceptKey: "Rosalind",
-            limit: 3,
-            requestedAt: Date(timeIntervalSince1970: 1_800_000_200)
-        ),
-        source: source
-    )
-    let arguments = try #require(await runner.latestArguments)
-    let evidence = try #require(result.evidence.first)
-
-    #expect(arguments.contains("recall"))
-    #expect(arguments.contains("Rosalind"))
-    #expect(evidence.candidateKind == "project")
-    #expect(evidence.canonicalName == "Rosalind")
-    #expect(evidence.summary.contains("Internal launch workstream"))
-    #expect(evidence.scope == .personalPrivate)
-    #expect(result.caveats.isEmpty)
-}
-
-@Test
-func collinOSReferenceAdapterPreservesBlockedAuthAsCaveat() async throws {
-    let runner = CapturingCollinOSCommandRunner(
-        stdout: """
-        {
-          "status": "blocked",
-          "blocker": "missing environment variable COLLIN_CONTEXT_WRITE_TOKEN or authenticated user context"
-        }
-        """
-    )
-    let adapter = BarnOwlCollinOSReferenceAdapter(
-        sourceID: "collin_os",
-        commandRunner: runner
-    )
-    let source = BarnOwlEnrichmentSourceDescriptor(
-        id: "collin_os",
-        displayName: "Collin OS",
-        sourceType: "internal_memory",
-        scope: .personalPrivate,
-        authorityProfile: "collin_internal_reference"
-    )
-
-    let result = try await adapter.enrich(
-        request: BarnOwlEnrichmentSourceRequest(conceptKey: "Rosalind", limit: 3),
-        source: source
-    )
-
-    #expect(result.evidence.isEmpty)
-    #expect(result.caveats.first?.contains("missing environment variable") == true)
 }
 
 @Test
@@ -1589,28 +1529,6 @@ private actor CapturingReferenceTransport: OpenAIHTTPTransport {
             headerFields: ["Content-Type": "application/json"]
         )!
         return (body, response)
-    }
-}
-
-private actor CapturingCollinOSCommandRunner: BarnOwlCommandRunning {
-    private let stdout: Data
-    private(set) var latestArguments: [String]?
-
-    init(stdout: String) {
-        self.stdout = Data(stdout.utf8)
-    }
-
-    func run(
-        executableURL: URL,
-        arguments: [String],
-        environment: [String: String]?
-    ) async throws -> BarnOwlCommandResult {
-        latestArguments = arguments
-        return BarnOwlCommandResult(
-            standardOutput: stdout,
-            standardError: Data(),
-            terminationStatus: 0
-        )
     }
 }
 
@@ -2232,6 +2150,309 @@ func quickCommandAskNotesAnswersFromSQLiteMeetingState() async throws {
     #expect(response.activeMeetingID == meetingID)
     #expect(response.answer?.contains("Use annual pricing for Acme.") == true)
     #expect(response.citations?.first?.id == meetingID.uuidString)
+}
+
+@Test
+@MainActor
+func meetingEvidenceExportIncludesTranscriptSummaryStructuredOutputsAndSegmentsWhenAllowed() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000706")!
+    var state = makeQuickCommandMeetingState(
+        id: meetingID,
+        title: "Evidence Export",
+        summary: MeetingSummary(
+            overview: "Reviewed Barn Owl's external export contract.",
+            decisions: ["Export transcript and summary under policy."],
+            actionItems: ["Add one-shot evidence command."],
+            openQuestions: ["When should tombstones ship?"]
+        )
+    )
+    state.transcriptSegments = [
+        BarnOwlTranscriptSegmentRecord(
+            meetingID: meetingID,
+            sequence: 0,
+            speakerLabel: "Dana",
+            text: "Export transcript and summary under policy.",
+            startTime: 0,
+            endTime: 4,
+            confidence: 0.98
+        )
+    ]
+    try await database.upsertMeetingState(state)
+
+    let response = await model.controlMeetingEvidenceResponse(
+        meetingID: meetingID,
+        exportPolicy: BarnOwlMeetingEvidenceContentPolicy.structuredOutputsTranscriptAndPointers.rawValue,
+        includeTranscriptSegments: true
+    )
+    let evidence = try #require(response.meetingEvidence)
+
+    #expect(response.ok)
+    #expect(evidence.meeting.stableKey == "barnowl:meeting:\(meetingID.uuidString)")
+    #expect(evidence.artifacts.transcript.text?.contains("Export transcript and summary") == true)
+    #expect(evidence.derived.summary?.overview.contains("external export contract") == true)
+    #expect(evidence.derived.decisions == ["Export transcript and summary under policy."])
+    #expect(evidence.derived.actionItems == ["Add one-shot evidence command."])
+    #expect(evidence.derived.openQuestions == ["When should tombstones ship?"])
+    #expect(evidence.derived.meetingFacts?.participants == ["Dana"])
+    #expect(evidence.transcriptSegments?.count == 1)
+    #expect(evidence.processing.ingestReadiness == .ready)
+}
+
+@Test
+@MainActor
+func meetingEvidenceExportMetadataOnlyPolicyWithholdsTranscriptAndStructuredOutputs() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000707")!
+    var state = makeQuickCommandMeetingState(
+        id: meetingID,
+        title: "Metadata Export",
+        summary: MeetingSummary(
+            overview: "Summary should be withheld in metadata-only mode.",
+            decisions: ["Withhold transcript text."],
+            actionItems: ["Keep pointers."],
+            openQuestions: []
+        )
+    )
+    state.transcriptSegments = [
+        BarnOwlTranscriptSegmentRecord(
+            meetingID: meetingID,
+            sequence: 0,
+            speakerLabel: "Dana",
+            text: "This raw transcript should not copy out.",
+            startTime: 0,
+            endTime: 2
+        )
+    ]
+    try await database.upsertMeetingState(state)
+
+    let response = await model.controlMeetingEvidenceResponse(
+        meetingID: meetingID,
+        exportPolicy: BarnOwlMeetingEvidenceContentPolicy.metadataOnly.rawValue,
+        includeTranscriptSegments: true
+    )
+    let evidence = try #require(response.meetingEvidence)
+
+    #expect(response.ok)
+    #expect(evidence.artifacts.transcript.pointer.hasSuffix("#transcript"))
+    #expect(evidence.artifacts.transcript.text == nil)
+    #expect(evidence.derived.summary == nil)
+    #expect(evidence.derived.decisions.isEmpty)
+    #expect(evidence.derived.actionItems.isEmpty)
+    #expect(evidence.derived.meetingFacts == nil)
+    #expect(evidence.transcriptSegments == nil)
+}
+
+@Test
+@MainActor
+func meetingEvidenceTimestampBatchReturnsDeterministicInclusiveSyncWindow() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let oldDate = Date(timeIntervalSince1970: 1_800_000_100)
+    let since = Date(timeIntervalSince1970: 1_800_000_150)
+    let sharedUpdatedAt = Date(timeIntervalSince1970: 1_800_000_200)
+
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000710")!,
+        title: "Before Window",
+        startedAt: oldDate
+    ))
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000711")!,
+        title: "Window Alpha",
+        startedAt: sharedUpdatedAt
+    ))
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000712")!,
+        title: "Window Beta",
+        startedAt: sharedUpdatedAt
+    ))
+
+    let response = await model.controlMeetingEvidenceBatchResponse(
+        since: ISO8601DateFormatter().string(from: since),
+        limit: 10,
+        exportPolicy: BarnOwlMeetingEvidenceContentPolicy.metadataOnly.rawValue
+    )
+    let batch = try #require(response.meetingEvidenceBatch)
+
+    #expect(response.ok)
+    #expect(batch.sync.mode == .timestamp)
+    #expect(batch.sync.requestedSince == since)
+    #expect(batch.sync.returnedCount == 2)
+    #expect(batch.sync.hasMore == false)
+    #expect(batch.sync.nextSince == sharedUpdatedAt)
+    #expect(batch.sync.nextCursor != nil)
+    #expect(batch.items.map(\.meeting.title) == ["Window Alpha", "Window Beta"])
+    #expect(batch.items.allSatisfy { $0.derived.summary == nil })
+    #expect(batch.items.allSatisfy { $0.artifacts.transcript.text == nil })
+}
+
+@Test
+@MainActor
+func meetingEvidenceCursorBatchContinuesStrictlyAfterTimestampPage() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let since = Date(timeIntervalSince1970: 1_800_000_150)
+    let sharedUpdatedAt = Date(timeIntervalSince1970: 1_800_000_200)
+
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000721")!,
+        title: "Cursor Alpha",
+        startedAt: sharedUpdatedAt
+    ))
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000722")!,
+        title: "Cursor Beta",
+        startedAt: sharedUpdatedAt
+    ))
+
+    let firstResponse = await model.controlMeetingEvidenceBatchResponse(
+        since: ISO8601DateFormatter().string(from: since),
+        limit: 1,
+        exportPolicy: BarnOwlMeetingEvidenceContentPolicy.metadataOnly.rawValue
+    )
+    let firstBatch = try #require(firstResponse.meetingEvidenceBatch)
+    let cursor = try #require(firstBatch.sync.nextCursor)
+
+    let secondResponse = await model.controlMeetingEvidenceBatchResponse(
+        since: nil,
+        cursor: cursor,
+        limit: 10,
+        exportPolicy: BarnOwlMeetingEvidenceContentPolicy.metadataOnly.rawValue
+    )
+    let secondBatch = try #require(secondResponse.meetingEvidenceBatch)
+
+    #expect(firstResponse.ok)
+    #expect(firstBatch.sync.hasMore == true)
+    #expect(firstBatch.items.map(\.meeting.title) == ["Cursor Alpha"])
+    #expect(secondResponse.ok)
+    #expect(secondBatch.sync.mode == .cursor)
+    #expect(secondBatch.sync.requestedCursor == cursor)
+    #expect(secondBatch.sync.returnedCount == 1)
+    #expect(secondBatch.sync.hasMore == false)
+    #expect(secondBatch.items.map(\.meeting.title) == ["Cursor Beta"])
+}
+
+@Test
+@MainActor
+func meetingExportEventTimestampBatchReturnsDeterministicInclusiveSyncWindow() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let since = Date(timeIntervalSince1970: 1_800_000_150)
+    let sharedOccurredAt = Date(timeIntervalSince1970: 1_800_000_200)
+
+    try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000731")!,
+        type: .deleted,
+        meetingID: UUID(uuidString: "00000000-0000-0000-0000-000000000741")!,
+        meetingStableKey: "barnowl:meeting:00000000-0000-0000-0000-000000000741",
+        occurredAt: sharedOccurredAt,
+        tombstoneReason: "meeting_deleted"
+    ))
+    try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000732")!,
+        type: .purged,
+        meetingID: UUID(uuidString: "00000000-0000-0000-0000-000000000742")!,
+        meetingStableKey: "barnowl:meeting:00000000-0000-0000-0000-000000000742",
+        occurredAt: sharedOccurredAt,
+        tombstoneReason: "temporary_audio_purged"
+    ))
+
+    let response = await model.controlMeetingExportEventBatchResponse(
+        since: ISO8601DateFormatter().string(from: since),
+        limit: 10
+    )
+    let batch = try #require(response.meetingExportEventBatch)
+
+    #expect(response.ok)
+    #expect(batch.sync.mode == .timestamp)
+    #expect(batch.sync.requestedSince == since)
+    #expect(batch.sync.returnedCount == 2)
+    #expect(batch.sync.hasMore == false)
+    #expect(batch.sync.nextSince == sharedOccurredAt)
+    #expect(batch.sync.nextCursor != nil)
+    #expect(batch.items.map(\.type) == [.deleted, .purged])
+    #expect(batch.items.map(\.tombstoneReason) == ["meeting_deleted", "temporary_audio_purged"])
+}
+
+@Test
+@MainActor
+func meetingExportEventCursorBatchContinuesStrictlyAfterTimestampPage() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let since = Date(timeIntervalSince1970: 1_800_000_150)
+    let sharedOccurredAt = Date(timeIntervalSince1970: 1_800_000_200)
+
+    try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000751")!,
+        type: .deleted,
+        meetingID: UUID(uuidString: "00000000-0000-0000-0000-000000000761")!,
+        meetingStableKey: "barnowl:meeting:00000000-0000-0000-0000-000000000761",
+        occurredAt: sharedOccurredAt,
+        tombstoneReason: "meeting_deleted"
+    ))
+    try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000752")!,
+        type: .purged,
+        meetingID: UUID(uuidString: "00000000-0000-0000-0000-000000000762")!,
+        meetingStableKey: "barnowl:meeting:00000000-0000-0000-0000-000000000762",
+        occurredAt: sharedOccurredAt,
+        tombstoneReason: "temporary_audio_purged"
+    ))
+
+    let firstResponse = await model.controlMeetingExportEventBatchResponse(
+        since: ISO8601DateFormatter().string(from: since),
+        limit: 1
+    )
+    let firstBatch = try #require(firstResponse.meetingExportEventBatch)
+    let cursor = try #require(firstBatch.sync.nextCursor)
+
+    let secondResponse = await model.controlMeetingExportEventBatchResponse(
+        since: nil,
+        cursor: cursor,
+        limit: 10
+    )
+    let secondBatch = try #require(secondResponse.meetingExportEventBatch)
+
+    #expect(firstResponse.ok)
+    #expect(firstBatch.sync.hasMore == true)
+    #expect(firstBatch.items.map(\.type) == [.deleted])
+    #expect(secondResponse.ok)
+    #expect(secondBatch.sync.mode == .cursor)
+    #expect(secondBatch.sync.requestedCursor == cursor)
+    #expect(secondBatch.sync.returnedCount == 1)
+    #expect(secondBatch.sync.hasMore == false)
+    #expect(secondBatch.items.map(\.type) == [.purged])
+}
+
+@Test
+@MainActor
+func renamingMeetingRecordsUpdatedMeetingExportEventWithEvidenceSnapshot() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000771")!
+    let since = Date(timeIntervalSince1970: 1_800_000_100)
+
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: meetingID,
+        title: "Original Title",
+        startedAt: since.addingTimeInterval(30)
+    ))
+
+    let renamed = await model.setMeetingTitle("Renamed Export Event", meetingID: meetingID)
+    let response = await model.controlMeetingExportEventBatchResponse(
+        since: ISO8601DateFormatter().string(from: since),
+        limit: 10
+    )
+    let batch = try #require(response.meetingExportEventBatch)
+    let updatedEvent = try #require(batch.items.first { $0.type == .updated && $0.meetingID == meetingID })
+
+    #expect(renamed)
+    #expect(response.ok)
+    #expect(updatedEvent.meetingEvidence?.meeting.title == "Renamed Export Event")
+    #expect(updatedEvent.meetingEvidence?.meeting.stableKey == "barnowl:meeting:\(meetingID.uuidString)")
 }
 
 @Test

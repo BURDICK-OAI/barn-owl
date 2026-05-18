@@ -576,6 +576,12 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
                 metadataJSON: #"{"source":"summary-repair"}"#
             ))
         }
+        try await database.recordMeetingExportEvent(BarnOwlMeetingExportEventRecord(
+            type: .summaryRepaired,
+            meetingID: meetingID,
+            meetingStableKey: "barnowl:meeting:\(meetingID.uuidString)",
+            occurredAt: now
+        ))
 
         await progress?(MeetingProcessingProgress(
             message: "Repaired meeting summary.",
