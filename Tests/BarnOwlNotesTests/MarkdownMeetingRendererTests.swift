@@ -165,6 +165,37 @@ func rendererShowsAcceptedContextOnceWhenFactsCarryTheSameContext() {
 }
 
 @Test
+func rendererDoesNotRecreateFlattenedContextAfterStructuredFactsExtraction() {
+    let renderer = MarkdownMeetingRenderer()
+    let context = [
+        "Calendar event: OpenAI <> Moderna",
+        "Known company: Moderna. Durable account reference."
+    ]
+    let markdown = renderer.render(
+        session: makeSession(title: "OpenAI <> Moderna"),
+        segments: [],
+        summary: MeetingSummary(overview: "Reviewed rollout coordination."),
+        context: context,
+        meetingFacts: MeetingFacts(
+            title: "OpenAI <> Moderna",
+            meetingType: "Customer Workshop",
+            organizations: ["Moderna"],
+            additionalContext: context,
+            confidence: MeetingFactsConfidence(meetingType: 0.92)
+        )
+    )
+
+    let customerContext = markdown
+        .components(separatedBy: "## Customer Context")
+        .last?
+        .components(separatedBy: "## Transcript")
+        .first ?? ""
+    #expect(customerContext.components(separatedBy: context[0]).count == 2)
+    #expect(customerContext.components(separatedBy: context[1]).count == 2)
+    #expect(!customerContext.contains("\(context[0]) \(context[1])"))
+}
+
+@Test
 func rendererOmitsLowValueFactsAndContextBoilerplate() {
     let renderer = MarkdownMeetingRenderer()
     let facts = MeetingFacts(

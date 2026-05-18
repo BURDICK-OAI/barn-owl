@@ -3130,6 +3130,47 @@ func meetingFactsExtractorKeepsAcceptedCalendarOrganizationAheadOfTranscriptInfe
 }
 
 @Test
+func meetingFactsExtractorDoesNotPromoteDurableKnowledgeExplanationIntoCustomerFacts() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: """
+        Speaker: We discussed connectors, implementation risk, and the Moderna partnership.
+        Speaker: Salesforce was only mentioned in a historical anecdote, not as this meeting's customer.
+        """,
+        freeformContext: """
+        Calendar event: OpenAI <> Moderna
+        Calendar match: High confidence (exact bounded invite overlap)
+        Known company: Moderna. Salesforce account search resolves Moderna references to the ModernaTX enterprise account context.
+        Known project: GPT-Rosalind. OpenAI life-sciences initiative commonly shortened to Rosalind.
+        """
+    )
+
+    #expect(facts.organizations == ["Moderna"])
+    #expect(!facts.organizations.contains("Salesforce"))
+    #expect(!facts.customers.contains("Salesforce"))
+}
+
+@Test
+func meetingFactsExtractorKeepsStructuredContextLineOrientedInsteadOfFlatteningIt() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: "Speaker: We reviewed the customer rollout.",
+        freeformContext: """
+        Calendar event: OpenAI <> Moderna
+        External context (codex): Calendar evidence outranks transcript guesses.
+        Known company: Moderna. Durable account reference.
+        """
+    )
+
+    #expect(facts.additionalContext == [
+        "Calendar event: OpenAI <> Moderna",
+        "External context (codex): Calendar evidence outranks transcript guesses",
+        "Known company: Moderna. Durable account reference"
+    ])
+    #expect(!facts.additionalContext.contains {
+        $0.contains("Calendar event: OpenAI <> Moderna External context")
+    })
+}
+
+@Test
 func meetingFactsExtractorDoesNotTreatCalendarMatchReasonAsAnExplicitTitle() {
     let facts = MeetingFactsExtractor().extract(
         transcript: "Speaker: We discussed Takeda's Rosalind workflows and evaluation needs.",

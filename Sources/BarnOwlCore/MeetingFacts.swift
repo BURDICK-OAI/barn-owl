@@ -276,8 +276,9 @@ public struct MeetingFactsExtractor: Sendable {
         )
         facts.glossary.merge(glossaryFrom(combined)) { _, new in new }
 
-        if let context = MeetingFacts.clean(freeformContext) {
-            facts.additionalContext = Self.merge(facts.additionalContext, [context])
+        let additionalContext = additionalContextEntries(from: freeformContext)
+        if !additionalContext.isEmpty {
+            facts.additionalContext = Self.merge(facts.additionalContext, additionalContext)
             facts.confidence.context = 0.9
             sources["additionalContext"] = "user_context"
         } else if !combined.isEmpty {
@@ -357,9 +358,10 @@ public struct MeetingFactsExtractor: Sendable {
     }
 
     private func organizationsFromContext(_ text: String) -> [String] {
+        let heuristicText = heuristicContextText(from: text)
         var names: [String] = []
-        names += firstMatches(in: text, pattern: #"\b(?:about|for|with|related to|customer|account)\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
-        names += firstMatches(in: text, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:renewal|rollout|pricing|implementation|workshop|pitch|account)\b"#)
+        names += firstMatches(in: heuristicText, pattern: #"\b(?:about|for|with|related to|customer|account)\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
+        names += firstMatches(in: heuristicText, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:renewal|rollout|pricing|implementation|workshop|pitch|account)\b"#)
         names += firstMatches(in: text, pattern: #"(?im)^\s*Known (?:organization|company):\s+([^\n.]+)"#)
         names += firstMatches(in: text, pattern: #"(?im)^\s*Calendar (?:organization|company|customer):\s+([^\n.]+)"#)
         names += firstMatches(
@@ -414,6 +416,7 @@ public struct MeetingFactsExtractor: Sendable {
     }
 
     private func customerOrganizationsFromContext(_ text: String) -> [String] {
+        let heuristicText = heuristicContextText(from: text)
         let explicitLists = firstMatches(
             in: text,
             pattern: #"(?im)^\s*Customers?:\s*([^\n.]+)"#
@@ -427,13 +430,40 @@ public struct MeetingFactsExtractor: Sendable {
 
         return Self.merge(
             explicitLists.filter(Self.isLikelyOrganizationName),
-            firstMatches(in: text, pattern: #"\bcustomer\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
+            firstMatches(in: heuristicText, pattern: #"\bcustomer\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
                 .filter(Self.isLikelyOrganizationName),
-            firstMatches(in: text, pattern: #"\baccount\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
+            firstMatches(in: heuristicText, pattern: #"\baccount\s+([A-Z][A-Za-z0-9&.-]{2,})\b"#)
                 .filter(Self.isLikelyOrganizationName),
-            firstMatches(in: text, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:customer|account|renewal)\b"#)
+            firstMatches(in: heuristicText, pattern: #"\b([A-Z][A-Za-z0-9&.-]{2,})\s+(?:customer|account|renewal)\b"#)
                 .filter(Self.isLikelyOrganizationName)
         )
+    }
+
+    private func additionalContextEntries(from text: String) -> [String] {
+        let lines = text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { MeetingFacts.clean(String($0)) }
+        if lines.count > 1 {
+            return Self.merge([], lines)
+        }
+        guard let cleaned = MeetingFacts.clean(text) else {
+            return []
+        }
+        return [cleaned]
+    }
+
+    private func heuristicContextText(from text: String) -> String {
+        text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map(String.init)
+            .filter { line in
+                let normalized = line
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                    .lowercased()
+                return !normalized.hasPrefix("known ")
+            }
+            .joined(separator: "\n")
     }
 
     private func transcriptCustomerIsGrounded(_ candidate: String, in lowercasedTranscript: String) -> Bool {
