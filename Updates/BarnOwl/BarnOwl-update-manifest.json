@@ -3,5 +3,47 @@
   "build": "28",
   "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.28/BarnOwl.app.zip",
   "sha256": "4731621d712956f8cff334a72f96b70fb0ce5538af8a0422a0f48225f5f601f7",
-  "notes": "Barn Owl 0.1.0 (28)"
+  "notes": "Barn Owl 0.1.0 (28)",
+  "release_notes": [
+    {
+      "version": "0.1.0",
+      "build": "28",
+      "notes": "Barn Owl 0.1.0 (28)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "27",
+      "notes": "Barn Owl 0.1.0 (27)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "26",
+      "notes": "Barn Owl 0.1.0 (26)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "25",
+      "notes": "Barn Owl 0.1.0 (25)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "24",
+      "notes": "Barn Owl 0.1.0 (24)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "23",
+      "notes": "Barn Owl 0.1.0 (23)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "22",
+      "notes": "Barn Owl 0.1.0 (22)"
+    },
+    {
+      "version": "0.1.0",
+      "build": "21",
+      "notes": "Barn Owl 0.1.0 (21)"
+    }
+  ]
 }

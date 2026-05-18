@@ -8619,6 +8619,10 @@ final class BarnOwlAppModel: ObservableObject {
             .count >= 2
     }
 
+    nonisolated static func shouldDisplayRecentRecurringConceptMemory(_ concept: String) -> Bool {
+        isEligibleForAutomaticRecurringConceptEnrichment(concept)
+    }
+
     private nonisolated static func isMeaningfulRecurringConcept(
         _ concept: String,
         normalized: String

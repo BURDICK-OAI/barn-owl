@@ -9,6 +9,7 @@ struct BarnOwlUpdateManifest: Decodable, Equatable {
     var archiveURL: String
     var sha256: String?
     var notes: String?
+    var releaseNotes: [BarnOwlReleaseNote]?
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -16,6 +17,35 @@ struct BarnOwlUpdateManifest: Decodable, Equatable {
         case archiveURL = "archive_url"
         case sha256
         case notes
+        case releaseNotes = "release_notes"
+    }
+
+    var orderedReleaseNotes: [BarnOwlReleaseNote] {
+        var seenIDs: Set<String> = []
+        var entries: [BarnOwlReleaseNote] = []
+
+        if let current = releaseNoteForCurrentManifest,
+           seenIDs.insert(current.id).inserted {
+            entries.append(current)
+        }
+
+        for note in releaseNotes ?? [] where seenIDs.insert(note.id).inserted {
+            entries.append(note)
+        }
+
+        return entries
+    }
+
+    private var releaseNoteForCurrentManifest: BarnOwlReleaseNote? {
+        guard let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !notes.isEmpty
+        else { return nil }
+
+        return BarnOwlReleaseNote(
+            version: version,
+            build: build,
+            notes: notes
+        )
     }
 }
 
@@ -35,6 +65,23 @@ struct BarnOwlAvailableUpdate: Equatable {
     var version: String
     var build: String
     var notes: String?
+}
+
+struct BarnOwlReleaseNote: Decodable, Equatable, Identifiable {
+    var version: String
+    var build: String
+    var notes: String
+
+    var id: String {
+        "\(version)-\(build)"
+    }
+}
+
+enum BarnOwlReleaseNotesAvailability: Equatable {
+    case unknown
+    case loading
+    case loaded([BarnOwlReleaseNote])
+    case unavailable(String)
 }
 
 enum BarnOwlUpdateAvailability: Equatable {
@@ -178,6 +225,16 @@ enum BarnOwlUpdater {
                 ))
             }
             return .upToDate(version: manifest.version, build: manifest.build)
+        } catch {
+            return .unavailable(BarnOwlErrorFormatter.message(for: error))
+        }
+    }
+
+    static func loadReleaseNotesAvailability() async -> BarnOwlReleaseNotesAvailability {
+        do {
+            let manifestURL = try BarnOwlUpdaterSettings.resolvedManifestURL()
+            let manifest = try await loadManifest(from: manifestURL)
+            return .loaded(manifest.orderedReleaseNotes)
         } catch {
             return .unavailable(BarnOwlErrorFormatter.message(for: error))
         }

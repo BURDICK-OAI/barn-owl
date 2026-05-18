@@ -1927,6 +1927,24 @@ func updateAvailabilityButtonTitlesMatchMenuBarPolicy() {
 }
 
 @Test
+func updateManifestKeepsLatestReleaseFirstAndDeduplicatesHistory() {
+    let manifest = BarnOwlUpdateManifest(
+        version: "0.1.0",
+        build: "28",
+        archiveURL: "BarnOwl.app.zip",
+        sha256: nil,
+        notes: "Latest build notes.",
+        releaseNotes: [
+            BarnOwlReleaseNote(version: "0.1.0", build: "28", notes: "Duplicate historical copy."),
+            BarnOwlReleaseNote(version: "0.1.0", build: "27", notes: "Previous build notes.")
+        ]
+    )
+
+    #expect(manifest.orderedReleaseNotes.map(\.id) == ["0.1.0-28", "0.1.0-27"])
+    #expect(manifest.orderedReleaseNotes.first?.notes == "Latest build notes.")
+}
+
+@Test
 @MainActor
 func updaterSettingsAlwaysUseCanonicalGitHubFeed() throws {
     UserDefaults.standard.set(
@@ -3542,6 +3560,15 @@ func automaticRecurringConceptEnrichmentRequiresMoreThanAmbiguousSingleWords() {
     }
 
     #expect(BarnOwlAppModel.isEligibleForAutomaticRecurringConceptEnrichment("NovaBio Life Sciences"))
+}
+
+@Test
+func recentRecurringConceptMemoryHidesObservedHistoricalSingleTokenJunk() {
+    for concept in ["XYZ", "TASK", "Beautiful", "Perfect", "Your", "Hey", "MIT", "Well", "Mm-hmm", "AGI", "Yep", "Because"] {
+        #expect(!BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory(concept))
+    }
+
+    #expect(BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory("NovaBio Life Sciences"))
 }
 
 @Test

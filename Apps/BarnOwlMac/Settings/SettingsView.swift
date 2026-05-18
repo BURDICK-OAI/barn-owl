@@ -575,6 +575,9 @@ struct SettingsView: View {
     @State private var readinessChecks: [String] = []
     @State private var readinessActionStatus = ""
     @State private var updateSettingsStatus = ""
+    @State private var updateAvailability: BarnOwlUpdateAvailability = .unknown
+    @State private var releaseNotesAvailability: BarnOwlReleaseNotesAvailability = .unknown
+    @State private var showReleaseNotesHistory = false
     @State private var codexBridgeStatus = "checking"
     @State private var codexIntegrationLines: [String] = []
     @State private var codexIntegrationStatus = ""
@@ -621,6 +624,7 @@ struct SettingsView: View {
                 await refreshCodexIntegration()
                 await refreshContextLibrary()
                 await refreshEnrichmentSources()
+                await refreshUpdateNotice()
             }
         }
         .sheet(item: $contextLibrarySheetMode, onDismiss: {
@@ -651,7 +655,100 @@ struct SettingsView: View {
             if !updateSettingsStatus.isEmpty {
                 settingsStatusMessage(updateSettingsStatus)
             }
+
+            releaseNotesSection
         }
+    }
+
+    @ViewBuilder
+    private var releaseNotesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Release Notes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                if case .available = updateAvailability {
+                    BarnOwlSettingsStatusPill(
+                        title: "Update Available",
+                        systemImage: nil,
+                        tint: BarnOwlSettingsTheme.warning
+                    )
+                }
+            }
+
+            switch releaseNotesAvailability {
+            case .loaded(let notes):
+                if let latest = notes.first {
+                    latestReleaseNotesRow(latest)
+
+                    if notes.count > 1 {
+                        DisclosureGroup(isExpanded: $showReleaseNotesHistory) {
+                            ScrollView(.vertical, showsIndicators: true) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(Array(notes.dropFirst())) { note in
+                                        releaseNoteHistoryRow(note)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 180)
+                            .padding(.top, 4)
+                        } label: {
+                            Text(showReleaseNotesHistory ? "Hide earlier releases" : "Show all release notes (\(notes.count))")
+                                .font(.caption.weight(.medium))
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                } else {
+                    settingsStatusMessage("No published release notes were found in the update feed.")
+                }
+            case .loading:
+                settingsStatusMessage("Loading release notes...")
+            case .unavailable(let message):
+                settingsStatusMessage("Release notes unavailable: \(message)")
+            case .unknown:
+                settingsStatusMessage("Release notes have not been loaded yet.")
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func latestReleaseNotesRow(_ note: BarnOwlReleaseNote) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                BarnOwlSettingsStatusPill(
+                    title: "Latest",
+                    systemImage: nil,
+                    tint: BarnOwlSettingsTheme.success
+                )
+                Text("Barn Owl \(note.version) (\(note.build))")
+                    .font(.caption.weight(.semibold))
+            }
+
+            Text(note.notes)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func releaseNoteHistoryRow(_ note: BarnOwlReleaseNote) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Barn Owl \(note.version) (\(note.build))")
+                .font(.caption.weight(.semibold))
+            Text(note.notes)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private var header: some View {
@@ -1073,16 +1170,28 @@ struct SettingsView: View {
                     Text("Examples Codex can configure")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    ForEach(BarnOwlAppModel.enrichmentSourcePresets) { preset in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(minimum: 180), alignment: .leading),
+                            GridItem(.flexible(minimum: 180), alignment: .leading)
+                        ],
+                        alignment: .leading,
+                        spacing: 6
+                    ) {
+                        ForEach(BarnOwlAppModel.enrichmentSourcePresets) { preset in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(preset.displayName)
                                     .font(.caption.weight(.semibold))
+                                    .lineLimit(1)
                                 Text("\(preset.scopeLabel) · \(preset.connectorReference ?? "built-in")")
-                                    .font(.caption)
+                                    .font(.caption2)
                                     .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
                             }
-                            Spacer(minLength: 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 7)
+                            .background(.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         }
                     }
 
@@ -1097,7 +1206,7 @@ struct SettingsView: View {
                 if connectedEnrichmentSources.isEmpty {
                     settingsStatusMessage("No enrichment sources are connected yet.")
                 } else {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         ForEach(connectedEnrichmentSources) { source in
                             enrichmentSourceRow(source)
                         }
@@ -1209,19 +1318,25 @@ struct SettingsView: View {
     }
 
     private func enrichmentSourceRow(_ source: BarnOwlEnrichmentSourceRecord) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(source.displayName)
                         .font(.callout.weight(.semibold))
                     Text(source.id)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
 
-                VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 8) {
+                    BarnOwlSettingsStatusPill(
+                        title: source.healthStatus.displayName,
+                        systemImage: nil,
+                        tint: enrichmentSourceTint(source.healthStatus)
+                    )
                     Toggle(
                         source.enabled ? "Enabled" : "Disabled",
                         isOn: Binding(
@@ -1235,15 +1350,10 @@ struct SettingsView: View {
                     )
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    BarnOwlSettingsStatusPill(
-                        title: source.healthStatus.displayName,
-                        systemImage: nil,
-                        tint: enrichmentSourceTint(source.healthStatus)
-                    )
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 BarnOwlSettingsStatusPill(
                     title: source.scope.displayName,
                     systemImage: nil,
@@ -1252,29 +1362,30 @@ struct SettingsView: View {
                 Text(source.authorityProfile)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                let checkedAt = source.lastCheckedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Not checked yet"
+                Text("Auth: \(source.authState.rawValue.replacingOccurrences(of: "_", with: " ")) · \(checkedAt)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             if !source.bestUsedFor.isEmpty {
                 Text("Best for: \(source.bestUsedFor.joined(separator: ", "))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
             }
-
-            let checkedAt = source.lastCheckedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Not checked yet"
-            Text("Auth: \(source.authState.rawValue.replacingOccurrences(of: "_", with: " ")) · Last checked: \(checkedAt)")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
 
             if let usefulness = enrichmentSourceUsefulnessByID[source.id] {
-                Text("Usefulness: \(usefulness.attempts) run\(usefulness.attempts == 1 ? "" : "s"), \(usefulness.supportedJobs) supported, \(usefulness.heldJobs) held, \(usefulness.conflictingJobs) conflicted, \(usefulness.acceptedEvidenceItems)/\(usefulness.evidenceItems) evidence items accepted.")
-                    .font(.caption)
+                Text("Usefulness: \(usefulness.attempts) run\(usefulness.attempts == 1 ? "" : "s") · \(usefulness.supportedJobs) supported · \(usefulness.heldJobs) held · \(usefulness.conflictingJobs) conflicted · \(usefulness.acceptedEvidenceItems)/\(usefulness.evidenceItems) accepted")
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
@@ -1486,14 +1597,24 @@ struct SettingsView: View {
             let result = try await BarnOwlUpdater.checkAndInstallLatest()
             switch result {
             case .upToDate(let version, let build):
+                updateAvailability = .upToDate(version: version, build: build)
                 updateSettingsStatus = "Barn Owl is up to date: \(version) (\(build))."
             case .installing(let version, let build):
+                updateAvailability = .available(.init(version: version, build: build, notes: nil))
                 updateSettingsStatus = "Installing Barn Owl \(version) (\(build)) and restarting."
             }
         } catch {
+            updateAvailability = .unavailable(BarnOwlErrorFormatter.message(for: error))
             updateSettingsStatus = "Could not check updates: \(BarnOwlErrorFormatter.message(for: error))"
         }
         refreshReadinessChecks()
+    }
+
+    @MainActor
+    private func refreshUpdateNotice() async {
+        releaseNotesAvailability = .loading
+        updateAvailability = await BarnOwlUpdater.checkLatestAvailability()
+        releaseNotesAvailability = await BarnOwlUpdater.loadReleaseNotesAvailability()
     }
 
     private func exportDeveloperDiagnostics() {
@@ -1631,7 +1752,7 @@ struct SettingsView: View {
             var conceptHistories: [BarnOwlControlEnrichmentConceptHistory] = []
             var seenConcepts: Set<String> = []
             for job in recentJobs {
-                guard BarnOwlAppModel.isMeaningfulRecurringConcept(job.conceptKey) else {
+                guard BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory(job.conceptKey) else {
                     continue
                 }
                 let normalizedConcept = job.conceptKey.lowercased()
