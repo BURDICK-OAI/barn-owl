@@ -191,7 +191,7 @@ public struct MarkdownMeetingRenderer: Sendable {
         appendSection("Action Items", summary.actionItems, to: &lines)
         appendSection("Open Questions", summary.openQuestions, to: &lines)
         if meetingFacts == nil {
-            appendSection("Participants", participants(from: segments, context: noteContext), to: &lines)
+            appendSection("Participants", participants(from: noteContext), to: &lines)
         }
         appendSection("Risks", risks(from: segments, summary: summary), to: &lines)
         appendSection("References", references(from: segments, context: renderContext), to: &lines)
@@ -352,8 +352,7 @@ public struct MarkdownMeetingRenderer: Sendable {
         return unique
     }
 
-    private func participants(from segments: [TranscriptSegment], context: [String]) -> [String] {
-        let speakers = Set(segments.map(\.speakerLabel).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    private func participants(from context: [String]) -> [String] {
         let attendeeLines = context
             .filter { $0.localizedCaseInsensitiveContains("attendees:") || $0.localizedCaseInsensitiveContains("participants:") }
             .flatMap { line in
@@ -363,7 +362,7 @@ public struct MarkdownMeetingRenderer: Sendable {
                     .split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? []
             }
-        return Array(speakers.union(attendeeLines)).sorted()
+        return MeetingFacts.normalizedList(attendeeLines)
     }
 
     private func risks(from segments: [TranscriptSegment], summary: MeetingSummary) -> [String] {

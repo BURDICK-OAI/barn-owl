@@ -327,6 +327,31 @@ func rendererIncludesParticipantsRisksAndReferences() {
 }
 
 @Test
+func rendererDoesNotTreatTranscriptSpeakerLabelsAsParticipantsWithoutContext() {
+    let renderer = MarkdownMeetingRenderer()
+    let markdown = renderer.render(
+        session: makeSession(title: "Launch Review"),
+        segments: [
+            TranscriptSegment(
+                speakerLabel: "Dana",
+                text: "We reviewed the rollout plan.",
+                startTime: 0,
+                endTime: 2
+            ),
+            TranscriptSegment(
+                speakerLabel: "Lee",
+                text: "I will send the follow-up.",
+                startTime: 2,
+                endTime: 4
+            )
+        ],
+        summary: MeetingSummary(overview: "Reviewed rollout planning.")
+    )
+
+    #expect(!markdown.contains("## Participants"))
+}
+
+@Test
 func externalParticipantNotesAreGenericAndShareSafe() {
     let renderer = ExternalParticipantNotesRenderer()
     let markdown = """

@@ -469,13 +469,13 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
             baseContext,
             transcript: transcriptForFacts
         )
-        let context = durableKnowledge.context
+        let context = durableKnowledge.surfaces
         let summary = try await ChunkingMeetingSummaryGenerator(
             wrapped: OpenAIMeetingSummaryGeneratorAdapter(
                 client: OpenAIMeetingSummaryClient(configuration: configuration)
             ),
             progress: progress
-        ).generateSummary(session: session, segments: segments, context: context)
+        ).generateSummary(session: session, segments: segments, context: context.summaryGrounding)
         BarnOwlAPIKeyStore.markAPIKeyVerified(configuration.apiKey)
 
         var finalSession = session
@@ -483,7 +483,7 @@ struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
             currentTitle: meeting.title,
             summary: summary,
             segments: segments,
-            context: context
+            context: context.summaryGrounding
         )
         var meetingFacts = MeetingFactsExtractor().extract(
             transcript: transcriptForFacts,
@@ -730,14 +730,22 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
                     .map { "\($0.speakerLabel): \($0.text)" }
                     .joined(separator: "\n")
                 return await MeetingContextBuilder.withDurableKnowledge(
-                    context,
+                    MeetingContextBuilder.SurfaceContext(
+                        summaryGrounding: context,
+                        factExtraction: [],
+                        noteRendering: []
+                    ),
                     transcript: transcript
-                ).context
+                ).surfaces.summaryGrounding
             },
             overlapRepairClient: OpenAITranscriptOverlapRepairClient(configuration: configuration)
         )
         let baseContext = await MeetingContextBuilder.context(for: session, contextRoot: try? Self.defaultContextRoot())
-        let result = try await pipeline.run(session: session, audioFiles: audioFiles, context: baseContext)
+        let result = try await pipeline.run(
+            session: session,
+            audioFiles: audioFiles,
+            context: baseContext.summaryGrounding
+        )
         BarnOwlAPIKeyStore.markAPIKeyVerified(configuration.apiKey)
         var finalSession = session
         let transcriptForFacts = result.segments
@@ -747,12 +755,12 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             baseContext,
             transcript: transcriptForFacts
         )
-        let context = durableKnowledge.context
+        let context = durableKnowledge.surfaces
         finalSession.title = MeetingTitleSuggester.title(
             currentTitle: session.title,
             summary: result.summary,
             segments: result.segments,
-            context: context
+            context: context.summaryGrounding
         )
         if finalSession.title != session.title {
             await scopedProgress?(MeetingProcessingProgress(
@@ -1663,45 +1671,63 @@ struct TempAudioRecordedFileProvider: RecordedAudioFileProviding {
     ]
 }
 
-private enum MeetingContextBuilder {
+enum MeetingContextBuilder {
+    struct SurfaceContext: Sendable {
+        var summaryGrounding: [String]
+        var factExtraction: [String]
+        var noteRendering: [String]
+
+        static let empty = SurfaceContext(
+            summaryGrounding: [],
+            factExtraction: [],
+            noteRendering: []
+        )
+    }
+
     struct DurableKnowledgeContext: Sendable {
-        var context: [String]
+        var surfaces: SurfaceContext
         var matches: [BarnOwlKnowledgeEntityRecord]
     }
 
-    static func context(for session: RecordingSession, contextRoot: URL?) async -> [String] {
-        var items: [String] = []
+    private struct ExternalContextSurfaceContext {
+        var summaryGrounding: [String]
+        var factExtraction: [String]
+        var noteRendering: [String]
+    }
+
+    static func context(for session: RecordingSession, contextRoot: URL?) async -> SurfaceContext {
+        var summaryGrounding: [String] = []
+        var factExtraction: [String] = []
+        var noteRendering: [String] = []
 
         if let calendarContext = await calendarContext(for: session.id) {
-            items.append(contentsOf: calendarContext.contextLines)
+            summaryGrounding.append(contentsOf: calendarContext.contextLines)
+            factExtraction.append(contentsOf: calendarContext.contextLines)
+            noteRendering.append(contentsOf: displayableCalendarContextLines(from: calendarContext))
         }
-        items.append(contentsOf: await externalContext(for: session.id))
+        let externalContext = await externalContext(for: session.id)
+        summaryGrounding.append(contentsOf: externalContext.summaryGrounding)
+        factExtraction.append(contentsOf: externalContext.factExtraction)
+        noteRendering.append(contentsOf: externalContext.noteRendering)
 
         _ = contextRoot
 
-        return items
+        return SurfaceContext(
+            summaryGrounding: unique(summaryGrounding),
+            factExtraction: unique(factExtraction),
+            noteRendering: unique(noteRendering)
+        )
     }
 
-    static func factsContext(from context: [String]) -> String {
-        noteContext(from: context).joined(separator: "\n")
+    static func factsContext(from context: SurfaceContext) -> String {
+        context.factExtraction.joined(separator: "\n")
     }
 
-    static func noteContext(from context: [String]) -> [String] {
-        context
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .filter { line in
-                let lowercased = line
-                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-                    .lowercased()
-                return !lowercased.hasPrefix("meeting title:")
-                    && !lowercased.hasPrefix("started:")
-                    && !lowercased.hasPrefix("audio sources:")
-                    && !lowercased.hasPrefix("local context")
-            }
+    static func noteContext(from context: SurfaceContext) -> [String] {
+        context.noteRendering
     }
 
-    static func withDurableKnowledge(_ context: [String], transcript: String) async -> DurableKnowledgeContext {
+    static func withDurableKnowledge(_ context: SurfaceContext, transcript: String) async -> DurableKnowledgeContext {
         do {
             let database = try BarnOwlDatabase(url: try defaultDatabaseURL())
             let ownerID = BarnOwlEnrichmentSourceOwner.localUserID()
@@ -1711,9 +1737,16 @@ private enum MeetingContextBuilder {
                 limit: 8
             )
             let durableLines = matches.map(Self.contextLine(for:))
-            return DurableKnowledgeContext(context: context + durableLines, matches: matches)
+            return DurableKnowledgeContext(
+                surfaces: SurfaceContext(
+                    summaryGrounding: unique(context.summaryGrounding + durableLines),
+                    factExtraction: unique(context.factExtraction + durableLines),
+                    noteRendering: context.noteRendering
+                ),
+                matches: matches
+            )
         } catch {
-            return DurableKnowledgeContext(context: context, matches: [])
+            return DurableKnowledgeContext(surfaces: context, matches: [])
         }
     }
 
@@ -1773,17 +1806,49 @@ private enum MeetingContextBuilder {
         }
     }
 
-    private static func externalContext(for meetingID: UUID) async -> [String] {
+    private static func externalContext(for meetingID: UUID) async -> ExternalContextSurfaceContext {
+        func render(_ source: String, body: String, limit: Int) -> String {
+            "External context (\(source)): \(snippet(from: body, maxCharacters: limit))"
+        }
+
         do {
             let database = try BarnOwlDatabase(url: try defaultDatabaseURL())
             let items = try await database.externalContextItems(meetingID: meetingID, state: .accepted, limit: 20)
                 .sorted { $0.createdAt < $1.createdAt }
-            return items.map { item in
-                "External context (\(item.source)): \(snippet(from: item.body))"
-            }
+            return ExternalContextSurfaceContext(
+                summaryGrounding: items.map { render($0.source, body: $0.body, limit: 2_400) },
+                factExtraction: items.map { render($0.source, body: $0.body, limit: 2_400) },
+                noteRendering: items.map { render($0.source, body: $0.body, limit: 600) }
+            )
         } catch {
-            return []
+            return ExternalContextSurfaceContext(
+                summaryGrounding: [],
+                factExtraction: [],
+                noteRendering: []
+            )
         }
+    }
+
+    private static func displayableCalendarContextLines(from context: CalendarMeetingContext) -> [String] {
+        var lines = ["Calendar event: \(context.title)"]
+        if !context.attendees.isEmpty {
+            lines.append("Calendar attendees: \(context.attendees.joined(separator: ", "))")
+        }
+        return lines
+    }
+
+    private static func unique(_ lines: [String]) -> [String] {
+        var seen: Set<String> = []
+        var output: [String] = []
+        for line in lines {
+            guard let cleaned = MeetingFacts.clean(line) else { continue }
+            let key = cleaned
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .lowercased()
+            guard seen.insert(key).inserted else { continue }
+            output.append(cleaned)
+        }
+        return output
     }
 
     private static func calendarContext(for meetingID: UUID) async -> CalendarMeetingContext? {
@@ -1845,10 +1910,10 @@ private enum MeetingContextBuilder {
         return directory.appending(path: "barnowl.sqlite")
     }
 
-    private static func snippet(from body: String) -> String {
+    private static func snippet(from body: String, maxCharacters: Int) -> String {
         let normalized = body
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(normalized.prefix(600))
+        return String(normalized.prefix(max(0, maxCharacters)))
     }
 }

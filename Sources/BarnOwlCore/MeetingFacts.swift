@@ -214,15 +214,21 @@ public struct MeetingFactsExtractor: Sendable {
             sources["meetingType"] = "default"
         }
 
+        let contextParticipants = participantsFromContext(freeformContext)
+        let preservedParticipants = sources["participants"] == "transcript"
+            ? []
+            : facts.participants
         let participants = Self.merge(
-            facts.participants,
-            participantsFromSpeakerLabels(transcript),
-            participantsFromContext(freeformContext)
+            preservedParticipants,
+            contextParticipants
         )
         facts.participants = participants
-        if !participants.isEmpty {
-            facts.confidence.participants = participantsFromContext(freeformContext).isEmpty ? 0.65 : 0.9
-            sources["participants"] = participantsFromContext(freeformContext).isEmpty ? "transcript" : "user_context"
+        if !contextParticipants.isEmpty {
+            facts.confidence.participants = 0.9
+            sources["participants"] = "user_context"
+        } else if participants.isEmpty {
+            facts.confidence.participants = 0
+            sources.removeValue(forKey: "participants")
         }
 
         let contextOrganizations = organizationsFromContext(freeformContext)
@@ -336,22 +342,15 @@ public struct MeetingFactsExtractor: Sendable {
         return matches.first { lowercased.contains($0.0) }?.1
     }
 
-    private func participantsFromSpeakerLabels(_ transcript: String) -> [String] {
-        transcript
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .compactMap { line -> String? in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let colon = trimmed.firstIndex(of: ":") else { return nil }
-                let name = String(trimmed[..<colon])
-                return Self.isLikelyPersonName(name) ? name : nil
-            }
-    }
-
     private func participantsFromContext(_ text: String) -> [String] {
         var names: [String] = []
         names += commaAndAndList(after: #"(?i)\bwith\s+"#, in: text)
         names += commaAndAndList(after: #"(?i)\bparticipants?:\s+"#, in: text)
         names += commaAndAndList(after: #"(?i)\battendees?:\s+"#, in: text)
+        names += firstMatches(
+            in: text,
+            pattern: #"(?i)\b([A-Z][a-z]{2,}(?:\s+(?:and|,)\s+[A-Z][a-z]{2,})+)\s+were there(?: too)?\b"#
+        ).flatMap(splitCommaAndList)
         names += firstMatches(in: text, pattern: #"(?i)\b([A-Z][a-z]{2,}) was there too\b"#)
         names += firstMatches(in: text, pattern: #"(?i)\b([A-Z][a-z]{2,}) was there\b"#)
         return names.filter(Self.isLikelyPersonName)
@@ -520,16 +519,18 @@ public struct MeetingFactsExtractor: Sendable {
 
     private func commaAndAndList(after prefixPattern: String, in text: String) -> [String] {
         firstMatches(in: text, pattern: prefixPattern + #"([^.\n]+)"#)
-            .flatMap {
-                $0.replacingOccurrences(
-                    of: #"(?i)\s+\b(?:about|for|on|regarding|related to)\b.*$"#,
-                    with: "",
-                    options: .regularExpression
-                )
-                .replacingOccurrences(of: " and ", with: ", ")
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            }
+            .flatMap(splitCommaAndList)
+    }
+
+    private func splitCommaAndList(_ value: String) -> [String] {
+        value.replacingOccurrences(
+            of: #"(?i)\s+\b(?:about|for|on|regarding|related to)\b.*$"#,
+            with: "",
+            options: .regularExpression
+        )
+        .replacingOccurrences(of: " and ", with: ", ")
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
     private func firstMatch(in text: String, patterns: [String]) -> String? {

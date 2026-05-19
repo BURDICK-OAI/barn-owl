@@ -1370,7 +1370,7 @@ func updatingMeetingStateNotesDoesNotOverwriteCanonicalFacts() async throws {
 }
 
 @Test
-func oldMarkdownBackfillsMeetingStateFacts() async throws {
+func oldMarkdownBackfillsMeetingStateFactsWithoutTrustingLegacyParticipantsSections() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001901")!
     let now = Date(timeIntervalSince1970: 1_800_009_000)
@@ -1398,7 +1398,7 @@ func oldMarkdownBackfillsMeetingStateFacts() async throws {
     let state = try #require(await database.meetingState(id: meetingID))
     #expect(state.meetingFacts?.title == "Old Markdown Meeting")
     #expect(state.meetingFacts?.meetingType == "Interview")
-    #expect(state.meetingFacts?.participants == ["Dana", "Lee"])
+    #expect(state.meetingFacts?.participants.isEmpty == true)
     #expect(state.actionItems == ["Send follow-up."])
 }
 
@@ -1434,6 +1434,18 @@ func searchLibraryFindsTranscriptNotesAndFiltersMetadata() async throws {
         text: "We decided to send the implementation plan to Acme.",
         startTime: 0,
         endTime: 4,
+        createdAt: now,
+        updatedAt: now
+    ))
+    try await database.upsertMeetingOutput(BarnOwlMeetingOutputRecord(
+        meetingID: meetingID,
+        kind: "meeting_facts",
+        content: MeetingFacts(
+            title: "Acme Customer Workshop",
+            meetingType: "Customer Workshop",
+            participants: ["Dana", "Lee"]
+        ).encodedJSONString() ?? "{}",
+        contentType: "application/json",
         createdAt: now,
         updatedAt: now
     ))

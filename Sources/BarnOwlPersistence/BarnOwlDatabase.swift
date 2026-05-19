@@ -2385,7 +2385,7 @@ private extension BarnOwlDatabase {
             facts.meetingType = Self.meetingType(in: markdown, metadataJSON: meeting.metadataJSON)
         }
         if facts.participants.isEmpty {
-            facts.participants = Self.participants(in: markdown, calendarContext: calendarContext)
+            facts.participants = Self.participants(calendarContext: calendarContext)
         }
         let status = sessions.sorted { $0.startedAt > $1.startedAt }.first?.status
         let summary = summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -3679,7 +3679,6 @@ private extension BarnOwlDatabase {
     }
 
     static func participants(
-        in markdown: String,
         calendarContext: BarnOwlMeetingCalendarContextRecord?
     ) -> [String] {
         var participants: Set<String> = []
@@ -3687,19 +3686,6 @@ private extension BarnOwlDatabase {
            let data = attendeesJSON.data(using: .utf8),
            let attendees = try? JSONDecoder().decode([String].self, from: data) {
             participants.formUnion(attendees)
-        }
-
-        let lines = markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        for (index, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveContains("## Participants") {
-                for participantLine in lines.dropFirst(index + 1) {
-                    let trimmed = participantLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.hasPrefix("## ") { break }
-                    if trimmed.hasPrefix("- ") {
-                        participants.insert(String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines))
-                    }
-                }
-            }
         }
         return participants.filter { !$0.isEmpty }.sorted()
     }

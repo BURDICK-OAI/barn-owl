@@ -3090,7 +3090,7 @@ func silenceAutoStopDecisionUsesFifteenMinuteThreshold() {
 
 @Test
 @MainActor
-func postRecordingContextReviewSuggestsTypeTitleAndParticipantsFromTranscript() {
+func postRecordingContextReviewSuggestsTypeAndTitleWithoutClaimingParticipantsFromTranscript() {
     let session = RecordingSession(
         title: "Untitled Meeting",
         startedAt: Date(timeIntervalSince1970: 1_800_006_000),
@@ -3105,9 +3105,10 @@ func postRecordingContextReviewSuggestsTypeTitleAndParticipantsFromTranscript() 
     )
 
     #expect(review.facts.meetingType == "Customer Workshop")
-    #expect(review.facts.participants == ["Dana", "Lee"])
+    #expect(review.facts.participants.isEmpty)
     #expect(review.facts.title != "Untitled Meeting")
     #expect(review.contextLines.contains("Meeting type: Customer Workshop"))
+    #expect(review.prompts.contains { $0.kind == .participants })
 }
 
 @Test
@@ -3156,6 +3157,17 @@ func meetingFactsExtractorParsesMessyFreeformContext() {
 }
 
 @Test
+func meetingFactsExtractorAcceptsPluralPresenceLanguageFromTrustedContext() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: "",
+        freeformContext: "Dana and Lee were there."
+    )
+
+    #expect(facts.participants == ["Dana", "Lee"])
+    #expect(facts.sources["participants"] == "user_context")
+}
+
+@Test
 func meetingFactsExtractorIgnoresSpeakerLabelsAndLowercaseNoiseOrganizations() {
     let facts = MeetingFactsExtractor().extract(
         transcript: """
@@ -3167,6 +3179,19 @@ func meetingFactsExtractorIgnoresSpeakerLabelsAndLowercaseNoiseOrganizations() {
     #expect(facts.participants.isEmpty)
     #expect(facts.organizations.isEmpty)
     #expect(facts.customers.isEmpty)
+}
+
+@Test
+func meetingFactsExtractorDoesNotPromoteNamedSpeakerLabelsIntoParticipantsWithoutContext() {
+    let facts = MeetingFactsExtractor().extract(
+        transcript: """
+        Dana: The rollout plan needs another pass.
+        Lee: I will send the revised checklist.
+        """
+    )
+
+    #expect(facts.participants.isEmpty)
+    #expect(facts.sources["participants"] == nil)
 }
 
 @Test
@@ -3496,10 +3521,12 @@ func durabilityRepairFactsRecomputesStaleJunkPayloadsFromTrustedInputs() {
         meetingFacts: MeetingFacts(
             title: "the context layer",
             meetingType: "Customer Workshop",
+            participants: ["Speaker"],
             organizations: ["Room", "Sure", "Life"],
             customers: ["Room", "Sure", "Life"],
             projects: ["with this team to launch", "the frameworks is any project"],
-            goals: ["talk about the thing"]
+            goals: ["talk about the thing"],
+            sources: ["participants": "transcript"]
         ),
         externalContextItems: [
             BarnOwlExternalContextItemRecord(
@@ -3521,6 +3548,7 @@ func durabilityRepairFactsRecomputesStaleJunkPayloadsFromTrustedInputs() {
     #expect(repairedFacts.title == "Helios OpenAI Partnership")
     #expect(repairedFacts.organizations == ["Helios"])
     #expect(repairedFacts.customers == ["Helios"])
+    #expect(repairedFacts.participants.isEmpty)
     #expect(repairedFacts.projects == ["GPT-Orchid beta"])
     #expect(repairedFacts.goals == ["Stabilize first-pass transcript accuracy for recurring account vocabulary"])
     #expect(!repairedFacts.customers.contains("Room"))
