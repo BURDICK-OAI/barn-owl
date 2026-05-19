@@ -1,6 +1,17 @@
 [
   {
     "version": "0.1.0",
+    "build": "31",
+    "date": "2026-05-18",
+    "title": "Context-grounded participant handling",
+    "highlights": [
+      "Meeting participants now come from trusted meeting context instead of diarized speaker labels, preventing false participant claims in notes and summaries.",
+      "Summary grounding, fact extraction, and visible note rendering now receive context projections tailored to their role, keeping richer Codex context available without overexposing it in notes.",
+      "Legacy participant backfill was tightened and new regressions cover transcript-only speaker labels, trusted-context participant extraction, and context-review prompt behavior."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "30",
     "date": "2026-05-18",
     "title": "Production durability polish",
