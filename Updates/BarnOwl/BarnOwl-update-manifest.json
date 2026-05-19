@@ -1,44 +1,49 @@
 {
   "version": "0.1.0",
-  "build": "29",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.29/BarnOwl.app.zip",
-  "sha256": "3d9774f63456a45d025ca5341236b915e3323f1ba280970e7f2f79c4da6e7804",
-  "notes": "Settings clarity and release history\n- Settings now shows useful release TLDR notes all the time, with the latest release visible first and earlier releases available in a bounded scrolling history.\n- Enrichment-source examples and active connection rows are much denser, so source setup and health are easier to scan without losing important status detail.\n- Recent concept-memory display filters more low-signal transcript residue, reducing junk concepts that should not be treated as durable knowledge.",
+  "build": "30",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.30/BarnOwl.app.zip",
+  "sha256": "b37a45995935b82d4f3e000e1094bfd2ef5eaac7db3365fe8bcbeabccae6be26",
+  "notes": "Production durability polish\n- Realtime transcription failures now surface fallback mode immediately while reconnect attempts continue in the background.\n- Meeting decisions, action items, open questions, and rename/export snapshots stay synchronized more reliably across durable storage and downstream evidence feeds.\n- Knowledge enrichment now preserves the intended trust hierarchy by allowing clear private/internal evidence to outrank weaker public-reference disagreement, with new regressions covering the rule.",
   "release_notes": [
-    {
-      "version": "0.1.0",
-      "build": "29",
-      "notes": "Settings clarity and release history\n- Settings now shows useful release TLDR notes all the time, with the latest release visible first and earlier releases available in a bounded scrolling history.\n- Enrichment-source examples and active connection rows are much denser, so source setup and health are easier to scan without losing important status detail.\n- Recent concept-memory display filters more low-signal transcript residue, reducing junk concepts that should not be treated as durable knowledge."
-    },
-    {
-      "version": "0.1.0",
-      "build": "28",
-      "notes": "Recurring concept cleanup\n- Automatic recurring-concept enrichment no longer promotes ambiguous single-token transcript leftovers into durable memory on its own.\n- Suppressed Context Library rows stay hidden from active listings while still remaining available to audit-oriented flows.\n- Regression coverage was added for observed junk seeds such as API, Hey, MIT, Nice, Very, and XYZ."
-    },
-    {
-      "version": "0.1.0",
-      "build": "27",
-      "notes": "Grounded meeting-fact precision\n- Meeting fact extraction keeps structured accepted context line-oriented instead of flattening separate evidence lines into one blob.\n- Durable knowledge explanations no longer leak into customer or organization facts as if they were meeting participants.\n- Markdown regeneration keeps accepted context synchronized without recreating flattened duplicate context blocks."
-    },
-    {
-      "version": "0.1.0",
-      "build": "25",
-      "notes": "Priority enrichment source planning\n- Barn Owl gained clearer product and verification guidance for priority enrichment sources, including how higher-value context should be assembled and evaluated.\n- CLI and Codex-facing documentation were tightened so enrichment setup, QA, and handoff flows are easier to execute consistently.\n- Focused tests and source-handoff verification were expanded around the release workflow."
-    },
-    {
-      "version": "0.1.0",
-      "build": "24",
-      "notes": "Transcript durability and context grounding\n- Realtime hinting, transcript context handling, and meeting-fact extraction were strengthened so trusted context stays better aligned with final notes and local artifacts.\n- Persistence and local library update paths were tightened to keep regenerated content synchronized across stored meeting outputs.\n- The app, CLI, and test coverage expanded around repair, enrichment, and production-readiness workflows."
-    },
-    {
-      "version": "0.1.0",
-      "build": "22",
-      "notes": "Meeting evidence export and control surface\n- Barn Owl added a richer control/export surface for meeting evidence, allowing downstream consumers and operator workflows to inspect more structured recording state.\n- Settings, recorder, and menu-bar experiences were broadened alongside control-command and persistence support.\n- The release included substantial architecture docs and automated coverage for evidence export, enrichment operations, and local durability."
-    },
-    {
-      "version": "0.1.0",
-      "build": "21",
-      "notes": "Packaging hardening\n- Packaging scripts were tightened for Barn Owl app distribution and source handoff generation.\n- Release artifact creation was made more resilient so later update-feed work had a cleaner base."
-    }
-  ]
+  {
+    "version": "0.1.0",
+    "build": "30",
+    "notes": "Production durability polish\n- Realtime transcription failures now surface fallback mode immediately while reconnect attempts continue in the background.\n- Meeting decisions, action items, open questions, and rename/export snapshots stay synchronized more reliably across durable storage and downstream evidence feeds.\n- Knowledge enrichment now preserves the intended trust hierarchy by allowing clear private/internal evidence to outrank weaker public-reference disagreement, with new regressions covering the rule."
+  },
+  {
+    "version": "0.1.0",
+    "build": "29",
+    "notes": "Settings clarity and release history\n- Settings now shows useful release TLDR notes all the time, with the latest release visible first and earlier releases available in a bounded scrolling history.\n- Enrichment-source examples and active connection rows are much denser, so source setup and health are easier to scan without losing important status detail.\n- Recent concept-memory display filters more low-signal transcript residue, reducing junk concepts that should not be treated as durable knowledge."
+  },
+  {
+    "version": "0.1.0",
+    "build": "28",
+    "notes": "Recurring concept cleanup\n- Automatic recurring-concept enrichment no longer promotes ambiguous single-token transcript leftovers into durable memory on its own.\n- Suppressed Context Library rows stay hidden from active listings while still remaining available to audit-oriented flows.\n- Regression coverage was added for observed junk seeds such as API, Hey, MIT, Nice, Very, and XYZ."
+  },
+  {
+    "version": "0.1.0",
+    "build": "27",
+    "notes": "Grounded meeting-fact precision\n- Meeting fact extraction keeps structured accepted context line-oriented instead of flattening separate evidence lines into one blob.\n- Durable knowledge explanations no longer leak into customer or organization facts as if they were meeting participants.\n- Markdown regeneration keeps accepted context synchronized without recreating flattened duplicate context blocks."
+  },
+  {
+    "version": "0.1.0",
+    "build": "25",
+    "notes": "Priority enrichment source planning\n- Barn Owl gained clearer product and verification guidance for priority enrichment sources, including how higher-value context should be assembled and evaluated.\n- CLI and Codex-facing documentation were tightened so enrichment setup, QA, and handoff flows are easier to execute consistently.\n- Focused tests and source-handoff verification were expanded around the release workflow."
+  },
+  {
+    "version": "0.1.0",
+    "build": "24",
+    "notes": "Transcript durability and context grounding\n- Realtime hinting, transcript context handling, and meeting-fact extraction were strengthened so trusted context stays better aligned with final notes and local artifacts.\n- Persistence and local library update paths were tightened to keep regenerated content synchronized across stored meeting outputs.\n- The app, CLI, and test coverage expanded around repair, enrichment, and production-readiness workflows."
+  },
+  {
+    "version": "0.1.0",
+    "build": "22",
+    "notes": "Meeting evidence export and control surface\n- Barn Owl added a richer control/export surface for meeting evidence, allowing downstream consumers and operator workflows to inspect more structured recording state.\n- Settings, recorder, and menu-bar experiences were broadened alongside control-command and persistence support.\n- The release included substantial architecture docs and automated coverage for evidence export, enrichment operations, and local durability."
+  },
+  {
+    "version": "0.1.0",
+    "build": "21",
+    "notes": "Packaging hardening\n- Packaging scripts were tightened for Barn Owl app distribution and source handoff generation.\n- Release artifact creation was made more resilient so later update-feed work had a cleaner base."
+  }
+]
 }

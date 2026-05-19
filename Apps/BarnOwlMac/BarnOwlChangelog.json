@@ -1,6 +1,17 @@
 [
   {
     "version": "0.1.0",
+    "build": "30",
+    "date": "2026-05-18",
+    "title": "Production durability polish",
+    "highlights": [
+      "Realtime transcription failures now surface fallback mode immediately while reconnect attempts continue in the background.",
+      "Meeting decisions, action items, open questions, and rename/export snapshots stay synchronized more reliably across durable storage and downstream evidence feeds.",
+      "Knowledge enrichment now preserves the intended trust hierarchy by allowing clear private/internal evidence to outrank weaker public-reference disagreement, with new regressions covering the rule."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "29",
     "date": "2026-05-18",
     "title": "Settings clarity and release history",
