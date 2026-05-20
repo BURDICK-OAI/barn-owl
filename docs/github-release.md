@@ -5,19 +5,23 @@ Local update manifests are for development and smoke testing only.
 
 ## Automated Internal Release Flow
 
-Use the GitHub Actions workflow for the normal lightweight internal GitHub
-Release path:
+The normal lightweight internal GitHub Release path is automatic:
 
 1. Commit and push the source change, build bump in
    `Apps/BarnOwlMac/Info.plist`, and release TLDR entry in
    `Apps/BarnOwlMac/BarnOwlChangelog.json` to `main`.
-2. Open **Actions > Publish GitHub Release > Run workflow**.
-3. Enter the build number already committed in `Apps/BarnOwlMac/Info.plist`.
+2. The `Publish GitHub Release` workflow starts when that `Info.plist` build
+   bump reaches `main`.
 
 The workflow runs on `main`, installs `ripgrep` and XcodeGen on its macOS runner,
 verifies source, packages an internal ad-hoc signed build, creates the GitHub
 Release, verifies that the published `BarnOwl.app.zip` hash matches the updater
 manifest, and commits `Updates/BarnOwl` back to `main`.
+
+The workflow still has a manual **Run workflow** entrypoint. Use it when a build
+bump is already on `main` but the automatic run was skipped or needs a clean
+retry. The committed changelog entry and duplicate-release check remain hard
+gates, so a bare build bump or an already-published build does not quietly ship.
 
 This workflow is intentionally for the current internal ad-hoc release mode.
 Ad-hoc signatures are allowed for the lightweight update path, but they do not

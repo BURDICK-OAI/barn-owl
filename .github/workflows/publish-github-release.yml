@@ -1,6 +1,11 @@
 name: Publish GitHub Release
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - Apps/BarnOwlMac/Info.plist
   workflow_dispatch:
     inputs:
       expected_build:
@@ -44,7 +49,7 @@ jobs:
             exit 1
           fi
 
-          if [[ "$build" != "$EXPECTED_BUILD" ]]; then
+          if [[ -n "$EXPECTED_BUILD" && "$build" != "$EXPECTED_BUILD" ]]; then
             echo "Expected build $EXPECTED_BUILD, but Apps/BarnOwlMac/Info.plist is build $build." >&2
             exit 1
           fi

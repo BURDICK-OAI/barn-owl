@@ -222,11 +222,13 @@ Update.
 For the default GitHub-backed feed, first add the latest release TLDR entry to
 `Apps/BarnOwlMac/BarnOwlChangelog.json`. The update manifest and GitHub Release
 notes both reuse that source. For the normal lightweight internal release path,
-push the source/build/changelog change to `main`, then run the
-`Publish GitHub Release` workflow from GitHub Actions with the committed build
-number. That workflow installs its own release tools, verifies and packages the
-app, creates the GitHub Release, checks the uploaded app hash against the
-updater manifest, and commits `Updates/BarnOwl` back to `main`.
+push the source/build/changelog change to `main`. The `Publish GitHub Release`
+workflow starts automatically when that committed `Info.plist` build bump lands
+on `main`; it installs its own release tools, verifies and packages the app,
+creates the GitHub Release, checks the uploaded app hash against the updater
+manifest, and commits `Updates/BarnOwl` back to `main`. The workflow also keeps
+a manual **Run workflow** entrypoint for a skipped or retried build already on
+`main`.
 
 Use the local flow below when the release must be signed with the stable local
 Barn Owl certificate instead of the workflow's ad-hoc internal package:
