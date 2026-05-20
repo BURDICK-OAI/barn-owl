@@ -1,10 +1,15 @@
 {
   "version": "0.1.0",
-  "build": "31",
-  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.31/BarnOwl.app.zip",
-  "sha256": "c09d7d00f6c3eb69613e9bfb8d3471543599955ff24aae4232b4531739f56097",
-  "notes": "Context-grounded participant handling\n- Meeting participants now come from trusted meeting context instead of diarized speaker labels, preventing false participant claims in notes and summaries.\n- Summary grounding, fact extraction, and visible note rendering now receive context projections tailored to their role, keeping richer Codex context available without overexposing it in notes.\n- Legacy participant backfill was tightened and new regressions cover transcript-only speaker labels, trusted-context participant extraction, and context-review prompt behavior.",
+  "build": "32",
+  "archive_url": "https://github.com/BURDICK-OAI/barn-owl/releases/download/v0.1.0-build.32/BarnOwl.app.zip",
+  "sha256": "1f870ae5dd16e96cfc1f03427e7c5d5370ad11677bda8e512f3484ff81110b61",
+  "notes": "Summary repair reliability\n- Fallback notes from a summary-generation error now stay visibly in repair flow, automatically queue summary repair, and avoid being reported as ready before repaired notes land.\n- Summary repair retries reuse durable failed repair jobs, and app processing status stays in progress while repaired notes are still being generated.\n- Fallback detection is constrained to Barn Owl's canonical fallback summary so transcript text cannot accidentally trigger repair-needed status.",
   "release_notes": [
+  {
+    "version": "0.1.0",
+    "build": "32",
+    "notes": "Summary repair reliability\n- Fallback notes from a summary-generation error now stay visibly in repair flow, automatically queue summary repair, and avoid being reported as ready before repaired notes land.\n- Summary repair retries reuse durable failed repair jobs, and app processing status stays in progress while repaired notes are still being generated.\n- Fallback detection is constrained to Barn Owl's canonical fallback summary so transcript text cannot accidentally trigger repair-needed status."
+  },
   {
     "version": "0.1.0",
     "build": "31",
