@@ -1,0 +1,131 @@
+name: Publish GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_build:
+        description: Build number already committed in Apps/BarnOwlMac/Info.plist
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: barnowl-github-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish internal GitHub release
+    runs-on: macos-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install release tools
+        run: brew install ripgrep xcodegen
+
+      - name: Read release metadata
+        env:
+          EXPECTED_BUILD: ${{ inputs.expected_build }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Apps/BarnOwlMac/Info.plist)"
+          build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Apps/BarnOwlMac/Info.plist)"
+          tag="v${version}-build.${build}"
+
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "Run Barn Owl GitHub releases from main, not $GITHUB_REF_NAME." >&2
+            exit 1
+          fi
+
+          if [[ "$build" != "$EXPECTED_BUILD" ]]; then
+            echo "Expected build $EXPECTED_BUILD, but Apps/BarnOwlMac/Info.plist is build $build." >&2
+            exit 1
+          fi
+
+          scripts/changelog-notes.sh "$version" "$build" text >"$RUNNER_TEMP/BarnOwl-release-notes.txt"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists." >&2
+            exit 1
+          fi
+
+          {
+            echo "BARNOWL_RELEASE_VERSION=$version"
+            echo "BARNOWL_RELEASE_BUILD=$build"
+            echo "BARNOWL_RELEASE_TAG=$tag"
+            echo "BARNOWL_RELEASE_NOTES=$RUNNER_TEMP/BarnOwl-release-notes.txt"
+          } >>"$GITHUB_ENV"
+
+      - name: Verify source
+        run: scripts/verify.sh
+
+      - name: Package and generate updater feed
+        env:
+          BARNOWL_ALLOW_ADHOC_UPDATE: 1
+          BARNOWL_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: scripts/publish-git-update.sh
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh release create "$BARNOWL_RELEASE_TAG" \
+            dist/BarnOwl.app.zip \
+            dist/BarnOwl-source-handoff.zip \
+            dist/BarnOwl-release-manifest.json \
+            dist/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --title "Barn Owl $BARNOWL_RELEASE_VERSION build $BARNOWL_RELEASE_BUILD" \
+            --notes-file "$BARNOWL_RELEASE_NOTES"
+
+      - name: Verify published app hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          local_sha="$(/usr/bin/shasum -a 256 dist/BarnOwl.app.zip | awk '{print $1}')"
+          manifest_sha="$(/usr/bin/plutil -extract sha256 raw -o - Updates/BarnOwl/BarnOwl-update-manifest.json)"
+          release_sha="$(
+            gh release view "$BARNOWL_RELEASE_TAG" \
+              --json assets \
+              --jq '.assets[] | select(.name == "BarnOwl.app.zip") | .digest' \
+              | sed 's/^sha256://'
+          )"
+
+          if [[ -z "$release_sha" ]]; then
+            echo "GitHub Release $BARNOWL_RELEASE_TAG does not expose a BarnOwl.app.zip digest." >&2
+            exit 1
+          fi
+
+          if [[ "$local_sha" != "$manifest_sha" || "$local_sha" != "$release_sha" ]]; then
+            echo "Build artifact, updater manifest, and GitHub Release app hashes disagree." >&2
+            echo "local_sha=$local_sha" >&2
+            echo "manifest_sha=$manifest_sha" >&2
+            echo "release_sha=$release_sha" >&2
+            exit 1
+          fi
+
+      - name: Commit updater feed
+        run: |
+          set -euo pipefail
+
+          git add Updates/BarnOwl
+          if git diff --cached --quiet; then
+            echo "Updater feed did not change." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Publish Barn Owl $BARNOWL_RELEASE_VERSION build $BARNOWL_RELEASE_BUILD update manifest"
+          git push origin HEAD:main

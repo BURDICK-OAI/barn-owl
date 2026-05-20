@@ -4,7 +4,14 @@ set -euo pipefail
 ROOT_DIR="${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"}"
 
 if ! command -v rg >/dev/null 2>&1; then
-  echo "rg is required for secret scanning." >&2
+  cat >&2 <<'EOF'
+rg is required for secret scanning.
+
+Install ripgrep before running Barn Owl release scripts locally:
+  brew install ripgrep
+
+The GitHub release workflow installs ripgrep on its macOS runner.
+EOF
   exit 1
 fi
 

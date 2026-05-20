@@ -3,7 +3,31 @@
 GitHub Releases are the canonical distribution and update path for Barn Owl.
 Local update manifests are for development and smoke testing only.
 
-## Release Owner Flow
+## Automated Internal Release Flow
+
+Use the GitHub Actions workflow for the normal lightweight internal GitHub
+Release path:
+
+1. Commit and push the source change, build bump in
+   `Apps/BarnOwlMac/Info.plist`, and release TLDR entry in
+   `Apps/BarnOwlMac/BarnOwlChangelog.json` to `main`.
+2. Open **Actions > Publish GitHub Release > Run workflow**.
+3. Enter the build number already committed in `Apps/BarnOwlMac/Info.plist`.
+
+The workflow runs on `main`, installs `ripgrep` and XcodeGen on its macOS runner,
+verifies source, packages an internal ad-hoc signed build, creates the GitHub
+Release, verifies that the published `BarnOwl.app.zip` hash matches the updater
+manifest, and commits `Updates/BarnOwl` back to `main`.
+
+This workflow is intentionally for the current internal ad-hoc release mode.
+Ad-hoc signatures are allowed for the lightweight update path, but they do not
+provide the continuity of a stable local signing certificate or a Developer ID
+release. Use the local release flow below when the release must be signed with
+the stable local Barn Owl certificate. Move the workflow to Developer ID signing
+only after the certificate and notarization credentials are configured safely in
+GitHub or on a controlled self-hosted Mac runner.
+
+## Local Release Owner Flow
 
 1. Confirm the source build is newer than the currently installed app:
 
