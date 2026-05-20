@@ -883,6 +883,48 @@ func enrichmentOrchestratorPromotesSupportedCandidatesThroughInstalledAdapters()
 }
 
 @Test
+func enrichmentOrchestratorHoldsUnresolvedMemoryMentionsWithoutSemanticCandidate() async {
+    let source = BarnOwlEnrichmentConfiguredSource(
+        descriptor: BarnOwlEnrichmentSourceDescriptor(
+            id: "barnowl_memory",
+            displayName: "Barn Owl Memory",
+            sourceType: "local_memory",
+            scope: .localPrivate,
+            authorityProfile: "meeting_memory"
+        ),
+        enabled: true,
+        authState: .notRequired,
+        healthStatus: .ready
+    )
+    let result = await BarnOwlEnrichmentOrchestrator(
+        adapters: [
+            StaticEnrichmentAdapter(
+                sourceID: "barnowl_memory",
+                evidence: [
+                    enrichmentEvidence(
+                        subject: "New York",
+                        citation: "meeting:new-york-a",
+                        candidateKind: "unresolved_concept"
+                    ),
+                    enrichmentEvidence(
+                        subject: "New York",
+                        citation: "meeting:new-york-b",
+                        candidateKind: "unresolved_concept"
+                    )
+                ]
+            )
+        ]
+    ).run(
+        request: BarnOwlEnrichmentSourceRequest(conceptKey: "New York", limit: 8),
+        sources: [source]
+    )
+
+    #expect(result.status == .heldInsufficientEvidence)
+    #expect(result.summary.contains("no resolved candidate"))
+    #expect(result.rationale.contains("unresolved meeting-memory mentions alone"))
+}
+
+@Test
 func enrichmentOrchestratorOrdersEligibleSourcesByRoutingPriority() async {
     let lowerPriority = BarnOwlEnrichmentConfiguredSource(
         descriptor: BarnOwlEnrichmentSourceDescriptor(

@@ -1809,20 +1809,39 @@ struct SettingsView: View {
                     limit: 50
                 )
                 var negativeEvidenceItems = 0
+                var hasResolvedSemanticEvidence = false
                 for conceptJob in jobsForConcept {
-                    negativeEvidenceItems += try await database.enrichmentJobEvidence(jobID: conceptJob.id)
+                    let evidence = try await database.enrichmentJobEvidence(jobID: conceptJob.id)
                         .compactMap(\.evidence)
+                    negativeEvidenceItems += evidence
                         .filter(\.negativeEvidence)
                         .count
+                    hasResolvedSemanticEvidence = hasResolvedSemanticEvidence || evidence.contains {
+                        !$0.negativeEvidence
+                            && !$0.contradiction
+                            && $0.candidateKind != "unresolved_concept"
+                    }
                 }
                 let supportedJobs = jobsForConcept.filter { $0.status == .supportedCandidate }.count
                 let conflictingJobs = jobsForConcept.filter { $0.status == .heldConflictingEvidence }.count
-                conceptHistories.append(BarnOwlControlEnrichmentConceptHistory(
-                    conceptKey: job.conceptKey,
+                let history = BarnOwlEnrichmentConceptHistory(
                     supportedCandidateJobs: supportedJobs,
                     conflictingJobs: conflictingJobs,
-                    negativeEvidenceItems: negativeEvidenceItems,
-                    requiresConflictMemoryHold: conflictingJobs > 0 || negativeEvidenceItems > 0
+                    negativeEvidenceItems: negativeEvidenceItems
+                )
+                guard BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory(
+                    job.conceptKey,
+                    history: history,
+                    hasResolvedSemanticEvidence: hasResolvedSemanticEvidence
+                ) else {
+                    continue
+                }
+                conceptHistories.append(BarnOwlControlEnrichmentConceptHistory(
+                    conceptKey: job.conceptKey,
+                    supportedCandidateJobs: history.supportedCandidateJobs,
+                    conflictingJobs: history.conflictingJobs,
+                    negativeEvidenceItems: history.negativeEvidenceItems,
+                    requiresConflictMemoryHold: history.requiresConflictMemoryHold
                 ))
             }
             recentEnrichmentConceptHistories = conceptHistories

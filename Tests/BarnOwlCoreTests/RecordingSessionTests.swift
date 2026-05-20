@@ -3828,6 +3828,32 @@ func recentRecurringConceptMemoryHidesObservedHistoricalSingleTokenJunk() {
 }
 
 @Test
+func recentRecurringConceptMemoryHidesUnresolvedOnlyHistoricalJobs() {
+    let supportedUnresolvedHistory = BarnOwlEnrichmentConceptHistory(
+        supportedCandidateJobs: 1
+    )
+    let conflictedHistory = BarnOwlEnrichmentConceptHistory(
+        conflictingJobs: 1
+    )
+
+    #expect(!BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory(
+        "New York",
+        history: supportedUnresolvedHistory,
+        hasResolvedSemanticEvidence: false
+    ))
+    #expect(BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory(
+        "NovaBio Life Sciences",
+        history: supportedUnresolvedHistory,
+        hasResolvedSemanticEvidence: true
+    ))
+    #expect(BarnOwlAppModel.shouldDisplayRecentRecurringConceptMemory(
+        "New York",
+        history: conflictedHistory,
+        hasResolvedSemanticEvidence: false
+    ))
+}
+
+@Test
 func contextPromptGeneratorOnlyAsksUsefulQuestions() {
     let lowConfidenceFacts = MeetingFactsExtractor().extract(
         transcript: "SG came up again. SG needs an owner. someone should follow up."

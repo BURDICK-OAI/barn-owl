@@ -1,6 +1,17 @@
 [
   {
     "version": "0.1.0",
+    "build": "33",
+    "date": "2026-05-20",
+    "title": "Concept memory precision",
+    "highlights": [
+      "Recurring concept enrichment now requires resolved semantic evidence before repeated meeting-memory mentions can be treated as a supported durable concept.",
+      "Recent concept memory hides historical unresolved-only jobs so common location and transcript residue such as New York does not keep resurfacing as durable knowledge.",
+      "Regression coverage now keeps unresolved recurring phrases held for more evidence while preserving conflict-memory review for concepts that still need adjudication."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "32",
     "date": "2026-05-20",
     "title": "Summary repair reliability",

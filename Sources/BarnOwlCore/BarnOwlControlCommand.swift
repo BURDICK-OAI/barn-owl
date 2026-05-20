@@ -723,6 +723,7 @@ public struct BarnOwlEnrichmentOrchestrator: Sendable {
                 publicOnlyPrivateTruthKinds.contains($0.candidateKind.lowercased())
             }
         let independentSemanticSourceCount = Set(semanticEvidence.map(\.sourceID)).count
+        let hasResolvedSemanticEvidence = !semanticEvidence.isEmpty
         let holdsForConflictMemory = conceptHistory.requiresConflictMemoryHold
             && independentSemanticSourceCount < policy.minimumIndependentSourceCountAfterConflictMemory
         let status: BarnOwlEnrichmentJobStatus
@@ -732,7 +733,8 @@ public struct BarnOwlEnrichmentOrchestrator: Sendable {
             status = .heldInsufficientEvidence
         } else if holdsForConflictMemory {
             status = .heldConflictingEvidence
-        } else if evidence.count >= policy.minimumSupportingEvidenceCount {
+        } else if hasResolvedSemanticEvidence
+            && evidence.count >= policy.minimumSupportingEvidenceCount {
             status = .supportedCandidate
         } else {
             status = .heldInsufficientEvidence
@@ -745,12 +747,20 @@ public struct BarnOwlEnrichmentOrchestrator: Sendable {
             summary = "Recorded \(evidence.count) supporting evidence item\(evidence.count == 1 ? "" : "s") for \(request.conceptKey)."
             rationale = "The current automatic policy requires at least \(policy.minimumSupportingEvidenceCount) normalized evidence items across selected adapters before promoting a supported candidate."
         case .heldInsufficientEvidence:
-            summary = evidence.isEmpty
-                ? "Held enrichment for \(request.conceptKey): selected adapters found no supporting evidence."
-                : "Held enrichment for \(request.conceptKey): selected adapters found only \(evidence.count) supporting evidence item\(evidence.count == 1 ? "" : "s")."
-            rationale = blocksPublicOnlyPrivateTruth
-                ? "Automatic persistence blocks public-only evidence from establishing private people, projects, customers, accounts, internal terms, or workspace events."
-                : "The current automatic policy requires at least \(policy.minimumSupportingEvidenceCount) normalized evidence items before promoting a supported candidate."
+            if evidence.isEmpty {
+                summary = "Held enrichment for \(request.conceptKey): selected adapters found no supporting evidence."
+            } else if !hasResolvedSemanticEvidence {
+                summary = "Held enrichment for \(request.conceptKey): selected adapters found recurring mentions but no resolved candidate."
+            } else {
+                summary = "Held enrichment for \(request.conceptKey): selected adapters found only \(evidence.count) supporting evidence item\(evidence.count == 1 ? "" : "s")."
+            }
+            if blocksPublicOnlyPrivateTruth {
+                rationale = "Automatic persistence blocks public-only evidence from establishing private people, projects, customers, accounts, internal terms, or workspace events."
+            } else if !hasResolvedSemanticEvidence {
+                rationale = "Automatic persistence requires at least one resolved semantic candidate; unresolved meeting-memory mentions alone are not durable concept support."
+            } else {
+                rationale = "The current automatic policy requires at least \(policy.minimumSupportingEvidenceCount) normalized evidence items before promoting a supported candidate."
+            }
         case .heldConflictingEvidence:
             if holdsForConflictMemory && !hasSemanticConflict {
                 summary = "Held enrichment for \(request.conceptKey): prior conflict memory requires stronger corroboration before automatic persistence."
