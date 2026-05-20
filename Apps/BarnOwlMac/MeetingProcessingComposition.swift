@@ -176,13 +176,27 @@ actor BarnOwlJobRunner {
 
     func enqueueSummaryProcessing(meetingID: UUID, priority: Int = 80) async throws -> BarnOwlJobRecord {
         let database = try makeDatabase()
-        let existing = try await database.jobs(meetingID: meetingID, limit: 20)
+        let jobs = try await database.jobs(meetingID: meetingID, limit: 20)
+        let existing = jobs
             .first {
                 $0.type == BarnOwlJobType.summaryProcessing
                     && ($0.status == .pending || $0.status == .running)
             }
         if let existing {
             return existing
+        }
+        if var failed = jobs.first(where: {
+            $0.type == BarnOwlJobType.summaryProcessing && $0.status == .failed
+        }) {
+            let now = Date()
+            failed.status = .pending
+            failed.priority = priority
+            failed.errorMessage = nil
+            failed.completedAt = nil
+            failed.updatedAt = now
+            failed.scheduledAt = now
+            try await database.upsertJob(failed)
+            return failed
         }
 
         let payload = SummaryProcessingJobPayload(meetingID: meetingID)
@@ -297,6 +311,11 @@ actor BarnOwlJobRunner {
             succeeded.updatedAt = Date()
             try await database.upsertJob(succeeded)
             await onFinalProcessingSucceeded?(session, outputURL)
+            await autoRepairFallbackSummaryIfNeeded(
+                meetingID: session.id,
+                database: database,
+                progress: progress
+            )
         } catch {
             let decodedSession = job.payloadJSON
                 .flatMap { $0.data(using: .utf8) }
@@ -392,6 +411,33 @@ actor BarnOwlJobRunner {
         }
     }
 
+    private func autoRepairFallbackSummaryIfNeeded(
+        meetingID: UUID,
+        database: BarnOwlDatabase,
+        progress: MeetingProcessingProgressHandler?
+    ) async {
+        do {
+            guard let state = try await database.meetingState(id: meetingID),
+                  state.summary?.usedFallbackSummary == true
+            else {
+                return
+            }
+            _ = try await enqueueSummaryProcessing(meetingID: meetingID)
+            await progress?(MeetingProcessingProgress(
+                level: .warning,
+                message: "Queued automatic summary repair after fallback notes.",
+                sessionID: meetingID
+            ))
+        } catch {
+            await progress?(MeetingProcessingProgress(
+                level: .warning,
+                message: "Could not queue automatic summary repair after fallback notes.",
+                details: BarnOwlErrorFormatter.message(for: error),
+                sessionID: meetingID
+            ))
+        }
+    }
+
     private static func connectivityRetryDelay(afterAttempt attempt: Int) -> TimeInterval {
         switch attempt {
         case 0, 1:
@@ -402,6 +448,7 @@ actor BarnOwlJobRunner {
             300
         }
     }
+
 }
 
 struct BarnOwlMeetingSummaryRepairProcessor: MeetingSummaryRepairing {
@@ -1238,6 +1285,7 @@ enum MeetingTitleSuggester {
         "call",
         "discussion",
         "general discussion",
+        "transcript saved",
         "untitled meeting"
     ]
 
@@ -1519,7 +1567,7 @@ private struct FallbackMeetingSummaryGenerator: MeetingSummaryGenerator {
                 ]
             ))
             return MeetingSummary(
-                overview: "Transcript saved. Summary generation failed, so Barn Owl kept the diarized transcript and logged the summary error.",
+                overview: MeetingSummary.fallbackOverview,
                 openQuestions: ["Summary generation error: \(details)"]
             )
         }

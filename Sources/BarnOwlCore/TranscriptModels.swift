@@ -70,6 +70,8 @@ public enum TranscriptPersistenceGuard {
 }
 
 public struct MeetingSummary: Codable, Equatable, Sendable {
+    public static let fallbackOverview = "Transcript saved. Summary generation failed, so Barn Owl kept the diarized transcript and logged the summary error."
+
     public var suggestedTitle: String?
     public var overview: String
     public var decisions: [String]
@@ -88,5 +90,9 @@ public struct MeetingSummary: Codable, Equatable, Sendable {
         self.decisions = decisions
         self.actionItems = actionItems
         self.openQuestions = openQuestions
+    }
+
+    public var usedFallbackSummary: Bool {
+        overview.trimmingCharacters(in: .whitespacesAndNewlines) == Self.fallbackOverview
     }
 }

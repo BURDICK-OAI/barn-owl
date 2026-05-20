@@ -1,6 +1,17 @@
 [
   {
     "version": "0.1.0",
+    "build": "32",
+    "date": "2026-05-20",
+    "title": "Summary repair reliability",
+    "highlights": [
+      "Fallback notes from a summary-generation error now stay visibly in repair flow, automatically queue summary repair, and avoid being reported as ready before repaired notes land.",
+      "Summary repair retries reuse durable failed repair jobs, and app processing status stays in progress while repaired notes are still being generated.",
+      "Fallback detection is constrained to Barn Owl's canonical fallback summary so transcript text cannot accidentally trigger repair-needed status."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "31",
     "date": "2026-05-18",
     "title": "Context-grounded participant handling",

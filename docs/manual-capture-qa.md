@@ -138,6 +138,11 @@ Expected result:
 - Realtime preview produces visible text during capture; it is allowed to lag by
   multiple seconds, but it must not stay stuck at only “Recording started” or
   “Waiting for audio” while clear speech is present.
+- If a controlled summary-generation failure is exercised, fallback notes remain
+  visibly repairable and Barn Owl stays in a repair-in-progress or repair-needed
+  state until repaired notes replace them. If that failure path is not practical
+  in the pass, record that limitation in the QA evidence rather than treating
+  fallback notes as fully processed output.
 - Temporary audio chunk metadata exists for microphone and system audio with monotonic sequence numbers.
 - Temporary audio chunk files exist while capture is active or before finalization.
 - After finalization, chunk metadata is `finalized`, `deletedAudioAt` is set, `temporaryAudioPath` is `null`, and raw audio chunk files are gone.

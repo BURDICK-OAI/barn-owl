@@ -1770,6 +1770,8 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
     public var notesReady: Bool?
     public var transcriptReady: Bool?
     public var summaryReady: Bool?
+    public var usedFallbackSummary: Bool?
+    public var summaryRepairRecommended: Bool?
     public var markdownPath: String?
     public var diagnosticsPath: String?
     public var lastError: String?
@@ -1832,6 +1834,8 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         notesReady: Bool? = nil,
         transcriptReady: Bool? = nil,
         summaryReady: Bool? = nil,
+        usedFallbackSummary: Bool? = nil,
+        summaryRepairRecommended: Bool? = nil,
         markdownPath: String? = nil,
         diagnosticsPath: String? = nil,
         lastError: String? = nil,
@@ -1893,6 +1897,8 @@ public struct BarnOwlControlResponse: Codable, Equatable, Sendable {
         self.notesReady = notesReady
         self.transcriptReady = transcriptReady
         self.summaryReady = summaryReady
+        self.usedFallbackSummary = usedFallbackSummary
+        self.summaryRepairRecommended = summaryRepairRecommended
         self.markdownPath = markdownPath
         self.diagnosticsPath = diagnosticsPath
         self.lastError = lastError

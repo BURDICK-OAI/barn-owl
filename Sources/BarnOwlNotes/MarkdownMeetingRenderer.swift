@@ -189,7 +189,13 @@ public struct MarkdownMeetingRenderer: Sendable {
         }
         appendSection("Decisions", summary.decisions, to: &lines)
         appendSection("Action Items", summary.actionItems, to: &lines)
-        appendSection("Open Questions", summary.openQuestions, to: &lines)
+        let processingErrors = Self.processingErrors(from: summary)
+        appendSection("Processing Errors", processingErrors, to: &lines)
+        appendSection(
+            "Open Questions",
+            summary.openQuestions.filter { !processingErrors.contains($0) },
+            to: &lines
+        )
         if meetingFacts == nil {
             appendSection("Participants", participants(from: noteContext), to: &lines)
         }
@@ -259,6 +265,23 @@ public struct MarkdownMeetingRenderer: Sendable {
             || normalized == "general discussion"
             || normalized == "untitled meeting"
             || normalized.hasPrefix("untitled")
+    }
+
+    private static func processingErrors(from summary: MeetingSummary) -> [String] {
+        guard summary.usedFallbackSummary else {
+            return []
+        }
+        let summaryErrors = summary.openQuestions.filter {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                .range(
+                    of: "Summary generation error:",
+                    options: [.anchored, .caseInsensitive]
+                ) != nil
+        }
+        if !summaryErrors.isEmpty {
+            return summaryErrors
+        }
+        return ["Summary generation failed. Barn Owl saved the transcript and fallback notes."]
     }
 
     private static func isUsefulParticipant(_ participant: String) -> Bool {

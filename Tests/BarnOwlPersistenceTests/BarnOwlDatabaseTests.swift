@@ -1754,6 +1754,53 @@ func completedProcessingTimelineCollapsesCleanly() async throws {
 }
 
 @Test
+func summaryRepairJobKeepsCompletedTimelineInProgress() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001714")!
+    let now = Date(timeIntervalSince1970: 1_800_007_240)
+    try await database.upsertMeeting(makeDatabaseMeeting(id: meetingID, title: "Repairing Notes", createdAt: now, updatedAt: now))
+    try await database.upsertRecordingSession(BarnOwlRecordingSessionRecord(
+        id: meetingID,
+        meetingID: meetingID,
+        status: .completed,
+        startedAt: now,
+        endedAt: now.addingTimeInterval(60),
+        createdAt: now,
+        updatedAt: now.addingTimeInterval(90)
+    ))
+    try await database.upsertMeetingOutput(BarnOwlMeetingOutputRecord(
+        meetingID: meetingID,
+        kind: "markdown",
+        content: "# Repairing Notes\n\n## Summary\n\(MeetingSummary.fallbackOverview)",
+        createdAt: now,
+        updatedAt: now.addingTimeInterval(90)
+    ))
+    try await database.upsertJob(BarnOwlJobRecord(
+        meetingID: meetingID,
+        type: "final_processing",
+        status: .succeeded,
+        createdAt: now,
+        updatedAt: now.addingTimeInterval(90),
+        startedAt: now.addingTimeInterval(61),
+        completedAt: now.addingTimeInterval(90)
+    ))
+    try await database.upsertJob(BarnOwlJobRecord(
+        meetingID: meetingID,
+        type: "summary_processing",
+        status: .running,
+        createdAt: now.addingTimeInterval(91),
+        updatedAt: now.addingTimeInterval(92),
+        startedAt: now.addingTimeInterval(92)
+    ))
+
+    let timeline = try #require(await database.meetingState(id: meetingID)).processingTimeline
+
+    #expect(timeline.first { $0.step == .writingNotes }?.status == .running)
+    #expect(timeline.first { $0.step == .complete }?.status == .pending)
+    #expect(!BarnOwlProcessingTimeline.shouldCollapse(timeline))
+}
+
+@Test
 func completedMeetingWithNotesDoesNotShowStaleFailedProcessingTimeline() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000001713")!

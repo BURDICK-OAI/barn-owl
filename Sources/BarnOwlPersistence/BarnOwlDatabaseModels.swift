@@ -228,6 +228,10 @@ public enum BarnOwlProcessingTimeline {
             .filter { $0.type == "final_processing" }
             .sorted { $0.updatedAt > $1.updatedAt }
             .first
+        let summaryRepairJob = state.jobs
+            .filter { $0.type == "summary_processing" }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .first
         var jobStatus = finalJob?.status
         let jobStartedAt = finalJob?.startedAt ?? finalJob?.scheduledAt ?? finalJob?.createdAt
         let jobCompletedAt = finalJob?.completedAt
@@ -314,7 +318,44 @@ public enum BarnOwlProcessingTimeline {
             items[items.count - 1].status = .complete
             items[items.count - 1].completedAt = jobCompletedAt ?? state.updatedAt
         }
+        applySummaryRepairJob(summaryRepairJob, to: &items)
         return items
+    }
+
+    private static func applySummaryRepairJob(
+        _ job: BarnOwlJobRecord?,
+        to items: inout [BarnOwlProcessingTimelineItem]
+    ) {
+        guard let job,
+              let writingNotesIndex = items.firstIndex(where: { $0.step == .writingNotes }),
+              let completeIndex = items.firstIndex(where: { $0.step == .complete })
+        else {
+            return
+        }
+
+        let repairStatus: BarnOwlProcessingTimelineStatus?
+        switch job.status {
+        case .pending:
+            repairStatus = .pending
+        case .running:
+            repairStatus = .running
+        case .failed:
+            repairStatus = .failed
+        case .succeeded, .canceled:
+            repairStatus = nil
+        }
+        guard let repairStatus else { return }
+
+        items[writingNotesIndex].status = repairStatus
+        items[writingNotesIndex].startedAt = job.startedAt ?? job.scheduledAt ?? job.createdAt
+        items[writingNotesIndex].completedAt = repairStatus == .failed ? job.completedAt ?? job.updatedAt : nil
+        items[writingNotesIndex].errorMessage = repairStatus == .failed ? job.errorMessage : nil
+
+        for index in items.indices where index > writingNotesIndex && index <= completeIndex {
+            items[index].status = .pending
+            items[index].completedAt = nil
+            items[index].errorMessage = nil
+        }
     }
 
     private static func step(forProcessingStage value: String) -> BarnOwlProcessingTimelineStep? {

@@ -988,8 +988,6 @@ final class BarnOwlAppModel: ObservableObject {
     private static let captureWatchdogGraceInterval: TimeInterval = 95
     private static let captureRestartCooldown: TimeInterval = 45
     private static let periodicUpdateCheckInterval: TimeInterval = 6 * 60 * 60
-    private static let summaryFallbackMarker = "Summary generation failed"
-
     init(
         makeAudioCoordinator: @escaping @Sendable (
             UUID,
@@ -3051,6 +3049,8 @@ final class BarnOwlAppModel: ObservableObject {
         notesReady: Bool? = nil,
         transcriptReady: Bool? = nil,
         summaryReady: Bool? = nil,
+        usedFallbackSummary: Bool? = nil,
+        summaryRepairRecommended: Bool? = nil,
         markdownPath: String? = nil,
         diagnosticsPath: String? = nil,
         nextCommand: String? = nil,
@@ -3129,6 +3129,8 @@ final class BarnOwlAppModel: ObservableObject {
             notesReady: notesReady ?? notes.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             transcriptReady: transcriptReady ?? transcript.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             summaryReady: summaryReady ?? summary.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+            usedFallbackSummary: usedFallbackSummary,
+            summaryRepairRecommended: summaryRepairRecommended,
             markdownPath: markdownPath,
             diagnosticsPath: diagnosticsPath,
             lastError: sanitizedLastError,
@@ -3534,14 +3536,14 @@ final class BarnOwlAppModel: ObservableObject {
             return nil
         }
         let jobs = state.jobs.sorted { $0.updatedAt > $1.updatedAt }
-        if jobs.contains(where: { $0.status == .failed }) {
-            return "failed"
-        }
         if jobs.contains(where: { $0.status == .running }) {
             return "running"
         }
         if jobs.contains(where: { $0.status == .pending }) {
             return "queued"
+        }
+        if jobs.contains(where: { $0.status == .failed }) {
+            return "failed"
         }
         if jobs.contains(where: { $0.status == .succeeded }) || state.status == .completed {
             return "complete"
@@ -3582,21 +3584,30 @@ final class BarnOwlAppModel: ObservableObject {
     private func controlArtifactReadiness(for state: BarnOwlMeetingState?) -> (
         notesReady: Bool,
         transcriptReady: Bool,
-        summaryReady: Bool
+        summaryReady: Bool,
+        usedFallbackSummary: Bool,
+        summaryRepairRecommended: Bool
     ) {
         guard let state else {
-            return (false, false, false)
+            return (false, false, false, false, false)
         }
         let notesReady = !state.generatedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let transcriptReady = !state.transcriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let summaryReady = state.summary?.overview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        return (notesReady, transcriptReady, summaryReady)
+        let usedFallbackSummary = state.summary?.usedFallbackSummary == true
+        return (notesReady, transcriptReady, summaryReady, usedFallbackSummary, usedFallbackSummary)
     }
 
     private func controlNextCommand(
         meetingID: UUID?,
         jobState: String?,
-        readiness: (notesReady: Bool, transcriptReady: Bool, summaryReady: Bool)
+        readiness: (
+            notesReady: Bool,
+            transcriptReady: Bool,
+            summaryReady: Bool,
+            usedFallbackSummary: Bool,
+            summaryRepairRecommended: Bool
+        )
     ) -> String {
         if !BarnOwlAPIKeyStore.hasConfiguredAPIKey() {
             return "Open Barn Owl Settings and add an OpenAI API key."
@@ -3609,6 +3620,9 @@ final class BarnOwlAppModel: ObservableObject {
         }
         if let meetingID, jobState == "running" || jobState == "queued" {
             return "barnowl wait --session \(meetingID.uuidString) --until complete --timeout 10m"
+        }
+        if let meetingID, readiness.summaryRepairRecommended {
+            return "barnowl summaries retry --session \(meetingID.uuidString)"
         }
         if let meetingID, readiness.notesReady {
             return "barnowl meeting notes \(meetingID.uuidString) --format markdown"
@@ -3628,6 +3642,8 @@ final class BarnOwlAppModel: ObservableObject {
             notesReady: readiness.notesReady,
             transcriptReady: readiness.transcriptReady,
             summaryReady: readiness.summaryReady,
+            usedFallbackSummary: readiness.usedFallbackSummary,
+            summaryRepairRecommended: readiness.summaryRepairRecommended,
             nextCommand: controlNextCommand(meetingID: meetingID, jobState: jobState, readiness: readiness)
         )
     }
@@ -3643,7 +3659,7 @@ final class BarnOwlAppModel: ObservableObject {
         let jobState = await controlJobState(for: meetingID)
         let normalizedUntil = until.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let stopped = activeSession?.id != meetingID || status != .recording
-        let complete = jobState == "complete" && readiness.notesReady
+        let complete = jobState == "complete" && readiness.notesReady && !readiness.summaryRepairRecommended
         let satisfied = switch normalizedUntil {
         case "stopped":
             stopped
@@ -3656,26 +3672,37 @@ final class BarnOwlAppModel: ObservableObject {
         }
 
         let terminalFailure = jobState == "failed" || state?.status == .failed || status == .failed
+        let summaryRepairInProgress = readiness.summaryRepairRecommended
+            && (jobState == "running" || jobState == "queued")
+        let summaryRepairRequired = readiness.summaryRepairRecommended && !summaryRepairInProgress
         let message: String
         if satisfied {
             message = "Wait condition satisfied: \(normalizedUntil)."
         } else if terminalFailure {
             message = "Wait stopped because Barn Owl reached a failed state."
+        } else if summaryRepairRequired {
+            message = "Wait stopped because Barn Owl saved fallback notes and the summary needs repair."
         } else {
             message = "Waiting for Barn Owl: \(normalizedUntil)."
         }
 
         return controlStatusResponse(
-            ok: !terminalFailure && (state != nil || activeSession != nil),
+            ok: !terminalFailure && !summaryRepairRequired && (state != nil || activeSession != nil),
             message: message,
             activeMeetingID: meetingID,
             jobState: jobState,
             notesReady: readiness.notesReady,
             transcriptReady: readiness.transcriptReady,
             summaryReady: readiness.summaryReady,
+            usedFallbackSummary: readiness.usedFallbackSummary,
+            summaryRepairRecommended: readiness.summaryRepairRecommended,
             nextCommand: controlNextCommand(meetingID: meetingID, jobState: jobState, readiness: readiness),
-            errorCode: terminalFailure ? "terminal_failure" : (state == nil && activeSession == nil ? "meeting_not_found" : nil),
-            error: terminalFailure ? lastError : nil
+            errorCode: terminalFailure
+                ? "terminal_failure"
+                : (summaryRepairRequired ? "summary_repair_required" : (state == nil && activeSession == nil ? "meeting_not_found" : nil)),
+            error: terminalFailure
+                ? lastError
+                : (summaryRepairRequired ? "Summary generation failed and fallback notes were saved." : nil)
         )
     }
 
@@ -3683,11 +3710,25 @@ final class BarnOwlAppModel: ObservableObject {
         do {
             let database = try makeDatabase()
             let jobs = try await database.jobs(meetingID: meetingID, limit: 100).map(controlJob(from:))
+            let state: BarnOwlMeetingState?
+            if let meetingID {
+                state = try? await database.meetingState(id: meetingID)
+            } else {
+                state = nil
+            }
+            let readiness = controlArtifactReadiness(for: state)
+            let jobState = await controlJobState(for: meetingID)
             return controlStatusResponse(
                 message: jobs.isEmpty ? "No Barn Owl jobs found." : "Barn Owl jobs.",
                 jobs: jobs,
                 activeMeetingID: meetingID,
-                jobState: await controlJobState(for: meetingID)
+                jobState: jobState,
+                notesReady: readiness.notesReady,
+                transcriptReady: readiness.transcriptReady,
+                summaryReady: readiness.summaryReady,
+                usedFallbackSummary: readiness.usedFallbackSummary,
+                summaryRepairRecommended: readiness.summaryRepairRecommended,
+                nextCommand: controlNextCommand(meetingID: meetingID, jobState: jobState, readiness: readiness)
             )
         } catch {
             return controlStatusResponse(ok: false, message: "Could not load jobs.", error: BarnOwlErrorFormatter.message(for: error))
@@ -3709,12 +3750,36 @@ final class BarnOwlAppModel: ObservableObject {
             await refreshProcessingTimeline(meetingID: meetingID)
             startJobRunner()
             let jobs = try await database.jobs(meetingID: meetingID, limit: 100).map(controlJob(from:))
+            let state: BarnOwlMeetingState?
+            if let meetingID {
+                state = try? await database.meetingState(id: meetingID)
+            } else {
+                state = nil
+            }
+            let readiness = controlArtifactReadiness(for: state)
+            let jobState = await controlJobState(for: meetingID)
+            let summaryRepairRecommended = retriedCount == 0 && readiness.summaryRepairRecommended
+            let message: String
+            if summaryRepairRecommended {
+                message = "No failed jobs were available to retry. This meeting has fallback notes; retry its summary instead."
+            } else if retriedCount == 0 {
+                message = "No failed jobs were available to retry."
+            } else {
+                message = "Retrying \(retriedCount) failed job(s)."
+            }
             return controlStatusResponse(
-                message: retriedCount == 0 ? "No failed jobs were available to retry." : "Retrying \(retriedCount) failed job(s).",
+                message: message,
                 jobs: jobs,
                 activeMeetingID: meetingID,
-                jobState: await controlJobState(for: meetingID),
-                nextCommand: meetingID.map { "barnowl wait --session \($0.uuidString) --until complete --timeout 10m" }
+                jobState: jobState,
+                notesReady: readiness.notesReady,
+                transcriptReady: readiness.transcriptReady,
+                summaryReady: readiness.summaryReady,
+                usedFallbackSummary: readiness.usedFallbackSummary,
+                summaryRepairRecommended: readiness.summaryRepairRecommended,
+                nextCommand: summaryRepairRecommended
+                    ? meetingID.map { "barnowl summaries retry --session \($0.uuidString)" }
+                    : meetingID.map { "barnowl wait --session \($0.uuidString) --until complete --timeout 10m" }
             )
         } catch {
             return controlStatusResponse(ok: false, message: "Could not retry jobs.", error: BarnOwlErrorFormatter.message(for: error))
@@ -3730,10 +3795,7 @@ final class BarnOwlAppModel: ObservableObject {
             } else if all {
                 let states = try await database.meetingStates(limit: 500)
                 targetMeetingIDs = states
-                    .filter { state in
-                        state.summary?.overview.contains(Self.summaryFallbackMarker) == true
-                            || state.generatedNotes.contains(Self.summaryFallbackMarker)
-                    }
+                    .filter { $0.summary?.usedFallbackSummary == true }
                     .map(\.id)
             } else {
                 return controlStatusResponse(
@@ -5610,8 +5672,7 @@ final class BarnOwlAppModel: ObservableObject {
         let notesReady = !state.generatedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let summaryOverview = state.summary?.overview.trimmingCharacters(in: .whitespacesAndNewlines)
         let summaryReady = summaryOverview?.isEmpty == false
-        let usedFallbackSummary = state.summary?.overview.contains(Self.summaryFallbackMarker) == true
-            || state.generatedNotes.contains(Self.summaryFallbackMarker)
+        let usedFallbackSummary = state.summary?.usedFallbackSummary == true
         let repairRecommended = usedFallbackSummary
         let ingestReadiness = meetingEvidenceReadiness(
             state: state,

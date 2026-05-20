@@ -257,7 +257,11 @@ def wait_condition_met(response: dict, until: str) -> bool:
     if until == "notes":
         return response.get("notesReady") is True
     if until == "complete":
-        return response.get("jobState") == "complete" and response.get("notesReady") is True
+        return (
+            response.get("jobState") == "complete"
+            and response.get("notesReady") is True
+            and response.get("summaryRepairRecommended") is not True
+        )
     return False
 
 
@@ -306,6 +310,16 @@ def append_feedback_suggestion(lines: list[str], response: dict) -> None:
     lines.append(f"Feedback: {reason}")
     lines.append(f"Review a redacted draft with `{draft_command}`.")
     lines.append(f"Post only after confirmation with `{post_command}`.")
+
+
+def artifact_status_label(response: dict, readiness_key: str) -> str:
+    ready = response.get(readiness_key) is True
+    job_state = response.get("jobState")
+    if job_state in {"running", "queued"}:
+        return "available, processing" if ready else "in progress"
+    if readiness_key in {"notesReady", "summaryReady"} and response.get("summaryRepairRecommended") is True:
+        return "available, repair needed" if ready else "repair needed"
+    return "ready" if ready else "not ready"
 
 
 def default_feedback_diagnostics_path() -> str:
@@ -659,6 +673,8 @@ def markdown_response(response: dict) -> str:
             state = "complete" if response.get("ok") else "failed"
             if response.get("errorCode") == "timeout":
                 state = "timed out"
+            if response.get("errorCode") == "summary_repair_required":
+                state = "repair needed"
             lines.append(f"- Result: {state}")
             lines.append(f"- Message: {response.get('message', 'Barn Owl wait response.')}")
             if response.get("meetingID"):
@@ -670,9 +686,9 @@ def markdown_response(response: dict) -> str:
                 lines.append(f"- Realtime preview: {response['realtimeStatus']}")
             if response.get("finalTranscriptionStatus"):
                 lines.append(f"- High-quality pass: {response['finalTranscriptionStatus']}")
-            lines.append(f"- Notes: {'ready' if response.get('notesReady') else 'not ready'}")
-            lines.append(f"- Transcript: {'ready' if response.get('transcriptReady') else 'not ready'}")
-            lines.append(f"- Summary: {'ready' if response.get('summaryReady') else 'not ready'}")
+            lines.append(f"- Notes: {artifact_status_label(response, 'notesReady')}")
+            lines.append(f"- Transcript: {artifact_status_label(response, 'transcriptReady')}")
+            lines.append(f"- Summary: {artifact_status_label(response, 'summaryReady')}")
             if response.get("lastError"):
                 lines.append(f"- Last error: {response['lastError']}")
             if response.get("nextCommand"):
@@ -688,9 +704,9 @@ def markdown_response(response: dict) -> str:
             ("API key", "verified" if response.get("apiKeyVerified") else ("saved, test needed" if response.get("apiKeyConfigured") else "missing")),
             ("Readiness", response.get("readinessState") or "unknown"),
             ("Jobs", response.get("jobState") or "unknown"),
-            ("Notes", "ready" if response.get("notesReady") else "not ready"),
-            ("Transcript", "ready" if response.get("transcriptReady") else "not ready"),
-            ("Summary", "ready" if response.get("summaryReady") else "not ready"),
+            ("Notes", artifact_status_label(response, "notesReady")),
+            ("Transcript", artifact_status_label(response, "transcriptReady")),
+            ("Summary", artifact_status_label(response, "summaryReady")),
         ]
         for label, value in checks:
             mark = "x" if value in {"configured", "verified", "ready", "complete", "running"} else " "

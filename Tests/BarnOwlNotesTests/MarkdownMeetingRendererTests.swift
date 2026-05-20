@@ -64,6 +64,49 @@ func rendererIncludesTranscriptAndSummary() {
 }
 
 @Test
+func rendererSeparatesFallbackSummaryFailuresFromOpenQuestions() {
+    let renderer = MarkdownMeetingRenderer()
+    let markdown = renderer.render(
+        session: makeSession(title: "Fallback Summary"),
+        segments: [
+            TranscriptSegment(
+                speakerLabel: "Speaker",
+                text: "The transcript still exists.",
+                startTime: 0,
+                endTime: 1
+            )
+        ],
+        summary: MeetingSummary(
+            overview: MeetingSummary.fallbackOverview,
+            openQuestions: ["Summary generation error: HTTP 400"]
+        )
+    )
+
+    #expect(markdown.contains("## Processing Errors"))
+    #expect(markdown.contains("- Summary generation error: HTTP 400"))
+    #expect(!markdown.contains("## Open Questions"))
+}
+
+@Test
+func rendererDoesNotTreatSpokenFallbackPhraseAsAProcessingError() {
+    let markdown = MarkdownMeetingRenderer().render(
+        session: makeSession(title: "Healthy Summary"),
+        segments: [
+            TranscriptSegment(
+                speakerLabel: "Speaker",
+                text: "The status text said summary generation failed last week.",
+                startTime: 0,
+                endTime: 1
+            )
+        ],
+        summary: MeetingSummary(overview: "Reviewed how failure status should be communicated.")
+    )
+
+    #expect(markdown.contains("The status text said summary generation failed last week."))
+    #expect(!markdown.contains("## Processing Errors"))
+}
+
+@Test
 func rendererInfersCustomerWorkshopFormat() {
     let renderer = MarkdownMeetingRenderer()
     let session = RecordingSession(

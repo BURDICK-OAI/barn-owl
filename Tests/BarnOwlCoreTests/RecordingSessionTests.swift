@@ -568,6 +568,35 @@ func controlResponsesRedactUserVisibleErrorFields() async throws {
 
 @Test
 @MainActor
+func controlJobsKeepActiveSummaryRepairAheadOfStaleFailure() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let model = try makeQuickCommandTestModel(database: database)
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-00000000C021")!
+    try await database.upsertMeetingState(makeQuickCommandMeetingState(
+        id: meetingID,
+        title: "Repair Job Ordering",
+        summary: MeetingSummary(overview: MeetingSummary.fallbackOverview)
+    ))
+    try await database.upsertJob(BarnOwlJobRecord(
+        meetingID: meetingID,
+        type: BarnOwlJobType.summaryProcessing,
+        status: .failed,
+        errorMessage: "Previous repair failed."
+    ))
+    try await database.upsertJob(BarnOwlJobRecord(
+        meetingID: meetingID,
+        type: BarnOwlJobType.summaryProcessing,
+        status: .pending
+    ))
+
+    let response = await model.controlJobsListResponse(meetingID: meetingID)
+
+    #expect(response.jobState == "queued")
+    #expect(response.nextCommand?.contains("barnowl wait") == true)
+}
+
+@Test
+@MainActor
 func calendarContextControlAttachPersistsAcceptedRepairEvidence() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let model = try makeQuickCommandTestModel(database: database)
@@ -2846,6 +2875,102 @@ func jobRunnerCompletesQueuedFinalProcessingJob() async throws {
 }
 
 @Test
+@MainActor
+func jobRunnerAutomaticallyRepairsFallbackSummaryAfterFinalProcessing() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000504")!
+    let now = Date(timeIntervalSince1970: 1_800_005_300)
+    let session = RecordingSession(
+        id: sessionID,
+        title: "Fallback Job Runner Test",
+        startedAt: now,
+        audioSources: .defaultMeetingCapture
+    ).finished(at: now.addingTimeInterval(60))
+    try await database.upsertMeeting(BarnOwlMeetingRecord(
+        id: sessionID,
+        title: session.title,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        createdAt: now,
+        updatedAt: now
+    ))
+
+    let processor = FakeMeetingProcessor(
+        outputURL: FileManager.default.temporaryDirectory.appending(path: "fallback-job-runner-test.md")
+    )
+    let summaryRepairProcessor = FakeSummaryRepairProcessor(
+        session: session,
+        outputURL: FileManager.default.temporaryDirectory.appending(path: "fallback-job-runner-repair-test.md")
+    )
+    let runner = BarnOwlJobRunner(
+        makeDatabase: { database },
+        meetingProcessor: processor,
+        summaryRepairProcessor: summaryRepairProcessor
+    )
+
+    _ = try await runner.enqueueFinalProcessing(session: session)
+    await runner.runAvailableJobs(
+        onFinalProcessingSucceeded: { persistedSession, _ in
+            guard persistedSession.id == sessionID else { return }
+            try? await database.upsertMeetingState(BarnOwlMeetingState(
+                meeting: BarnOwlMeetingRecord(
+                    id: sessionID,
+                    title: session.title,
+                    startedAt: session.startedAt,
+                    endedAt: session.endedAt,
+                    createdAt: now,
+                    updatedAt: now
+                ),
+                generatedNotes: "# \(session.title)\n\nSummary generation failed.",
+                summary: MeetingSummary(
+                    overview: MeetingSummary.fallbackOverview
+                )
+            ))
+        }
+    )
+
+    let jobs = try await database.jobs(meetingID: sessionID, limit: 10)
+    #expect(jobs.contains { $0.type == BarnOwlJobType.finalProcessing && $0.status == .succeeded })
+    #expect(jobs.contains { $0.type == BarnOwlJobType.summaryProcessing && $0.status == .succeeded })
+    #expect(await summaryRepairProcessor.repairedMeetingIDs == [sessionID])
+}
+
+@Test
+func jobRunnerRequeuesFailedSummaryRepairInsteadOfForkingAnotherJob() async throws {
+    let database = try BarnOwlDatabase.inMemory()
+    let meetingID = UUID(uuidString: "00000000-0000-0000-0000-000000000505")!
+    let failedJobID = UUID(uuidString: "00000000-0000-0000-0000-000000000506")!
+    let now = Date(timeIntervalSince1970: 1_800_005_350)
+    try await database.upsertJob(BarnOwlJobRecord(
+        id: failedJobID,
+        meetingID: meetingID,
+        type: BarnOwlJobType.summaryProcessing,
+        status: .failed,
+        priority: 10,
+        errorMessage: "Summary repair failed.",
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now
+    ))
+    let runner = BarnOwlJobRunner(
+        makeDatabase: { database },
+        meetingProcessor: FakeMeetingProcessor(
+            outputURL: FileManager.default.temporaryDirectory.appending(path: "summary-requeue-test.md")
+        )
+    )
+
+    let requeued = try await runner.enqueueSummaryProcessing(meetingID: meetingID, priority: 80)
+    let jobs = try await database.jobs(meetingID: meetingID, limit: 10)
+
+    #expect(requeued.id == failedJobID)
+    #expect(requeued.status == .pending)
+    #expect(requeued.priority == 80)
+    #expect(requeued.errorMessage == nil)
+    #expect(requeued.completedAt == nil)
+    #expect(jobs.count == 1)
+}
+
+@Test
 func connectivityFailureKeepsFinalProcessingQueuedForOfflineMode() async throws {
     let database = try BarnOwlDatabase.inMemory()
     let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000502")!
@@ -3386,6 +3511,27 @@ func meetingTitleSuggesterKeepsCanonicalCurrentTitleAheadOfWeakSummaryInference(
     #expect(title == "NovaBio: Morgan CEO and CIOs Meeting")
 }
 
+@Test
+func meetingTitleSuggesterReplacesFallbackTranscriptSavedTitleDuringRepair() {
+    let title = MeetingTitleSuggester.title(
+        currentTitle: "Transcript Saved",
+        summary: MeetingSummary(
+            suggestedTitle: "Moderna Frontier Science Research",
+            overview: "Reviewed research workflows and next steps."
+        ),
+        segments: [
+            TranscriptSegment(
+                speakerLabel: "Speaker",
+                text: "The Moderna research team wants to continue the discussion.",
+                startTime: 0,
+                endTime: 1
+            )
+        ]
+    )
+
+    #expect(title == "Moderna Frontier Science Research")
+}
+
 @MainActor
 @Test
 func durabilityRepairMarkdownResynchronizesHeadingAndMeetingFactsTitle() {
@@ -3912,6 +4058,30 @@ private actor FakeMeetingProcessor: MeetingProcessing {
 
     var processedSessionIDs: [UUID] {
         processed
+    }
+}
+
+private actor FakeSummaryRepairProcessor: MeetingSummaryRepairing {
+    private let session: RecordingSession
+    private let outputURL: URL
+    private var repaired: [UUID] = []
+
+    init(session: RecordingSession, outputURL: URL) {
+        self.session = session
+        self.outputURL = outputURL
+    }
+
+    func repairSummary(
+        meetingID: UUID,
+        progress: MeetingProcessingProgressHandler?
+    ) async throws -> (RecordingSession, URL) {
+        repaired.append(meetingID)
+        await progress?(MeetingProcessingProgress(message: "Fake summary repair complete.", progressFraction: 1))
+        return (session, outputURL)
+    }
+
+    var repairedMeetingIDs: [UUID] {
+        repaired
     }
 }
 
