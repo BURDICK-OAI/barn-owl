@@ -120,15 +120,17 @@ public enum MeetingNoteFormat: String, Codable, Equatable, Sendable, CaseIterabl
         summary: MeetingSummary,
         context: [String]
     ) -> String {
-        ([session.title, summary.overview]
-            + summary.decisions
-            + summary.actionItems
-            + summary.openQuestions
-            + context
-            + segments.map(\.text))
+        var parts = [session.title, summary.overview]
+        parts.append(contentsOf: summary.decisions)
+        parts.append(contentsOf: summary.actionItems)
+        parts.append(contentsOf: summary.openQuestions)
+        parts.append(contentsOf: context)
+        parts.append(contentsOf: segments.map(\.text))
+
+        let normalized = parts
             .joined(separator: " ")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-            .lowercased()
+        return normalized.lowercased()
     }
 
     private static func matchesAny(_ needles: [String], in haystack: String) -> Bool {
