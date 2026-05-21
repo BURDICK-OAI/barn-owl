@@ -33,6 +33,7 @@ func transcriptionRequestUsesExpectedEndpointHeadersAndMultipartFields() async t
     #expect(bodyString.contains(multipartField(name: "model", value: "gpt-4o-transcribe-diarize")))
     #expect(bodyString.contains(multipartField(name: "response_format", value: "diarized_json")))
     #expect(bodyString.contains(multipartField(name: "chunking_strategy", value: "auto")))
+    #expect(!bodyString.contains("name=\"prompt\""))
     #expect(bodyString.contains(
         """
         Content-Disposition: form-data; name="file"; filename="sample.wav"\r
@@ -43,6 +44,59 @@ func transcriptionRequestUsesExpectedEndpointHeadersAndMultipartFields() async t
     ))
     #expect(bodyString.hasSuffix("--\(boundary)--\r\n"))
     #expect(bodyString.components(separatedBy: "RAW-AUDIO-DATA").count == 2)
+}
+
+@Test
+func transcriptionRequestCanUseTranscriptOnlyResponseWithoutDiarizationChunking() async throws {
+    let audioFileURL = try makeTempAudioFile(data: Data("RAW-AUDIO-DATA".utf8))
+    defer { try? FileManager.default.removeItem(at: audioFileURL.deletingLastPathComponent()) }
+
+    let transport = CapturingTransport(responseData: minimalTranscriptionResponseData())
+    let client = OpenAITranscriptionClient(
+        configuration: OpenAIConfiguration(apiKey: "test-key"),
+        baseURL: URL(string: "https://api.test")!,
+        model: OpenAIModelCatalog.finalTranscription,
+        responseFormat: "json",
+        chunkingStrategy: nil,
+        prompt: "Prefer the spelling Barn Owl.",
+        transport: transport
+    )
+
+    _ = try await client.transcribeAudioFile(at: audioFileURL)
+
+    let request = try #require(await transport.lastRequest)
+    let body = try #require(request.httpBody)
+    let bodyString = String(decoding: body, as: UTF8.self)
+
+    #expect(bodyString.contains(multipartField(name: "model", value: "gpt-4o-transcribe")))
+    #expect(bodyString.contains(multipartField(name: "response_format", value: "json")))
+    #expect(bodyString.contains(multipartField(name: "prompt", value: "Prefer the spelling Barn Owl.")))
+    #expect(!bodyString.contains("chunking_strategy"))
+}
+
+@Test
+func transcriptionRequestOmitsBlankPrompt() async throws {
+    let audioFileURL = try makeTempAudioFile(data: Data("RAW-AUDIO-DATA".utf8))
+    defer { try? FileManager.default.removeItem(at: audioFileURL.deletingLastPathComponent()) }
+
+    let transport = CapturingTransport(responseData: minimalTranscriptionResponseData())
+    let client = OpenAITranscriptionClient(
+        configuration: OpenAIConfiguration(apiKey: "test-key"),
+        baseURL: URL(string: "https://api.test")!,
+        model: OpenAIModelCatalog.finalTranscription,
+        responseFormat: "json",
+        chunkingStrategy: nil,
+        prompt: " \n ",
+        transport: transport
+    )
+
+    _ = try await client.transcribeAudioFile(at: audioFileURL)
+
+    let request = try #require(await transport.lastRequest)
+    let body = try #require(request.httpBody)
+    let bodyString = String(decoding: body, as: UTF8.self)
+
+    #expect(!bodyString.contains("name=\"prompt\""))
 }
 
 @Test

@@ -227,6 +227,7 @@ Fill these in during the pass:
 - [ ] Source unavailable case passed or documented as not applicable
 - [ ] Realtime preview produced visible text while recording
 - [ ] Final notes and transcript are visible
+- [ ] Final Transcript mode toggle produced speaker-turn and transcript-only final notes
 - [ ] Fallback summary repair status stayed in progress until repaired notes were available or the controlled failure path was documented
 - [ ] Live preview stayed visually separate from final transcript
 - [ ] No secrets, private paths, transcript excerpts, or raw audio payloads appeared in user-facing errors

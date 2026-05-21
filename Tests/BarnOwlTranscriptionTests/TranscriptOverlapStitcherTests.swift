@@ -176,6 +176,25 @@ func gptRepairCanReplaceDeterministicProposal() async {
 }
 
 @Test
+func fullChunkTranscriptOnlySegmentsSkipBoundaryRepair() async {
+    let repairClient = RecordingOverlapRepairClient(failingNextSequences: [])
+    let result = await TranscriptOverlapStitcher(repairClient: repairClient).stitch(transcriptions: [
+        transcribed(sequence: 0, start: 0, segments: [
+            segment("Speaker 1", "Opening chunk body before the overlap ends.", 0, 60)
+        ]),
+        transcribed(sequence: 1, start: 55, segments: [
+            segment("Speaker 1", "Next chunk body after the overlap begins.", 55, 115)
+        ])
+    ])
+
+    #expect(await repairClient.repairCallCount() == 0)
+    #expect(result.segments.map(\.text) == [
+        "Opening chunk body before the overlap ends.",
+        "Next chunk body after the overlap begins."
+    ])
+}
+
+@Test
 func failingGPTRepairFallsBackToDeterministicProposal() async {
     let repairClient = StubOverlapRepairClient(error: StubError.failed)
     let result = await TranscriptOverlapStitcher(repairClient: repairClient).stitch(transcriptions: [

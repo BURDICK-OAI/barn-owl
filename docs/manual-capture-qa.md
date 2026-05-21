@@ -57,6 +57,10 @@ Use a real audio signal for both sources:
 - Realtime preview: confirm visible preview text appears during the recording,
   before stopping and before final notes are generated. This verifies the live
   path, not just the final high-quality fallback.
+- Final Transcript mode: capture one final note in `Speaker Turns`, then switch
+  Settings -> Final Transcript to `Transcript Only` and capture one final note
+  with no speaker-turn labels. Confirm context-sensitive spellings in the
+  transcript-only note when test context hints are present.
 
 Run manual QA against the exact `dist/BarnOwl.app.zip` release candidate you
 intend to share. `scripts/verify-production-readiness.sh` rejects evidence whose
@@ -348,7 +352,9 @@ This pass is done only when all of the following are true:
 - Mic capture writes chunks.
 - System audio capture writes chunks.
 - Realtime preview produces visible text while recording, before the final
-  diarized transcript runs.
+  transcript runs.
+- The Final Transcript setting produces a speaker-turn final note in `Speaker
+  Turns` and a final note without speaker-turn labels in `Transcript Only`.
 - Chunks are deleted on finalize.
 - No raw audio is retained after finalize, failed start cleanup, denied-permission cleanup, or revoked-permission cleanup.
 - Denied mic permission is visible, retryable, and does not retain raw audio.

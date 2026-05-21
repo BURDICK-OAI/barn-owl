@@ -1,4 +1,5 @@
 import BarnOwlContext
+import BarnOwlCore
 import Foundation
 import Testing
 
@@ -100,7 +101,7 @@ func localMarkdownContextProviderRemovesOnlyOrphanedFallbackMirrors() async thro
     defer { try? FileManager.default.removeItem(at: rootDirectory) }
 
     let provider = LocalMarkdownContextProvider(rootDirectory: rootDirectory)
-    let fallback = "Transcript saved. Summary generation failed, so Barn Owl kept the diarized transcript and logged the summary error."
+    let fallback = MeetingSummary.fallbackOverview
 
     try await provider.write(ContextArtifact(
         title: "Canonical Meeting",

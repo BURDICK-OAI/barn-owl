@@ -566,6 +566,8 @@ private struct ContextLibraryManagerSheet: View {
 }
 
 struct SettingsView: View {
+    @AppStorage(BarnOwlFinalTranscriptionMode.defaultsKey) private var finalTranscriptionModeRawValue =
+        BarnOwlFinalTranscriptionMode.speakerTurns.rawValue
     @State private var apiKey = ""
     @State private var apiKeyStatus = ""
     @State private var hasStoredAPIKey = false
@@ -605,6 +607,7 @@ struct SettingsView: View {
                 tldrSection
                 onboardingReadinessSection
                 openAISection
+                transcriptionSection
                 codexIntegrationSection
                 contextLibrarySection
                 enrichmentSourcesSection
@@ -860,6 +863,30 @@ struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    private var transcriptionSection: some View {
+        settingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                settingsSectionHeader("Final Transcript", systemImage: "waveform.badge.mic")
+
+                Picker("Mode", selection: $finalTranscriptionModeRawValue) {
+                    ForEach(BarnOwlFinalTranscriptionMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(finalTranscriptionMode.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var finalTranscriptionMode: BarnOwlFinalTranscriptionMode {
+        BarnOwlFinalTranscriptionMode(rawValue: finalTranscriptionModeRawValue) ?? .speakerTurns
     }
 
     private var tldrSection: some View {

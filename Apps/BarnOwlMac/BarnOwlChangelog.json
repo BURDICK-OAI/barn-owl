@@ -1,6 +1,17 @@
 [
   {
     "version": "0.1.0",
+    "build": "34",
+    "date": "2026-05-20",
+    "title": "Final transcript mode controls",
+    "highlights": [
+      "Settings can switch final transcription between reviewable speaker turns and transcript-only output without changing the realtime preview path.",
+      "Transcript-only final transcription now sends bounded Barn Owl context hints to gpt-4o-transcribe for spelling quality while keeping transcript prompts literal.",
+      "Overlap repair avoids replacing full transcript-only chunks with boundary-only repairs, and internal release QA now exercises both final transcript modes."
+    ]
+  },
+  {
+    "version": "0.1.0",
     "build": "33",
     "date": "2026-05-20",
     "title": "Concept memory precision",

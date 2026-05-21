@@ -169,7 +169,11 @@ public struct TranscriptOverlapStitcher: Sendable {
 
             let request: TranscriptOverlapRepairRequest?
 
-            if repairClient != nil {
+            if repairClient != nil,
+               Self.repairCanReplace(
+                   previousOverlap + nextOverlap,
+                   boundary: boundary
+               ) {
                 let contextBefore = Self.contextBefore(
                     planningSegments,
                     boundaryTime: boundary.boundaryTime,
@@ -468,13 +472,19 @@ public struct TranscriptOverlapStitcher: Sendable {
     }
 
     private static func repairIsSafe(_ segments: [TranscriptSegment], boundary: TranscriptOverlapBoundary) -> Bool {
+        Self.repairCanReplace(segments, boundary: boundary) &&
+        segments.allSatisfy {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            $0.endTime >= $0.startTime
+        }
+    }
+
+    private static func repairCanReplace(_ segments: [TranscriptSegment], boundary: TranscriptOverlapBoundary) -> Bool {
         let lowerBound = boundary.boundaryTime - 7
         let upperBound = boundary.boundaryTime + boundary.overlapSeconds + 7
         return segments.allSatisfy {
-            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
             $0.startTime >= lowerBound &&
-            $0.endTime <= upperBound &&
-            $0.endTime >= $0.startTime
+            $0.endTime <= upperBound
         }
     }
 

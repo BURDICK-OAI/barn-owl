@@ -108,6 +108,7 @@
 		B370478991EA1F611FAA6E67 /* BarnOwlCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 85484A825A18943E61DD5717 /* BarnOwlCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B3897EAA749951AB599F228E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 440C8376BDBF87FAB30DAE3D /* Assets.xcassets */; };
 		B6F7E37017882C6577E3AF70 /* SystemAudioCaptureSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA10C36A8534E61BB75A9EB2 /* SystemAudioCaptureSource.swift */; };
+		B74C8E0940040057F3789773 /* BarnOwlFinalTranscriptionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 049571731D6FFB122D96E87E /* BarnOwlFinalTranscriptionSettings.swift */; };
 		B8DE51EFCC8583B391E2BF62 /* BarnOwlCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 85484A825A18943E61DD5717 /* BarnOwlCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B8E02324E6DC0F4D50C7FD07 /* OpenAIRealtimeTranscriptionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA7E39F3E2ABCFB7504B40C /* OpenAIRealtimeTranscriptionClient.swift */; };
 		BA30A31AE91DE21978887A72 /* OpenAIConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD06484CDECA0EC1EEB120E /* OpenAIConfiguration.swift */; };
@@ -553,6 +554,7 @@
 
 /* Begin PBXFileReference section */
 		03EB9A8E291D29C9C05D94F9 /* BarnOwlStatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlStatusBarController.swift; sourceTree = "<group>"; };
+		049571731D6FFB122D96E87E /* BarnOwlFinalTranscriptionSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlFinalTranscriptionSettings.swift; sourceTree = "<group>"; };
 		0557FEA1C7C6989318B0D026 /* BarnOwlAPIKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BarnOwlAPIKeyStore.swift; sourceTree = "<group>"; };
 		05AD4247F3FA2D7F4052F9C5 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		05F5222DD57CAAB3DD311D17 /* OpenAINoteEditingClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAINoteEditingClientTests.swift; sourceTree = "<group>"; };
@@ -1101,6 +1103,7 @@
 				348FE7B9601D5D9B537E02B7 /* BarnOwlControlBridge.swift */,
 				305B334C4DD3B391A157087C /* BarnOwlDeveloperDiagnosticsExporter.swift */,
 				59011511BA99FB2F3E594A96 /* BarnOwlErrorFormatter.swift */,
+				049571731D6FFB122D96E87E /* BarnOwlFinalTranscriptionSettings.swift */,
 				647F6272ADB8216D4486D2AB /* BarnOwlLifecyclePresentation.swift */,
 				C3F7D8056139E7E0164200DA /* BarnOwlUpdater.swift */,
 				CA562AE7F4144D0B7BB5DD99 /* Info.plist */,
@@ -1698,6 +1701,7 @@
 				0F90F8B95C9233686F80872B /* BarnOwlControlBridge.swift in Sources */,
 				5967D3B0DB3779FA5769393D /* BarnOwlDeveloperDiagnosticsExporter.swift in Sources */,
 				A012D7158603680CBAC8DFCA /* BarnOwlErrorFormatter.swift in Sources */,
+				B74C8E0940040057F3789773 /* BarnOwlFinalTranscriptionSettings.swift in Sources */,
 				4162489BA5A58671B35FC5D7 /* BarnOwlLifecyclePresentation.swift in Sources */,
 				F1F97CF0721336B83E9EBF6A /* BarnOwlMark.swift in Sources */,
 				4EF498EC3A5F1C7C3B7D2DAC /* BarnOwlReadinessOnboardingView.swift in Sources */,

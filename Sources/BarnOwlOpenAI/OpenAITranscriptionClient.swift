@@ -108,6 +108,9 @@ public struct OpenAITranscriptionClient: AudioTranscriptionClient {
     private let configuration: OpenAIConfiguration
     private let baseURL: URL
     private let model: String
+    private let responseFormat: String
+    private let chunkingStrategy: String?
+    private let prompt: String?
     private let transport: any OpenAIHTTPTransport
     private let jsonDecoder: JSONDecoder
 
@@ -115,12 +118,19 @@ public struct OpenAITranscriptionClient: AudioTranscriptionClient {
         configuration: OpenAIConfiguration,
         baseURL: URL = URL(string: "https://api.openai.com")!,
         model: String = OpenAIModelCatalog.finalDiarization,
+        responseFormat: String = "diarized_json",
+        chunkingStrategy: String? = "auto",
+        prompt: String? = nil,
         transport: any OpenAIHTTPTransport = URLSession.shared,
         jsonDecoder: JSONDecoder = JSONDecoder()
     ) {
         self.configuration = configuration
         self.baseURL = baseURL
         self.model = model
+        self.responseFormat = responseFormat
+        self.chunkingStrategy = chunkingStrategy
+        let trimmedPrompt = prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.prompt = trimmedPrompt?.isEmpty == false ? trimmedPrompt : nil
         self.transport = transport
         self.jsonDecoder = jsonDecoder
     }
@@ -144,8 +154,13 @@ public struct OpenAITranscriptionClient: AudioTranscriptionClient {
         let boundary = "BarnOwlBoundary-\(UUID().uuidString)"
         var multipart = MultipartFormData(boundary: boundary)
         multipart.appendField(name: "model", value: model)
-        multipart.appendField(name: "response_format", value: "diarized_json")
-        multipart.appendField(name: "chunking_strategy", value: "auto")
+        multipart.appendField(name: "response_format", value: responseFormat)
+        if let chunkingStrategy {
+            multipart.appendField(name: "chunking_strategy", value: chunkingStrategy)
+        }
+        if let prompt {
+            multipart.appendField(name: "prompt", value: prompt)
+        }
         try multipart.appendFile(
             name: "file",
             fileURL: audioFileURL,

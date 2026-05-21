@@ -1,4 +1,5 @@
 import BarnOwlCore
+import BarnOwlOpenAI
 import BarnOwlTranscription
 import Foundation
 import Testing
@@ -59,6 +60,32 @@ func pipelineUsesSourceScopedProvisionalSpeakerLabels() async throws {
     )
 
     #expect(result.segments.map(\.speakerLabel) == ["Call Speaker A", "Call Speaker A", "Call Speaker B"])
+}
+
+@Test
+func openAIAdapterBuildsChunkSegmentFromTranscriptOnlyResponse() async throws {
+    let audioFile = RecordedAudioFile(
+        url: URL(fileURLWithPath: "/tmp/transcript-only.wav"),
+        trackLabel: "System Audio",
+        duration: 12
+    )
+    let adapter = OpenAIAudioFileTranscriptionClientAdapter(
+        client: StubOpenAIAudioTranscriptionClient(response: AudioTranscriptionResponse(
+            text: "  Transcript only output.  ",
+            duration: 0,
+            segments: []
+        ))
+    )
+
+    let response = try await adapter.transcribe(audioFile: audioFile)
+
+    #expect(response.segments == [
+        AudioFileTranscriptionSegment(
+            text: "Transcript only output.",
+            startTime: 0,
+            endTime: 12
+        )
+    ])
 }
 
 @Test
@@ -621,6 +648,15 @@ private struct StubAudioFileTranscriptionClient: AudioFileTranscriptionClient {
             throw StubTranscriptionError.missingResponse(audioFile.url)
         }
 
+        return response
+    }
+}
+
+private struct StubOpenAIAudioTranscriptionClient: AudioTranscriptionClient {
+    var response: AudioTranscriptionResponse
+
+    func transcribeAudioFile(at fileURL: URL) async throws -> AudioTranscriptionResponse {
+        _ = fileURL
         return response
     }
 }

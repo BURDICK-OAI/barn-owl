@@ -1351,13 +1351,23 @@ final class BarnOwlAppModel: ObservableObject {
 
         do {
             let rollingCache = SQLiteRollingFinalTranscriptionCacheStore(database: try makeDatabase())
+            let finalTranscriptionMode = BarnOwlFinalTranscriptionMode.resolved()
+            let finalTranscriptionPrompt = finalTranscriptionMode == .transcriptOnly
+                ? BarnOwlRealtimeTranscriptionHintsStore.finalPrompt(
+                    attachedContext: realtimeHintContext,
+                    curatedTerms: realtimeCuratedHints
+                )
+                : nil
             rollingFinalTranscriptionCoordinator = RollingFinalTranscriptionCoordinator(
                 sessionID: session.id,
                 transcriptionClient: OpenAIAudioFileTranscriptionClientAdapter(
-                    client: OpenAITranscriptionClient(configuration: openAIConfiguration)
+                    client: finalTranscriptionMode.makeClient(
+                        configuration: openAIConfiguration,
+                        prompt: finalTranscriptionPrompt
+                    )
                 ),
                 cacheStore: rollingCache,
-                modelIdentifier: OpenAIModelCatalog.finalDiarization
+                modelIdentifier: finalTranscriptionMode.cacheIdentifier(prompt: finalTranscriptionPrompt)
             )
             finalTranscriptionStatus = "Processing saved chunks while you record."
         } catch {
@@ -3921,7 +3931,8 @@ final class BarnOwlAppModel: ObservableObject {
                 let removedOrphanedFallbackMirrors = try await contextProvider.removeOrphanedMeetingFiles(
                     keepingTitles: canonicalMirrorTitles,
                     containingAny: [
-                        "Transcript saved. Summary generation failed, so Barn Owl kept the diarized transcript and logged the summary error."
+                        MeetingSummary.fallbackOverview,
+                        MeetingSummary.legacyDiarizedFallbackOverview
                     ]
                 )
                 removedContextDebris = removedKnownDebris + removedOrphanedFallbackMirrors
@@ -7114,7 +7125,7 @@ final class BarnOwlAppModel: ObservableObject {
                 level: .warning,
                 category: "realtime",
                 message: "Realtime fallback active.",
-                details: "Final diarized transcription will still run when recording stops.",
+                details: "Final transcription will still run when recording stops.",
                 sessionID: sessionID,
                 updatePreview: false
             )
@@ -7510,7 +7521,7 @@ final class BarnOwlAppModel: ObservableObject {
             level: .warning,
             category: "realtime",
             message: "Realtime transcription has not produced text yet.",
-            details: "Audio chunks are being captured. Barn Owl will continue recording and use final diarized processing as the fallback.",
+            details: "Audio chunks are being captured. Barn Owl will continue recording and use final processing as the fallback.",
             sessionID: sessionID,
             updatePreview: false
         )

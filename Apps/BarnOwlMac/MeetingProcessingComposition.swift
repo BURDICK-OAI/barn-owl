@@ -740,8 +740,31 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             progressFraction: 0.15
         ))
         let configuration = try makeOpenAIConfiguration()
+        let finalTranscriptionMode = BarnOwlFinalTranscriptionMode.resolved()
+        let baseContext = await MeetingContextBuilder.context(for: session, contextRoot: try? Self.defaultContextRoot())
+        let finalTranscriptionCuratedTerms: [String]
+        if finalTranscriptionMode == .transcriptOnly,
+           let database = try? makeDatabase() {
+            finalTranscriptionCuratedTerms = (try? await BarnOwlRealtimeTranscriptionHintsStore.curatedHintTerms(
+                database: database,
+                ownerID: BarnOwlEnrichmentSourceOwner.localUserID(),
+                attachedContext: baseContext.summaryGrounding
+            )) ?? []
+        } else {
+            finalTranscriptionCuratedTerms = []
+        }
+        let finalTranscriptionPrompt = finalTranscriptionMode == .transcriptOnly
+            ? BarnOwlRealtimeTranscriptionHintsStore.finalPrompt(
+                attachedContext: baseContext.summaryGrounding,
+                curatedTerms: finalTranscriptionCuratedTerms
+            )
+            : nil
+        let finalTranscriptionCacheIdentifier = finalTranscriptionMode.cacheIdentifier(prompt: finalTranscriptionPrompt)
         let openAITranscriptionClient = OpenAIAudioFileTranscriptionClientAdapter(
-            client: OpenAITranscriptionClient(configuration: configuration)
+            client: finalTranscriptionMode.makeClient(
+                configuration: configuration,
+                prompt: finalTranscriptionPrompt
+            )
         )
         let finalTranscriptionClient: any AudioFileTranscriptionClient
         if let database = try? makeDatabase() {
@@ -749,7 +772,7 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
                 sessionID: session.id,
                 wrapped: openAITranscriptionClient,
                 cacheStore: SQLiteRollingFinalTranscriptionCacheStore(database: database),
-                modelIdentifier: OpenAIModelCatalog.finalDiarization
+                modelIdentifier: finalTranscriptionCacheIdentifier
             )
         } else {
             finalTranscriptionClient = openAITranscriptionClient
@@ -757,7 +780,8 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
         let transcriptionClient = ProgressReportingAudioFileTranscriptionClient(
             wrapped: finalTranscriptionClient,
             progress: scopedProgress,
-            totalFileCount: audioFiles.count
+            totalFileCount: audioFiles.count,
+            modelIdentifier: finalTranscriptionMode.modelIdentifier
         )
         let summaryGenerator = FallbackMeetingSummaryGenerator(
             wrapped: ChunkingMeetingSummaryGenerator(
@@ -787,7 +811,6 @@ struct BarnOwlMeetingProcessor: MeetingProcessing {
             },
             overlapRepairClient: OpenAITranscriptOverlapRepairClient(configuration: configuration)
         )
-        let baseContext = await MeetingContextBuilder.context(for: session, contextRoot: try? Self.defaultContextRoot())
         let result = try await pipeline.run(
             session: session,
             audioFiles: audioFiles,
@@ -952,16 +975,19 @@ private struct ProgressReportingAudioFileTranscriptionClient: AudioFileTranscrip
     private let wrapped: any AudioFileTranscriptionClient
     private let progress: MeetingProcessingProgressHandler?
     private let totalFileCount: Int
+    private let modelIdentifier: String
     private let counter = TranscriptionProgressCounter()
 
     init(
         wrapped: any AudioFileTranscriptionClient,
         progress: MeetingProcessingProgressHandler?,
-        totalFileCount: Int
+        totalFileCount: Int,
+        modelIdentifier: String
     ) {
         self.wrapped = wrapped
         self.progress = progress
         self.totalFileCount = totalFileCount
+        self.modelIdentifier = modelIdentifier
     }
 
     func transcribe(audioFile: RecordedAudioFile) async throws -> AudioFileTranscriptionResponse {
@@ -974,7 +1000,7 @@ private struct ProgressReportingAudioFileTranscriptionClient: AudioFileTranscrip
                     .modelRequest,
                     .started,
                     at: MeetingProcessingPerformanceClock.now(),
-                    model: OpenAIModelCatalog.finalDiarization
+                    model: modelIdentifier
                 )
             ]
         ))
@@ -996,7 +1022,7 @@ private struct ProgressReportingAudioFileTranscriptionClient: AudioFileTranscrip
                         .modelRequest,
                         .finished,
                         at: MeetingProcessingPerformanceClock.now(),
-                        model: OpenAIModelCatalog.finalDiarization
+                        model: modelIdentifier
                     )
                 ]
             ))
@@ -1011,7 +1037,7 @@ private struct ProgressReportingAudioFileTranscriptionClient: AudioFileTranscrip
                         .modelRequest,
                         .finished,
                         at: MeetingProcessingPerformanceClock.now(),
-                        model: OpenAIModelCatalog.finalDiarization
+                        model: modelIdentifier
                     )
                 ]
             ))

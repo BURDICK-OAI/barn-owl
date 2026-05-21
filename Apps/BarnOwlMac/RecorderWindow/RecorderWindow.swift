@@ -1499,7 +1499,7 @@ struct RecorderWindow: View {
                 .font(.headline)
 
             if model.displayedNote == nil {
-                Text("Fast preview while recording. Final processing creates the diarized transcript, notes, and local meeting artifacts after you stop.")
+                Text("Fast preview while recording. Final processing creates the final transcript, notes, and local meeting artifacts after you stop.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2508,12 +2508,12 @@ enum RecorderWorkspacePresentation {
     ) -> String {
         switch status {
         case .recording:
-            return "Live preview stays on the Realtime Preview tab while recording. The final diarized transcript appears here after you stop."
+            return "Live preview stays on the Realtime Preview tab while recording. The final transcript appears here after you stop."
         case .preparing, .processing:
-            return "Final diarized transcript is still processing. Realtime preview remains separate from final transcript."
+            return "Final transcript is still processing. Realtime preview remains separate from final transcript."
         case .idle, .failed:
             if hasProcessingTimeline {
-                return "Final diarized transcript is still processing. Realtime preview remains separate from final transcript."
+                return "Final transcript is still processing. Realtime preview remains separate from final transcript."
             }
             return "No final transcript is available for this note yet."
         }

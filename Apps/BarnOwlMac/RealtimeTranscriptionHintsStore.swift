@@ -14,14 +14,11 @@ enum BarnOwlRealtimeTranscriptionHintsStore {
         curatedTerms: [String] = [],
         fileURL: URL = defaultFileURL()
     ) -> String? {
-        let learnedTerms = (try? load(fileURL: fileURL))?.terms ?? []
-        let orderedTerms = normalizedTerms(
-            contextHintTerms(from: attachedContext)
-                + curatedTerms
-                + learnedTerms
-        )
-
-        let terms = orderedTerms.prefix(maxPromptTerms).joined(separator: ", ")
+        let terms = promptTerms(
+            attachedContext: attachedContext,
+            curatedTerms: curatedTerms,
+            fileURL: fileURL
+        ).joined(separator: ", ")
         guard !terms.isEmpty else {
             return nil
         }
@@ -29,6 +26,28 @@ enum BarnOwlRealtimeTranscriptionHintsStore {
         return """
         Use these Barn Owl vocabulary hints in source order: current meeting context first, curated Context Library entries second, compact learned transcript hints last. Prefer these spellings when the audio matches: \(terms).
         Keep transcription literal; do not add words that were not spoken.
+        """
+    }
+
+    static func finalPrompt(
+        attachedContext: [String] = [],
+        curatedTerms: [String] = [],
+        fileURL: URL = defaultFileURL()
+    ) -> String? {
+        let terms = promptTerms(
+            attachedContext: attachedContext,
+            curatedTerms: curatedTerms,
+            fileURL: fileURL
+        ).joined(separator: ", ")
+        guard !terms.isEmpty else {
+            return nil
+        }
+
+        return """
+        This is a literal Barn Owl meeting transcript.
+        Prefer these spellings only when the audio supports them: \(terms).
+        Do not add words that were not spoken.
+        Do not infer speaker names or speaker labels.
         """
     }
 
@@ -143,6 +162,19 @@ enum BarnOwlRealtimeTranscriptionHintsStore {
         }
 
         return Array(normalized.prefix(maxStoredTerms))
+    }
+
+    private static func promptTerms(
+        attachedContext: [String],
+        curatedTerms: [String],
+        fileURL: URL
+    ) -> [String] {
+        let learnedTerms = (try? load(fileURL: fileURL))?.terms ?? []
+        return Array(normalizedTerms(
+            contextHintTerms(from: attachedContext)
+                + curatedTerms
+                + learnedTerms
+        ).prefix(maxPromptTerms))
     }
 
     private static func contextHintTerms(from lines: [String]) -> [String] {
