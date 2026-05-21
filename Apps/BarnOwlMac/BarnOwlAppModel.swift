@@ -1383,23 +1383,28 @@ final class BarnOwlAppModel: ObservableObject {
             )
         }
 
+        let updateRealtimeAudioActivity: @MainActor @Sendable (
+            Double,
+            Double,
+            AudioTrackKind
+        ) -> Void = { [weak self] level, rmsLevel, trackKind in
+            self?.handleRealtimeAudioActivity(
+                level: level,
+                rmsLevel: rmsLevel,
+                trackKind: trackKind,
+                sessionID: session.id
+            )
+        }
         let audioCoordinator = makeAudioCoordinator(
             session.id,
             { [weak self] progress in
                 self?.handleAudioCaptureProgress(progress, sessionID: session.id)
             },
-            { [weak self] chunk in
+            { chunk in
                 Task.detached(priority: .userInitiated) {
                     let level = Self.audioActivityLevel(forPCM16Data: chunk.pcm16Data)
                     let rmsLevel = RMSLevelMeter.rmsLevel(forPCM16Data: chunk.pcm16Data)
-                    await MainActor.run {
-                        self?.handleRealtimeAudioActivity(
-                            level: level,
-                            rmsLevel: rmsLevel,
-                            trackKind: chunk.trackKind,
-                            sessionID: session.id
-                        )
-                    }
+                    await updateRealtimeAudioActivity(level, rmsLevel, chunk.trackKind)
                     await realtimeController.append(chunk)
                 }
             }
