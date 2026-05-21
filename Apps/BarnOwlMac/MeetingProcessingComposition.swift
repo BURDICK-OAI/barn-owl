@@ -1865,15 +1865,16 @@ enum MeetingContextBuilder {
         let normalizedCanonical = BarnOwlKnowledgeEntityRecord.normalized(entity.canonicalName)
         guard !normalizedCanonical.isEmpty else { return false }
 
-        let searchableValues = [
+        var searchableValues = [
             meetingFacts.title ?? "",
             meetingFacts.meetingType ?? ""
-        ] + meetingFacts.participants
-            + meetingFacts.customers
-            + meetingFacts.organizations
-            + meetingFacts.projects
-            + Array(meetingFacts.glossary.keys)
-            + Array(meetingFacts.glossary.values)
+        ]
+        searchableValues.append(contentsOf: meetingFacts.participants)
+        searchableValues.append(contentsOf: meetingFacts.customers)
+        searchableValues.append(contentsOf: meetingFacts.organizations)
+        searchableValues.append(contentsOf: meetingFacts.projects)
+        searchableValues.append(contentsOf: meetingFacts.glossary.keys)
+        searchableValues.append(contentsOf: meetingFacts.glossary.values)
 
         return searchableValues.contains {
             BarnOwlKnowledgeEntityRecord.normalized($0).contains(normalizedCanonical)
